@@ -2,7 +2,8 @@ export type NavigationLocation =
 	| { kind: "main" }
 	| { kind: "project"; projectId: string }
 	| { kind: "workspace"; projectId: string; workspaceId: string }
-	| { kind: "chat"; projectId: string; workspaceId: string; sessionId: string };
+	| { kind: "chat"; projectId: string; workspaceId: string; sessionId: string }
+	| { kind: "acp-chat"; projectId: string; workspaceId: string; acpSessionId: string };
 
 export const MAIN_LOCATION: NavigationLocation = { kind: "main" };
 
@@ -30,6 +31,8 @@ export function serializeLocation(location: NavigationLocation): string {
 			return `#/v1/projects/${encodeSegment(location.projectId)}/workspaces/${encodeSegment(location.workspaceId)}`;
 		case "chat":
 			return `#/v1/projects/${encodeSegment(location.projectId)}/workspaces/${encodeSegment(location.workspaceId)}/chats/${encodeSegment(location.sessionId)}`;
+		case "acp-chat":
+			return `#/v1/projects/${encodeSegment(location.projectId)}/workspaces/${encodeSegment(location.workspaceId)}/acp-chats/${encodeSegment(location.acpSessionId)}`;
 	}
 }
 
@@ -46,8 +49,16 @@ export function parseFragment(fragment: string): NavigationLocation {
 	const workspaceId = decodeSegment(segments[5]);
 	if (!workspaceId) return MAIN_LOCATION;
 	if (segments.length === 6) return { kind: "workspace", projectId, workspaceId };
-	if (segments[6] !== "chats" || segments.length !== 8) return MAIN_LOCATION;
-	const sessionId = decodeSegment(segments[7]);
-	if (!sessionId) return MAIN_LOCATION;
-	return { kind: "chat", projectId, workspaceId, sessionId };
+	if (segments.length !== 8) return MAIN_LOCATION;
+	if (segments[6] === "chats") {
+		const sessionId = decodeSegment(segments[7]);
+		return sessionId ? { kind: "chat", projectId, workspaceId, sessionId } : MAIN_LOCATION;
+	}
+	if (segments[6] === "acp-chats") {
+		const acpSessionId = decodeSegment(segments[7]);
+		return acpSessionId
+			? { kind: "acp-chat", projectId, workspaceId, acpSessionId }
+			: MAIN_LOCATION;
+	}
+	return MAIN_LOCATION;
 }

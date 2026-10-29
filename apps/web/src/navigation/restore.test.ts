@@ -198,6 +198,29 @@ test("no restore runs before the atomic welcome generation", async () => {
 	expect(d.fragment).toBe("#/v1/projects/p1/workspaces/w1/chats/s1");
 });
 
+test("ACP routes use the injected opener and never install a Pi chat target", async () => {
+	const d = fakeDriver("#/v1/projects/p1/workspaces/w1/acp-chats/acp-1");
+	const { calls, listWorkspaces } = fakeLists();
+	const opened: Array<{ workspaceId: string; acpSessionId: string }> = [];
+	stop = startNavigation({
+		driver: d.driver,
+		listWorkspaces,
+		openAcpChat: async (workspaceId, acpSessionId) => {
+			opened.push({ workspaceId, acpSessionId });
+			return true;
+		},
+	});
+	installWelcome([project("p1")]);
+	await settle();
+	calls[0]?.resolve([workspace("w1")]);
+	await settle();
+
+	expect(opened).toEqual([{ workspaceId: "w1", acpSessionId: "acp-1" }]);
+	expect(useAppStore.getState().activeWorkspaceId).toBe("w1");
+	expect(useAppStore.getState().routeChatTarget).toBeNull();
+	expect(useAppStore.getState().sessions).toEqual({});
+});
+
 test("duplicate welcome delivery starts at most one active restore read", async () => {
 	const d = fakeDriver("#/v1/projects/p1/workspaces/w1");
 	const { calls, listWorkspaces } = fakeLists();

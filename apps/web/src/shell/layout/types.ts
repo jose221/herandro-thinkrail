@@ -35,6 +35,13 @@ export interface LayoutChatTab {
 	sessionId: string;
 }
 
+export interface LayoutAcpChatTab {
+	kind: "acp-chat";
+	id: string;
+	name: string;
+	acpSessionId: string;
+}
+
 export interface LayoutDocumentTab {
 	kind: "document";
 	id: string;
@@ -63,6 +70,7 @@ export type LayoutCenterTab =
 	| LayoutDiffTab
 	| LayoutChangesTab
 	| LayoutChatTab
+	| LayoutAcpChatTab
 	| LayoutDocumentTab
 	| LayoutTerminalTab;
 export type LayoutAuxiliaryTab = LayoutToolTab | LayoutTerminalTab;

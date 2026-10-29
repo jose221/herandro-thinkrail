@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
 import type {
+	AcpSessionEvent,
 	HostPlatform,
 	HostUpdateNotice,
 	ServerWelcome,
@@ -11,6 +12,7 @@ import type {
 	WorkspaceFsChangedPayload,
 } from "@thinkrail/contracts";
 import {
+	ACP_PROTOCOL_VERSION,
 	FEEDBACK_INTERVIEW_PROTOCOL_VERSION,
 	LOCALES_PROTOCOL_VERSION,
 	MCP_PROTOCOL_VERSION,
@@ -19,6 +21,7 @@ import {
 	WS_CHANNELS,
 } from "@thinkrail/contracts";
 import { errorCodeOf } from "@thinkrail/shared/codedError";
+import { AcpSessionManager } from "../acp";
 import {
 	admissionContextFor,
 	cancelAllMcpProbes,
@@ -42,8 +45,8 @@ import {
 	setMcpPolicyResolver,
 	setMcpStatusPublisher,
 	setMcpToolGrantWriter,
-	setModelContextPublisher,
 	setModelListingPublisher,
+	setModelsJsonPublisher,
 	setReviewCommentHandler,
 	setSessionCreatedPublisher,
 	setSessionDeletedPublisher,
@@ -66,6 +69,7 @@ import {
 	startAttributionClaim,
 	track,
 } from "../analytics";
+import { stopAndroidEmulatorManager } from "../android";
 import {
 	cancelAllLogins,
 	initializeJbcentralRuntime,
@@ -271,6 +275,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 	};
 	let stopping = false;
 	let shutdownPromise: Promise<void> | undefined;
+	let acpSessions: AcpSessionManager | undefined;
 
 	const armClientReap = (clientKey: string): void => {
 		reapTimers.set(
@@ -351,6 +356,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 					ws.subscribe(WS_CHANNELS.localesChanged);
 				if (ws.data.protocolVersion >= USER_THEMES_PROTOCOL_VERSION)
 					ws.subscribe(WS_CHANNELS.themesChanged);
+				if (ws.data.protocolVersion >= ACP_PROTOCOL_VERSION) ws.subscribe(WS_CHANNELS.acpEvent);
 				const hostPlatform: HostPlatform =
 					process.platform === "darwin" || process.platform === "win32"
 						? process.platform
@@ -426,6 +432,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 								const result = await handleRequest(method, params, {
 									clientKey: ws.data.clientKey,
 									protocolVersion: ws.data.protocolVersion,
+									resolveWorkspaceCwd: (workspaceId) => getWorkspace(workspaceId).worktreePath,
+									...(acpSessions ? { acp: acpSessions } : {}),
 									...(hostUpdate ? { runHostUpdate: requestHostUpdate } : {}),
 								});
 								return JSON.stringify({ id: requestId, ok: true, result });
@@ -469,6 +477,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 				armClientReap(clientKey);
 			},
 		},
+	});
+
+	acpSessions = new AcpSessionManager({
+		getClient: (id) => getConfig().acpClients.find((client) => client.id === id),
+		resolveWorkspaceCwd: (workspaceId) => getWorkspace(workspaceId).worktreePath,
+		publish: (event: AcpSessionEvent) => {
+			server.publish(
+				WS_CHANNELS.acpEvent,
+				JSON.stringify({ channel: WS_CHANNELS.acpEvent, data: event }),
+			);
+		},
+		clientVersion: appVersion ?? "unknown",
 	});
 
 	const backpressureReconciler = setInterval(() => {
@@ -862,7 +882,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 	});
 	setJbcentralChangedPublisher(publishProviderChanged);
 	setLogoutPublisher(publishProviderChanged);
-	setModelContextPublisher(publishProviderChanged);
+	setModelsJsonPublisher(publishProviderChanged);
 	setModelListingPublisher(publishProviderChanged);
 
 	const initialConfig = getConfig();
@@ -905,6 +925,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 		stopLocalesWatch();
 		stopThemesWatch();
 		disposeAllSessions();
+		void acpSessions?.closeAll();
+		void stopAndroidEmulatorManager().catch(() => {});
 		for (const timer of reapTimers.values()) clearTimeout(timer);
 		reapTimers.clear();
 		sockets.clear();
@@ -915,7 +937,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 		closeAllTerminals();
 		setFeedbackPublisher(null);
 		setSettingsPublisher(null);
-		setModelContextPublisher(null);
+		setModelsJsonPublisher(null);
 		setModelListingPublisher(null);
 		setJbcentralAppliedPublisher(() => {});
 		setJbcentralChangedPublisher(() => {});
@@ -925,7 +947,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 	const shutdown = (): Promise<void> => {
 		shutdownPromise ??= (async () => {
 			stopHostUpdateChecks();
-			await Promise.allSettled([settleSessionsForShutdown(), shutdownAnalytics()]);
+			await Promise.allSettled([
+				settleSessionsForShutdown(),
+				shutdownAnalytics(),
+				acpSessions?.closeAll(),
+				stopAndroidEmulatorManager(),
+			]);
 			await turnTracker.drain();
 			stop();
 		})();

@@ -1,3 +1,5 @@
+export type { AcpWireNotice } from "./acpEvents";
+export { subscribeAcpWireEvents } from "./acpEvents";
 export {
 	clientErrorReport,
 	installClientErrorReporting,

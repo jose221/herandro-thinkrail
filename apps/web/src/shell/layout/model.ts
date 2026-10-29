@@ -81,6 +81,7 @@ export const LAYOUT_TOOLS: readonly LayoutToolId[] = [
 	"files",
 	"review",
 	"plan",
+	"emulator",
 ];
 
 export const LAYOUT_TOOL_DEFAULT_SIDES: Record<LayoutToolId, LayoutSide> = {
@@ -89,6 +90,7 @@ export const LAYOUT_TOOL_DEFAULT_SIDES: Record<LayoutToolId, LayoutSide> = {
 	files: "right",
 	review: "right",
 	plan: "right",
+	emulator: "right",
 };
 
 const LAYOUT_TOOL_NAMES: Record<LayoutToolId, string> = {
@@ -97,6 +99,7 @@ const LAYOUT_TOOL_NAMES: Record<LayoutToolId, string> = {
 	files: "Files",
 	review: "Review",
 	plan: "TODO List",
+	emulator: "Android Emulator",
 };
 
 const LAYOUT_TOOL_NAME_KEYS = {
@@ -105,6 +108,7 @@ const LAYOUT_TOOL_NAME_KEYS = {
 	files: "workbench.tool.files",
 	review: "workbench.tool.review",
 	plan: "workbench.tool.plan",
+	emulator: "workbench.tool.emulator",
 } as const satisfies Record<LayoutToolId, MessageKey>;
 
 export type ChatFirstPrompts = Readonly<Record<string, string>>;
@@ -121,6 +125,8 @@ export function layoutTabName(
 			return t(LAYOUT_TOOL_NAME_KEYS[tab.tool]);
 		case "chat":
 			return chatDisplayName(t, tab.name, chatFirstPrompts[tab.sessionId]);
+		case "acp-chat":
+			return tab.name;
 		case "terminal":
 			return terminalName(t, tab.name);
 		case "changes":
@@ -693,6 +699,7 @@ export function moveTabToGroup(
 		movingTab.kind === "diff" ||
 		movingTab.kind === "changes" ||
 		movingTab.kind === "chat" ||
+		movingTab.kind === "acp-chat" ||
 		movingTab.kind === "document"
 	) {
 		return { reason: t("workbench.layout.destinationGroupMissing") };

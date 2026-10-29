@@ -102,8 +102,8 @@ channel fan-out, and the process-boot wrapper both launchers share.
   `ensureWatch(workspaceId)` from the
   workspace-read handlers (`fs.*`, `git.status`/`git.diffFile`, `spec.graph`) — a read is the "a client is
   looking" signal; `stopWatch` in `workspace.remove`'s fast path beside `evictSpecIndex`;
-  `stopAllWatches()` in `stop()`), `stopJbcentralRuntime()` and `cancelAllLogins()` in `stop()` before the
-  socket close,
+  `stopAllWatches()` and `stopAndroidEmulatorManager()` in `stop()`, plus
+  `stopJbcentralRuntime()` and `cancelAllLogins()` before the socket close,
   an optional boot-time `openProject(projectPath)` (best-effort — a launcher convenience), the
   **analytics wiring** (`initializeAnalytics` at boot from launcher provenance, destination, and per-run
   additional-data suppression; startup grants the additional tier only when `analyticsEnabled &&
@@ -156,8 +156,9 @@ channel fan-out, and the process-boot wrapper both launchers share.
   retain a grant's capture before asynchronous work and never replay across revocation.
   `stop()` → immediate agent-session cleanup, then `persistTerminalSessions()` **before**
   `closeAllTerminals()`, then watcher/socket disposal; `shutdown()` memoizes one asynchronous graceful
-  path: bounded `settleSessionsForShutdown()` + awaited `shutdownAnalytics()` first, then
-  `turnTracker.drain()` for the receipts those settlements started, then `stop()`). The
+  path: bounded `settleSessionsForShutdown()` + awaited `shutdownAnalytics()`, ACP session close, and
+  Android emulator stop, then `turnTracker.drain()` for the receipts those settlements started, then
+  `stop()`). The
   bounded settle includes hidden delegation children even when their parent is
   idle, plus child cascades already started by a concurrent removal, so graceful quit does not let a
   background child lose its terminal abort/tool result; `crashLog.ts` (`installCrashLog` — the `uncaughtException`/`unhandledRejection` report
@@ -194,10 +195,20 @@ channel fan-out, and the process-boot wrapper both launchers share.
   that resolver, and creation passes its model and effort explicitly. A `session.create` that **named** a
   model and every `session.setModel` also record the resolved model as recent through `settings`'
   `noteRecentModel` — a default-resolved creation is the host's choice, not the user's, and is not
-  recorded. `model.contextSettings` and `model.setContextWindow` delegate to agent's `modelContext`
+  recorded. `model.contextSettings` and `model.setContextWindow` delegate to agent's `modelsJson`
   adapter and return its `ModelContextSetting[]`; the mutation names a provider/model target or all
-  eligible pairs, never arbitrary model metadata, and successful saves reuse `provider.changed` to
-  invalidate catalogs across clients. Existing review chats and plan-review
+  eligible pairs, never arbitrary model metadata. At protocol v97, `provider.models.list` and
+  `provider.models.save` delegate to the same adapter and are accepted only for configured providers
+  whose auth source is `models.json`; their catalog DTO excludes credentials, headers, and endpoint
+  configuration. Successful saves reuse `provider.changed` to invalidate catalogs across clients.
+  At protocol v100, `android.avds.list` and `android.emulator.*` delegate to the lazy host-local emulator
+  manager; the v100 gate prevents older clients from issuing those methods. Status and AVD reads do not
+  start an emulator; AVD enumeration is a bounded `emulator -list-avds` read. Start accepts only a listed
+  installed AVD, device methods target the owned
+  `emulator-<port>` serial, APK installation is confined to a regular workspace APK, and the manager stops
+  the process on idle expiry or host shutdown. The `android` module is also used by agent's explicit Pi
+  emulator tools, without routing through ACP.
+  Existing review chats and plan-review
   subagents keep their own policies — and
   the **Skills-manager set**: `skill.list` / `skills.state` / `project.skills` build
   the admission context from `projects` (+ the

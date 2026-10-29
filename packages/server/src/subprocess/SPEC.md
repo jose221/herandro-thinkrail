@@ -16,7 +16,7 @@ never what a particular child's output means.
 
 ## Boundary
 
-- **Owns:** `runBounded(argv, { timeoutMs, cwd?, env?, stdout?, signal? })` →
+- **Owns:** `runBounded(argv, { timeoutMs, cwd?, env?, stdout?, signal?, maxOutputBytes? })` →
   `{ ok, out, err, timedOut, launchFailed, waitedMs, aborted? }`: capture both streams and complete on the child's
   **exit**; stdout defaults to decoded text, while `stdout: "bytes"` preserves it as `Uint8Array` for
   callers reading opaque content (stderr remains text diagnostics). POSIX children are detached
@@ -149,8 +149,7 @@ never what a particular child's output means.
   cancelled once the outcome is decided *and* the grace above has run, never before it. Every
   timer is `unref`'d, so a bounded wait never holds shutdown open, and `waitedMs` comes from
   `performance.now()`, so a clock adjustment cannot render a negative wait.
-- **Neither stream is capped.** `runBounded` accumulates whatever the child writes for as long as the
-  budget allows, so a caller's byte ceiling (`git`'s 2000-char `boundedStderr`) bounds what reaches a
-  client, never what this module holds in memory. Adequate for `git`/`gh`/`glab`, where the worst case is a
-  progress log measured in hundreds of KB; a caller that can spew unboundedly needs a `maxBytes` option
-  here rather than a truncation after the fact.
+- `runBounded` can cap each captured stream with `maxOutputBytes`; it keeps draining after the cap and
+  marks the result `truncated`, so a chatty child cannot deadlock on a full pipe and callers can reject
+  incomplete opaque output. The default remains uncapped for existing bounded CLI callers. `streamBounded`
+  relays stdout to its consumer and does not capture or cap that stream.

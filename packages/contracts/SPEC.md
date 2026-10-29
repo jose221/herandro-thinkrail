@@ -11,7 +11,8 @@ tags: [wire]
 
 ## Responsibility
 
-The browser↔host wire spine: the single source of truth for the protocol. Types plus a small
+The browser↔host wire spine: the single source of truth for the protocol, including the explicitly
+separate ACP chat methods/events. Types plus a small
 dependency-free runtime: the WS method/channel constants, protocol/feature versions, the small config
 default, narrow cross-ring guards, and the quit-confirmation rule both clients drive. The one package
 `apps/web` may depend on—which is what lets the UI ship independently of the host.
@@ -79,6 +80,29 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
   `session.getMessages` by it *and* `history` counts `messageIndex` by it, so two copies differing by a role
   would silently shift every later jump anchor); `export *` (value) of `wsProtocol`
   (`WS_METHODS`, `WS_CHANNELS`, the typed maps, `PROTOCOL_VERSION`, and feature-introduction versions).
+- **`AppConfig.acpClients`** is a host-wide, user-owned catalog with at most 32 unique stable ids. The
+  `isAcpClientConfig` / `isAcpClientCatalog` guards bound names, executable paths, argument counts and
+  lengths, reject NUL bytes and unknown fields, and keep launch configuration as argv rather than a shell
+  command string. Defaults name Droid's ACP CLI and the third-party `antigravity-acp` adapter. The separate
+  `AcpSession*` contracts, `acp.*` methods and `acp.event` channel never reuse Pi ids or transcript types;
+  `ACP_PROTOCOL_VERSION` (v96) gates those operations. The explicit `acp.client.models` Settings request,
+  gated at `ACP_MODEL_CATALOG_PROTOCOL_VERSION` (v99), opens a temporary per-client ACP session and
+  returns only that client's bounded model options; it never contributes to Pi's provider catalog.
+  `AcpClientCheckResult` distinguishes an unavailable executable from a failed handshake. From
+  `ACP_CONFIG_OPTIONS_PROTOCOL_VERSION` (v98),
+  the `configOptions` event carries a complete replacement set and `AcpConfigOption.category` preserves
+  agent-declared model options for the UI; this remains session-scoped, not part of Pi's model catalog.
+- Android emulator methods (`android.avds.list`, `android.emulator.status/start/stop/details/screen/tap/type/swipe/installApk/logs`)
+  and the bounded `AndroidEmulator*` DTOs are introduced at `ANDROID_EMULATOR_PROTOCOL_VERSION` (v100).
+  They describe only the host-local emulator; APK installation carries a workspace id and relative path,
+  not a host path. Clients gate every request on v100 support.
+- `ProviderStatus.canEditModelsJson` advertises the scoped model-definition editor only for a configured
+  provider whose auth source is `models.json`; it never includes credential data. At
+  `PROVIDER_MODELS_PROTOCOL_VERSION` (v97), `provider.models.list` and `provider.models.save` exchange
+  bounded `ProviderModelDefinition` catalogs. That DTO is an allowlist of model identity, display name,
+  reasoning, input modalities, token limits, and pricing; it excludes provider credentials, request
+  headers, and endpoint configuration. The host edits only that provider's `models` array, preserving
+  the rest of `models.json` and private fields the editor does not expose.
 - **Allowed deps:** none at runtime. **Type-only** devDeps on `@earendil-works/pi-ai` +
   `@earendil-works/pi-agent-core`, imported **from their package roots** (type-only → erased at build).
 - **Deployment obligation:** wire contracts describe host behavior and compatibility, never the launcher
@@ -542,7 +566,8 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
   **layout preset DTO** — portable **`LayoutPreset`**, the bounded resource-free frame grammar synchronized
   in `AppConfig.customLayoutPresets`: center topology, left/right/bottom group geometry, visibility/folds,
   bottom alignment, and singleton tools (`plan`, the TODO List, is accepted from
-  `LAYOUT_PLAN_PRESET_PROTOCOL_VERSION` = v94), but no workspace, file, diff, chat, document, terminal, preview,
+  `LAYOUT_PLAN_PRESET_PROTOCOL_VERSION` = v94; `emulator` from
+  `ANDROID_EMULATOR_PROTOCOL_VERSION` = v100), but no workspace, file, diff, chat, document, terminal, preview,
   attention, or current/default-selection identity. Every current-layout type—including the projected
   `WorkspaceLayoutDocument`, `WorkbenchFrame`, and `WorkspaceViewState`—is web-local and deliberately absent
   from contracts. There is no current-layout method or push channel.

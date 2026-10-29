@@ -2,6 +2,7 @@ import {
 	type AppConfig,
 	type AppConfigUpdate,
 	COMPOSER_GROWTH_LIMITS,
+	isAcpClientCatalog,
 	isComposerGrowthLimit,
 	isJbcentralQuotaRefreshSeconds,
 	isLineWidth,
@@ -54,6 +55,7 @@ const ACCEPTED_UPDATE_KEYS = {
 	jbcentralQuotaRefreshSeconds: true,
 	settleIdleDays: true,
 	disabledExtensions: true,
+	acpClients: true,
 	locale: true,
 	onboardingDismissed: true,
 	chatMessageOrder: true,
@@ -168,6 +170,7 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 		jbcentralQuotaEnabled,
 		jbcentralQuotaRefreshSeconds,
 		disabledExtensions,
+		acpClients,
 		...rest
 	} = runtimeUpdate;
 	const nextDisabledExtensions =
@@ -232,6 +235,9 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 		throw new Error("systemThemePair must contain light and dark theme ids");
 	}
 	const current = getConfig();
+	if (acpClients !== undefined && !isAcpClientCatalog(acpClients)) {
+		throw new Error("acpClients must be a valid list of ACP client definitions");
+	}
 	if (
 		runtimeUpdate.analyticsEnabled === true &&
 		!current.analyticsEnabled &&
@@ -264,6 +270,9 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 			? {}
 			: { favoriteModels: validateFavoriteModels(favoriteModels) }),
 		...(nextDisabledExtensions === undefined ? {} : { disabledExtensions: nextDisabledExtensions }),
+		...(acpClients === undefined
+			? {}
+			: { acpClients: acpClients.map((client) => ({ ...client, args: [...client.args] })) }),
 	};
 	if (defaultModel !== undefined) {
 		if (defaultModel === null) delete next.defaultModel;

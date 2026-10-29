@@ -4,20 +4,23 @@ type: submodule-design
 status: active
 title: agent — in-process pi sessions
 parent: module-server
-depends-on: [module-contracts, module-pi-delegation, module-pi-subagents, module-pi-background-commands]
+depends-on: [module-contracts, module-pi-delegation, module-pi-subagents, module-pi-background-commands, submodule-server-android]
 references: [module-spec-graph, central-integration, submodule-server-extensions]
 tags: [pi]
 ---
 
 ## Responsibility
 
-The in-process `pi` engine: a current shared model/auth runtime generation for pre-session work and future
-chats, the lifecycle of `AgentSession`s (one per chat tab, rooted in a workspace's worktree and retaining the
+The in-process `pi` engine for Pi chats: a current shared model/auth runtime generation for pre-session work and future
+chats, the lifecycle of `AgentSession`s (one per Pi chat tab, rooted in a workspace's worktree and retaining the
 runtime generation they were created with), Pi resource/skill loading (including portable
 cross-agent skill discovery + a pre-session skill catalog), the **extension-UI bridge** that turns pi's
 in-process `uiContext` dialog calls into WS frames, the **`ask_user_question`** answer mailbox and
-answer-injection path behind the ask-user-question extension, and the **restart repair** that keeps
-re-opened transcripts provider-valid.
+answer-injection path behind the ask-user-question extension, explicit Android emulator tools backed by
+the host-local Android service, and the **restart repair** that keeps re-opened transcripts provider-valid.
+
+ACP chats are a separate host feature ([[submodule-server-acp]]); this module never creates, observes, or
+projects ACP sessions into Pi state.
 
 ## Boundary
 
@@ -131,27 +134,20 @@ re-opened transcripts provider-valid.
     pass is what pi's own `findInitialModel` would pick. The same-id pass covers a provider whose own
     default the account filter removed: Sign in with ChatGPT serves `openai` models from the
     `openai-codex` set, so it lands on the Codex default instead of catalog order.
-  - `modelContext` — a narrow settings adapter for the `contextWindow` override in pi's shared
-    `getAgentDir()/models.json`, not a second model registry. It lists the OpenAI Responses / Codex
-    Responses models from `settledAvailableModels` whose effective budget still equals the contracts'
-    272K editing minimum (the cap this setting exists to lift), plus any model that already carries an
-    override so it can always be reverted; each entry pairs pi's effective `contextWindow` with the
-    file's explicit `override` (`null` = pi default). Eligibility is derived from pi's catalog, never
-    from a model-id list, so catalog defaults above 1M stay untouched by a bulk save. A save validates
-    the contracts' 272K–1M range first, patches `providers.<p>.modelOverrides.<id>.contextWindow` for the
-    target — or, for `available`, every eligible pair the contracts' `isSharedModelContextTarget` admits, so
-    a shared save never rewrites an override outside the range that only a targeted save can touch — with
-    `jsonc-parser` so comments, BOM and unrelated
-    configuration survive, prunes override objects it empties (never `providers`), refuses invalid JSON
-    or a read-only file rather than patching it, then writes a temp file beside the resolved target with
-    the original's mode (`0o600` for a new file) and renames it into place — following a symlinked
-    `models.json` to its target, and creating a dangling link's target rather than replacing the link. Saves are serialized in-process; a changed file is followed by one
-    network-disabled `runtime.refresh` on the current generation and the host's `provider.changed`
-    signal; a no-op save does neither. Every read also refreshes locally first so external pi CLI edits
-    appear. Live sessions keep the model they were created with; new chats resolve the updated metadata.
-    pi owns schema validation and the effective value; error messages are generic and never carry file
-    contents. Accepted gap: a Central rebuild whose runtime loaded the file before a save and activated
-    after its refresh serves the old budget until the next read refreshes it.
+  - `modelsJson` — the sole ThinkRail writer for pi's shared `getAgentDir()/models.json`. It serves the
+    existing `contextWindow` override settings and the connected-provider model-definition editor, not a
+    second model registry. The editor is available only when pi reports `models_json_key` or
+    `models_json_command` auth for that provider; it returns an allowlisted `ProviderModelDefinition`
+    projection and never sends credentials, headers, or endpoint configuration to the browser. Saving a
+    catalog validates bounds and unique ids, replaces only `providers.<p>.models`, and merges submitted
+    editable fields into same-id stored definitions so unexposed Pi fields survive; removed ids are
+    removed, and new models inherit provider-level API, endpoint and auth settings. Both operations use
+    `jsonc-parser`, reject invalid JSON, retain comments/BOM/unrelated provider config, and use the
+    existing temp-file, permission, symlink and atomic-rename protections. All writes share one in-process
+    queue to prevent cross-feature lost updates. A changed file gets one network-disabled
+    `runtime.refresh` and `provider.changed`; reads also refresh locally so external Pi CLI edits appear.
+    Live sessions retain their original model; new chats resolve updated metadata. Pi remains the schema
+    authority, and error messages never include file contents or credential values.
   - `agentSessionManager` — sessions keyed by `session.sessionId` (each `Entry` also tracks its
     `workspaceId`), `createSession({ cwd, workspaceId, model?, thinkingLevel? })` → `createAgentSession(...)`
     with a per-session `SessionManager` **and `buildSessionSettings(cwd, projectTrusted)`** (the user's
@@ -970,7 +966,7 @@ re-opened transcripts provider-valid.
   the runtime-generation facade (`usePiRuntime`, candidate prepare/activate, current generation id, and the
   closed `load-failed` outcome—no manager internals) plus `configurePiRuntime`/factory test seams and the
   pre-bootstrap `configurePiRuntimeGenerationInitializer` composition seam; `listModelContextSettings` /
-  `setModelContextWindow` / `setModelContextPublisher` (the `modelContext` adapter and its
+  `setModelContextWindow` / `setModelsJsonPublisher` (the `modelsJson` adapter and its
   `provider.changed` seam); `piLoginOptions` (pi login options
   carrying the lazily created installation device id, for `auth`);
   `completeOnce`/`pickModel` +

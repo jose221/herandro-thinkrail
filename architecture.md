@@ -10,8 +10,8 @@ tags: [architecture]
 
 ## Drivers
 
-The product is built around the `pi` agent, run **in-process** (`createAgentSession`). Two additive
-launchers share the same host library: the retained CLI boots the engine host and opens a browser,
+The product uses the `pi` agent by default, run **in-process** (`createAgentSession`); a user may also
+start an explicitly configured ACP agent as a separate chat. Two additive launchers share the same host library: the retained CLI boots the engine host and opens a browser,
 while Electrobun packages that host with a native system-webview shell. The desktop profile is local
 only; a later shared-client profile can dial an existing host. The UI ships independently of the host and
 dials it over the network; a phone reaches the selected host over Tailscale.
@@ -19,7 +19,8 @@ dials it over the network; a phone reaches the selected host over Tailscale.
 ## Topology — three rings
 
 - **Engine host** (`packages/server` + `packages/shared`, launched by `apps/cli` or `apps/desktop`
-  in local-host mode): owns `pi`, session state, persistence, and serves the wire endpoint. It bundles pi extensions
+  in local-host mode): owns in-process Pi chats, separately managed ACP child processes and sessions,
+  persistence, and the wire endpoint. It bundles pi extensions
   (`pi-spec-graph`, `pi-thinkrail-workflow`, `pi-todos`) and the ThinkRail extensions from its server
   registry (`visualize`, `ask-user-question`, `web-access`) into every session.
 - **The wire** (`packages/contracts`): the typed, versioned protocol — the only coupling between client
@@ -33,7 +34,7 @@ apps/web        UI client (mobile-first)                           ── depend
 apps/desktop    Electrobun local-host launcher                     ── depends on ─▶ packages/server, packages/contracts, packages/shared, packages/locales
 apps/website    public landing + blog + /vibecoding (Cloudflare Pages) ── depends on ─▶ packages/website-analytics
 packages/website-analytics  dependency-free browser analytics policy for the public website
-packages/server createServer(): Bun.serve(HTTP+WS) + AgentSessionManager (in-process pi) ── depends on ─▶ packages/contracts, packages/locales, packages/shared, packages/pi-background-commands, packages/pi-delegation, packages/pi-subagents, packages/extension-api/server, thinkrail-extensions/*/server
+packages/server createServer(): Bun.serve(HTTP+WS) + Pi AgentSessionManager + ACP process/session manager ── depends on ─▶ packages/contracts, packages/locales, packages/shared, packages/pi-background-commands, packages/pi-delegation, packages/pi-subagents, packages/extension-api/server, thinkrail-extensions/*/server
 packages/contracts  the wire (types plus tiny pure runtime)
 packages/locales    UI string catalogs (bundled en.json) + pure catalog rules; ./react holds the one i18next
                     instance ── depends on ─▶ nothing in the workspace (i18next, react-i18next)
@@ -68,10 +69,16 @@ dependency. This keeps test process drivers outside both launchers and the serve
 
 ## Decisions
 
-1. **Client/host split.** Engine host owns `pi` and state; the UI is a portable client; the wire is the
+1. **Client/host split.** Engine host owns Pi and ACP session lifecycles; the UI is a portable client; the wire is the
    only coupling. **Rule: `apps/web` depends on `contracts`, `locales`, `ui`, `extension-api/web`,
    `resource-renderers`, and `thinkrail-extensions/*/web` only** — never on `server` or `shared`. All added edges are browser-safe
    presentation packages; the UI remains shippable without the host.
+
+   **Explicit ACP exception.** Pi remains the default, in-process chat engine. A separately selected ACP
+   chat launches the command from the host's user-owned ACP catalog through the server's ACP module.
+   ACP sessions have their own ids, transcript, process lifetime, permissions, and wire methods; no ACP
+   id or event is interpreted as a Pi session or `pi.event`. ACP clients are never auto-launched from
+   repository files. The shared Update settings/capability remains launcher-owned and independent.
 2. **Launchers are thin; the host is a library.** `apps/cli` and `apps/desktop` both embed the shared
    boot path in-process. CLI opens a browser; desktop opens a native system webview on a fresh one-origin
    loopback host. Neither owns engine logic or spawns the other. The CLI remains a complete independent

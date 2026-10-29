@@ -68,6 +68,18 @@ test("captures output larger than a pipe buffer", async () => {
 	expect(result.out.length).toBe(300_000);
 });
 
+test("bounds captured output while continuing to drain both pipes", async () => {
+	const result = await runBounded(
+		bun('process.stdout.write("x".repeat(300_000)); process.stderr.write("y".repeat(300_000));'),
+		{ timeoutMs: 10_000, maxOutputBytes: 128 },
+	);
+
+	expect(result.ok).toBe(true);
+	expect(result.out).toBe("x".repeat(128));
+	expect(result.err).toBe("y".repeat(128));
+	expect(result.truncated).toBe(true);
+});
+
 test("the bytes mode preserves stdout that is not valid UTF-8", async () => {
 	const result = await runBounded(
 		bun("process.stdout.write(Uint8Array.from([0, 255, 128, 65])); process.stderr.write('err');"),
@@ -77,6 +89,17 @@ test("the bytes mode preserves stdout that is not valid UTF-8", async () => {
 	expect(result.ok).toBe(true);
 	expect(result.out).toEqual(new Uint8Array([0, 255, 128, 65]));
 	expect(result.err).toBe("err");
+});
+
+test("bounds binary output without decoding it", async () => {
+	const result = await runBounded(
+		bun("process.stdout.write(Uint8Array.from({ length: 256 }, (_, i) => i));"),
+		{ timeoutMs: 10_000, stdout: "bytes", maxOutputBytes: 64 },
+	);
+
+	expect(result.ok).toBe(true);
+	expect(result.out).toEqual(Uint8Array.from({ length: 64 }, (_, i) => i));
+	expect(result.truncated).toBe(true);
 });
 
 async function waitForFile(path: string): Promise<void> {

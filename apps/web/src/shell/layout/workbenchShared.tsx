@@ -375,6 +375,8 @@ export function tabSearchKeywords(
 			return [name, tab.kind, tab.scope.kind];
 		case "chat":
 			return [name, tab.kind, tab.sessionId];
+		case "acp-chat":
+			return [name, tab.kind, tab.acpSessionId];
 		case "document":
 			return [name, tab.kind, tab.sourceId, tab.docPath];
 		case "terminal":

@@ -746,12 +746,132 @@ export interface BranchList {
 
 export type ProviderAuthKind = "oauth" | "api-key" | "env" | "central" | "other";
 
+export interface ProviderModelCostTier {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	inputTokensAbove: number;
+}
+
+export interface ProviderModelCost {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	tiers?: ProviderModelCostTier[];
+}
+
+/** Safe, editable fields from one Pi models.json chat-model definition. */
+export interface ProviderModelDefinition {
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	input?: Array<"text" | "image">;
+	contextWindow?: number;
+	maxTokens?: number;
+	cost?: ProviderModelCost;
+}
+
+export const PROVIDER_MODEL_DEFINITIONS_LIMIT = 256;
+
+function isProviderModelCostTier(value: unknown): value is ProviderModelCostTier {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const tier = value as Record<string, unknown>;
+	return (
+		Object.keys(tier).every((key) =>
+			["input", "output", "cacheRead", "cacheWrite", "inputTokensAbove"].includes(key),
+		) &&
+		["input", "output", "cacheRead", "cacheWrite"].every(
+			(key) =>
+				typeof tier[key] === "number" &&
+				Number.isFinite(tier[key]) &&
+				tier[key] >= 0 &&
+				tier[key] <= 1_000_000,
+		) &&
+		Number.isSafeInteger(tier.inputTokensAbove) &&
+		(tier.inputTokensAbove as number) > 0
+	);
+}
+
+function isProviderModelCost(value: unknown): value is ProviderModelCost {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const cost = value as Record<string, unknown>;
+	return (
+		Object.keys(cost).every((key) =>
+			["input", "output", "cacheRead", "cacheWrite", "tiers"].includes(key),
+		) &&
+		["input", "output", "cacheRead", "cacheWrite"].every(
+			(key) =>
+				typeof cost[key] === "number" &&
+				Number.isFinite(cost[key]) &&
+				cost[key] >= 0 &&
+				cost[key] <= 1_000_000,
+		) &&
+		(cost.tiers === undefined ||
+			(Array.isArray(cost.tiers) &&
+				cost.tiers.length <= 32 &&
+				cost.tiers.every(isProviderModelCostTier)))
+	);
+}
+
+function isProviderModelDefinition(value: unknown): value is ProviderModelDefinition {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const model = value as Record<string, unknown>;
+	const keys = Object.keys(model);
+	const validInput =
+		model.input === undefined ||
+		(Array.isArray(model.input) &&
+			model.input.length > 0 &&
+			model.input.length <= 2 &&
+			model.input.every((item) => item === "text" || item === "image") &&
+			new Set(model.input).size === model.input.length);
+	return (
+		keys.every((key) =>
+			["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "cost"].includes(key),
+		) &&
+		typeof model.id === "string" &&
+		model.id.trim() === model.id &&
+		!model.id.includes("\0") &&
+		model.id.length > 0 &&
+		model.id.length <= 256 &&
+		(model.name === undefined ||
+			(typeof model.name === "string" &&
+				model.name.trim() === model.name &&
+				!model.name.includes("\0") &&
+				model.name.length > 0 &&
+				model.name.length <= 160)) &&
+		(model.reasoning === undefined || typeof model.reasoning === "boolean") &&
+		validInput &&
+		(model.contextWindow === undefined ||
+			(Number.isSafeInteger(model.contextWindow) &&
+				(model.contextWindow as number) > 0 &&
+				(model.contextWindow as number) <= 10_000_000)) &&
+		(model.maxTokens === undefined ||
+			(Number.isSafeInteger(model.maxTokens) &&
+				(model.maxTokens as number) > 0 &&
+				(model.maxTokens as number) <= 10_000_000)) &&
+		(model.cost === undefined || isProviderModelCost(model.cost))
+	);
+}
+
+export function isProviderModelDefinitions(value: unknown): value is ProviderModelDefinition[] {
+	if (!Array.isArray(value) || value.length > PROVIDER_MODEL_DEFINITIONS_LIMIT) return false;
+	const ids = new Set<string>();
+	for (const model of value) {
+		if (!isProviderModelDefinition(model) || ids.has(model.id)) return false;
+		ids.add(model.id);
+	}
+	return true;
+}
+
 export interface ProviderStatus {
 	id: string;
 	name: string;
 	configured: boolean;
 	kind?: ProviderAuthKind;
 	detail?: string;
+	canEditModelsJson?: boolean;
 	canOAuth?: boolean;
 	canApiKey?: boolean;
 	canLogout?: boolean;
@@ -932,7 +1052,41 @@ export function isSystemThemePair(value: unknown): value is SystemThemePair {
 	);
 }
 
-export type LayoutToolId = "projects" | "specs" | "files" | "review" | "plan";
+export type LayoutToolId = "projects" | "specs" | "files" | "review" | "plan" | "emulator";
+
+export type AndroidEmulatorState = "stopped" | "starting" | "running" | "stopping";
+
+export interface AndroidEmulatorStatus {
+	available: boolean;
+	issue?: "sdk-not-found" | "adb-not-found" | "emulator-not-found";
+	state: AndroidEmulatorState;
+	avdName?: string;
+	serial?: string;
+	idleTtlMs: number;
+	idleRemainingMs?: number;
+	lastActivityAt?: number;
+}
+
+export interface AndroidEmulatorDetails {
+	manufacturer?: string;
+	model?: string;
+	androidVersion?: string;
+	apiLevel?: string;
+	resolution?: string;
+	densityDpi?: string;
+}
+
+export interface AndroidEmulatorScreenshot {
+	mimeType: "image/png";
+	data: string;
+	width: number;
+	height: number;
+}
+
+export interface AndroidEmulatorLogs {
+	text: string;
+	truncated: boolean;
+}
 
 export type LayoutBottomAlignment = "center" | "center-left" | "center-right" | "full";
 
@@ -1040,10 +1194,186 @@ export interface AppConfig extends ThemePreference {
 	/** Idle days after which a quiet workspace settles onto its project's shelf; `null` = never. */
 	settleIdleDays: number | null;
 	disabledExtensions: string[];
+	/** User-owned ACP launchers; ACP sessions remain separate from Pi sessions. */
+	acpClients: AcpClientConfig[];
 	/** UI language: `"system"` (follow the browser) or a BCP-47 tag; an unavailable tag renders English. */
 	locale: string;
 	/** The user finished or skipped the cold-start onboarding wizard. */
 	onboardingDismissed: boolean;
+}
+
+export interface AcpClientConfig {
+	id: string;
+	name: string;
+	command: string;
+	args: string[];
+	enabled: boolean;
+}
+
+export const ACP_CLIENTS_LIMIT = 32;
+
+export const DEFAULT_ACP_CLIENTS: AcpClientConfig[] = [
+	{
+		id: "droid",
+		name: "Droid",
+		command: "droid",
+		args: ["exec", "--output-format", "acp"],
+		enabled: true,
+	},
+	{
+		id: "antigravity",
+		name: "Antigravity",
+		command: "antigravity-acp",
+		args: [],
+		enabled: true,
+	},
+];
+
+export function isAcpClientConfig(value: unknown): value is AcpClientConfig {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	const keys = Object.keys(record);
+	return (
+		keys.every((key) => ["id", "name", "command", "args", "enabled"].includes(key)) &&
+		typeof record.id === "string" &&
+		/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(record.id) &&
+		typeof record.name === "string" &&
+		record.name.trim().length > 0 &&
+		record.name.length <= 80 &&
+		typeof record.command === "string" &&
+		record.command.trim() === record.command &&
+		record.command.length > 0 &&
+		record.command.length <= 256 &&
+		!record.command.includes("\0") &&
+		Array.isArray(record.args) &&
+		record.args.length <= 64 &&
+		record.args.every(
+			(arg) => typeof arg === "string" && arg.length <= 2048 && !arg.includes("\0"),
+		) &&
+		typeof record.enabled === "boolean"
+	);
+}
+
+export function isAcpClientCatalog(value: unknown): value is AcpClientConfig[] {
+	if (!Array.isArray(value) || value.length > ACP_CLIENTS_LIMIT) return false;
+	let totalArgumentCharacters = 0;
+	const ids = new Set<string>();
+	for (const client of value) {
+		if (!isAcpClientConfig(client) || ids.has(client.id)) return false;
+		ids.add(client.id);
+		totalArgumentCharacters += client.args.reduce((total, arg) => total + arg.length, 0);
+		if (totalArgumentCharacters > 32_768) return false;
+	}
+	return true;
+}
+
+export type AcpSessionState = "idle" | "running" | "needs-input" | "failed" | "interrupted";
+
+export interface AcpSessionSummary {
+	id: string;
+	workspaceId: string;
+	clientId: string;
+	clientName: string;
+	title: string;
+	state: AcpSessionState;
+	resumable: boolean;
+	createdAt: number;
+	updatedAt: number;
+}
+
+export interface AcpTranscriptEntry {
+	id: string;
+	role: "user" | "assistant" | "thought" | "notice";
+	text: string;
+	images?: Array<{ mimeType: string; data: string }>;
+	createdAt: number;
+}
+
+export interface AcpToolCallSummary {
+	id: string;
+	title: string;
+	kind: string;
+	status: "pending" | "in-progress" | "completed" | "failed";
+}
+
+export interface AcpPermissionOption {
+	optionId: string;
+	name: string;
+	kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
+}
+
+export interface AcpPermissionRequest {
+	requestId: string;
+	toolCallId: string;
+	title: string;
+	options: AcpPermissionOption[];
+}
+
+export interface AcpPlanEntry {
+	content: string;
+	status: "pending" | "in_progress" | "completed";
+	priority: "high" | "medium" | "low";
+}
+
+export interface AcpUsage {
+	used: number;
+	size: number;
+	cost?: { amount: number; currency: string } | null;
+}
+
+export interface AcpConfigOption {
+	id: string;
+	name: string;
+	description?: string;
+	category?: string;
+	currentValue: string;
+	options: Array<{ value: string; name: string }>;
+}
+
+export interface AcpAvailableCommand {
+	name: string;
+	description: string;
+	inputHint?: string;
+}
+
+export interface AcpSessionSnapshot {
+	summary: AcpSessionSummary;
+	messages: AcpTranscriptEntry[];
+	toolCalls: AcpToolCallSummary[];
+	plan: AcpPlanEntry[];
+	modes: Array<{ id: string; name: string }>;
+	currentMode: string | null;
+	configOptions: AcpConfigOption[];
+	availableCommands: AcpAvailableCommand[];
+	usage: AcpUsage | null;
+	permission: AcpPermissionRequest | null;
+}
+
+export type AcpSessionEvent =
+	| { type: "created"; session: AcpSessionSummary }
+	| { type: "deleted"; sessionId: string }
+	| { type: "message"; sessionId: string; entry: AcpTranscriptEntry }
+	| { type: "messageDelta"; sessionId: string; role: "assistant" | "thought"; delta: string }
+	| {
+			type: "image";
+			sessionId: string;
+			role: "assistant" | "thought";
+			image: { mimeType: string; data: string };
+	  }
+	| { type: "toolCall"; sessionId: string; toolCall: AcpToolCallSummary }
+	| { type: "permission"; sessionId: string; permission: AcpPermissionRequest | null }
+	| { type: "plan"; sessionId: string; entries: AcpPlanEntry[] }
+	| { type: "mode"; sessionId: string; mode: string }
+	| { type: "configOption"; sessionId: string; option: AcpConfigOption }
+	| { type: "configOptions"; sessionId: string; options: AcpConfigOption[] }
+	| { type: "availableCommands"; sessionId: string; commands: AcpAvailableCommand[] }
+	| { type: "usage"; sessionId: string; usage: AcpUsage }
+	| { type: "state"; sessionId: string; state: AcpSessionState }
+	| { type: "error"; sessionId: string; message: string };
+
+export interface AcpClientCheckResult {
+	available: boolean;
+	issue?: "executable" | "handshake" | "protocol";
 }
 
 export interface ExtensionCatalogEntry {
@@ -1210,6 +1540,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 	jbcentralQuotaRefreshSeconds: JBCENTRAL_QUOTA_REFRESH_SECONDS.default,
 	settleIdleDays: SETTLE_IDLE_DAYS.default,
 	disabledExtensions: [],
+	acpClients: DEFAULT_ACP_CLIENTS,
 	locale: SYSTEM_LOCALE_PREFERENCE,
 	onboardingDismissed: false,
 };

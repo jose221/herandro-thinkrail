@@ -9,7 +9,7 @@ depends-on: [module-contracts]
 
 ## Responsibility
 
-The server-synchronized app config: opaque fixed-theme selection, fixed/system mode and optional light/dark
+The server-synchronized app config: the validated user-owned ACP client catalog, opaque fixed-theme selection, fixed/system mode and optional light/dark
 pair, additional-analytics preference and first-run dialog completion marker, host-owned new-chat model and
 effort defaults, terminal replay budget and Windows shell preference, chat composer growth preset, chat/file
 visual line widths plus independent pane bounds, bounded custom layout-preset catalog, JetBrains quota
@@ -49,6 +49,7 @@ interval (`1–3600`, default 30), because those values govern host process cade
 ## Get right
 
 - **Converge on broadcast, no client optimism.** `updateConfig` persists before replacing the live cache or publishing; a failed write changes neither runtime reads nor frontends. The publisher receives the full merged config for broadcast and the applied partial update so host consumers can distinguish an explicit field write from an unrelated merge. Every frontend, including the initiator, adopts `settings.changed`. `server.welcome` seeds the same cached value.
+- **`acpClients` is a bounded, host-wide catalog**, defaulting to the built-in Droid and Antigravity launch definitions. Each row has a stable id, display name, executable, argv, and enabled flag; command execution uses argv directly, never a shell string. Settings validates the complete replacement before persistence. Repository files never contribute ACP commands, and saving a catalog never starts a process. The ACP panel is gated by `ACP_PROTOCOL_VERSION`, so an independently shipped newer client cannot send this key to an older host; legacy `config.json` files receive the defaults without an upgrade migration.
 - `terminalWindowsShell` defaults to `"auto"`; persisted values fall back through persistence's shared
   `isTerminalWindowsShell` guard, while a wire mutation outside the closed shell union rejects the complete
   update before cache, persistence, or broadcast changes. Settings owns validation and synchronization;

@@ -11,8 +11,14 @@ tags: [ui]
 
 ## Responsibility
 
-The layout-agnostic, store-driven feature views. A panel fills its container and never knows its
-arrangement (so the mobile shell is an additive layer, not a rewrite).
+The layout-agnostic, store-driven feature views, including the user-owned ACP client catalog and its
+explicit per-client model discovery in Settings, plus the optional Android emulator controls. ACP model
+options stay separate from Pi's provider/model catalog (see `submodule-web-acp`). A panel fills its
+container and never knows its arrangement (so the mobile shell is an additive layer, not a rewrite).
+
+`AndroidEmulatorPane` uses only contracts and transport for Android protocol v100. It waits for a
+compatible host before making requests, never starts an emulator on mount or status polling, and exposes
+start/stop and bounded inspection/input/install actions explicitly. APK paths are workspace-relative.
 
 Files (both modes) and Review keep their fixed toolbars outside a panel-owned `components/QuietScrollArea`
 (Files through `RememberedScrollArea`); Projects and Specs expose content for the shell-owned scroll wrapper
@@ -770,6 +776,9 @@ a project picker, the prompt hero, and the reused
   provider-auth surface — a header line with an in-page **Refresh** (`providers-refresh`, disabled while a
   status read is in flight) over the groups **Connected** (each row with a **Sign-out only when
   `canLogout`** — env / models.json auth shows a "Managed" tag instead, since the host can't unset it; a
+  protocol-v97 row with `canEditModelsJson` also offers **Configure models**, which edits only that
+  provider's allowlisted model definitions in `models.json`; credentials, headers, and endpoints never
+  enter browser state, and unsupported host versions show no editor.
   `kind: "central"` row is labelled "JetBrains AI" and its Managed tag points at the JetBrains AI card,
   which owns that connection), the **JetBrains AI** card, **Subscriptions** (unconfigured `canOAuth`
   providers) and **Available (N)** (the `canApiKey`-only rest, capped with a "Show N more" expander).

@@ -46,10 +46,19 @@ create the tools it needs based on how you actually work.
   change marks and a Changed view, terminals, and documents — all scoped to the active workspace. Leave
   anchored review comments on files and diffs and send them to a chat as structured context, or open the
   worktree in your installed IDE.
+- **Optional Android emulator.** Use an Android SDK and AVDs already installed on the host to inspect and
+  interact with an emulator, install an APK from the active workspace, and read device details and logs.
+  ThinkRail never installs the SDK or starts an emulator automatically; an idle emulator stops after five
+  minutes.
 - **Chats that stream like the engine thinks.** Several concurrent `pi` sessions per workspace, each with
   its own model and live token and cost readout. Steer a running turn or queue a follow-up, delegate to
   subagents, and work a shared plan the agent updates and you edit — each completed step can be committed
   and reviewed on its own.
+- **Native ACP chats.** Configure Droid with `droid exec --output-format acp`, Antigravity with its
+  locally installed `antigravity-acp` adapter, or another compatible command in Settings → ACP. These
+  chats keep their own sessions and transcripts, separate from `pi`. Agents can expose a session-scoped
+  model selector whose choices update from ACP; it does not change Pi's model catalog. ThinkRail does not
+  install adapters.
 - **Specs as ground truth.** A connected graph of `SPEC.md` files lives beside the code; the agent reads,
   searches, and maintains it through dedicated `spec_*` tools, so intent survives the session. The
   read-only Specs tool renders the graph as a tree in the workbench.
@@ -72,7 +81,9 @@ create the tools it needs based on how you actually work.
   defines off until you approve them, signs you in to OAuth servers from Settings, and shows each chat's
   servers next to its background commands and subagents.
 - **Your providers, your credentials.** Sign in with [JetBrains AI](https://www.jetbrains.com/ai/) or
-  connect any provider through `pi`'s own auth. ThinkRail has no accounts of its own.
+  connect any provider through `pi`'s own auth. For supported connected providers, edit model definitions
+  from Settings → Providers without displaying stored credentials or headers. ThinkRail has no accounts
+  of its own.
 - **Your pi setup.** ThinkRail reads your existing `pi` configuration (`~/.pi/agent`). To use another one
   — say a personal `~/.pi/agent-personal` — or to pass extra environment variables to the agent, terminals
   and MCP servers, set them in Settings → Environment; they apply on the next start. A variable you set
@@ -222,9 +233,10 @@ PostHog's privacy policy is at [posthog.com/privacy](https://posthog.com/privacy
 
 ## Under the hood
 
-ThinkRail is a thin host that runs `pi` in-process and bridges it to a rich web UI. `pi` owns models,
-skills, compaction, cost, and session state; the app owns the workspace, the editor, and the wire — it
-never assembles prompts behind your back. Three rings:
+ThinkRail runs `pi` in-process and bridges it to a rich web UI. Explicit ACP chats use a separate,
+server-owned process and session lifecycle. `pi` owns models, skills, compaction, cost, and its session
+state; the app owns the workspace, the editor, and the wire — it never assembles Pi prompts behind your
+back. Three rings:
 
 - **Engine host** — `packages/server` (+ `packages/shared`): a `Bun.serve` HTTP+WS host with one in-process
   `pi` session per chat, launched by `apps/cli` or `apps/desktop`.

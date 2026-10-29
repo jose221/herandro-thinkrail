@@ -9,8 +9,11 @@ import {
 	SUBAGENT_MAX_CONCURRENT,
 } from "./domain";
 import {
+	ACP_CONFIG_OPTIONS_PROTOCOL_VERSION,
+	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
 	AGENT_REVIEW_SETTING_PROTOCOL_VERSION,
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
+	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	CHANGE_MUTATIONS_PROTOCOL_VERSION,
 	CHAT_RESOURCES_PROTOCOL_VERSION,
@@ -38,6 +41,7 @@ import {
 	PROJECT_TEMPLATE_PREVIEW_PROTOCOL_VERSION,
 	PROJECT_TRUST_PROTOCOL_VERSION,
 	PROTOCOL_VERSION,
+	PROVIDER_MODELS_PROTOCOL_VERSION,
 	RESOURCE_META_PROTOCOL_VERSION,
 	REVIEW_ACTIONS_PROTOCOL_VERSION,
 	REVIEW_RICH_ANCHORS_PROTOCOL_VERSION,
@@ -80,6 +84,31 @@ test("JetBrains quota advances the protocol and names its read", () => {
 	expect(JBCENTRAL_QUOTA_PROTOCOL_VERSION).toBe(59);
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(JBCENTRAL_QUOTA_PROTOCOL_VERSION);
 	expect(WS_METHODS.providerJbcentralQuota).toBe("provider.jbcentralQuota");
+});
+
+test("provider model editing advances the protocol and exposes typed catalog methods", () => {
+	expect(PROVIDER_MODELS_PROTOCOL_VERSION).toBe(97);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(PROVIDER_MODELS_PROTOCOL_VERSION);
+	expect(WS_METHODS.providerModelsList).toBe("provider.models.list");
+	expect(WS_METHODS.providerModelsSave).toBe("provider.models.save");
+});
+
+test("ACP config option snapshots are available from protocol v98", () => {
+	expect(ACP_CONFIG_OPTIONS_PROTOCOL_VERSION).toBe(98);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_CONFIG_OPTIONS_PROTOCOL_VERSION);
+});
+
+test("ACP model discovery is explicit and separate at protocol v99", () => {
+	expect(ACP_MODEL_CATALOG_PROTOCOL_VERSION).toBe(99);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_MODEL_CATALOG_PROTOCOL_VERSION);
+	expect(WS_METHODS.acpClientModels).toBe("acp.client.models");
+});
+
+test("Android emulator controls are versioned at protocol v100", () => {
+	expect(ANDROID_EMULATOR_PROTOCOL_VERSION).toBe(100);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ANDROID_EMULATOR_PROTOCOL_VERSION);
+	expect(WS_METHODS.androidEmulatorStart).toBe("android.emulator.start");
+	expect(WS_METHODS.androidEmulatorInstallApk).toBe("android.emulator.installApk");
 });
 
 test("Windows shell settings advance the protocol", () => {
@@ -276,8 +305,8 @@ test("review details and the GitHub review actions are pinned to v88", () => {
 	expect(WS_METHODS.workspaceDeleteRemoteBranch).toBe("workspace.deleteRemoteBranch");
 });
 
-test("project create and the onboarding dismissal are pinned to v94", () => {
-	expect(PROTOCOL_VERSION).toBe(95);
+test("project create and onboarding dismissal remain available at v97", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(97);
 	expect(ONBOARDING_PROTOCOL_VERSION).toBe(94);
 	expect(WS_METHODS.projectCreate).toBe("project.create");
 	expect(WS_METHODS.providerDetect).toBe("provider.detect");

@@ -1,4 +1,13 @@
 import type {
+	AcpClientCheckResult,
+	AcpConfigOption,
+	AcpSessionEvent,
+	AcpSessionSnapshot,
+	AcpSessionSummary,
+	AndroidEmulatorDetails,
+	AndroidEmulatorLogs,
+	AndroidEmulatorScreenshot,
+	AndroidEmulatorStatus,
 	AppConfig,
 	AppConfigUpdate,
 	BackgroundCommandCompletionDetails,
@@ -45,6 +54,7 @@ import type {
 	Project,
 	ProjectPathStatus,
 	ProjectTrustSummary,
+	ProviderModelDefinition,
 	ProviderStatusReport,
 	PrPreview,
 	ResourceMeta,
@@ -123,7 +133,12 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 95;
+export const PROTOCOL_VERSION = 100;
+export const ACP_PROTOCOL_VERSION = 96;
+export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
+export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
+export const ANDROID_EMULATOR_PROTOCOL_VERSION = 100;
+export const PROVIDER_MODELS_PROTOCOL_VERSION = 97;
 export const PROJECT_CLONE_PROTOCOL_VERSION = 95;
 export const ONBOARDING_PROTOCOL_VERSION = 94;
 export const LAYOUT_PLAN_PRESET_PROTOCOL_VERSION = 94;
@@ -328,6 +343,8 @@ export const WS_METHODS = {
 	modelSetContextWindow: "model.setContextWindow",
 	modelClampThinking: "model.clampThinking",
 	providerStatus: "provider.status",
+	providerModelsList: "provider.models.list",
+	providerModelsSave: "provider.models.save",
 	providerDetect: "provider.detect",
 	providerLoginStart: "provider.loginStart",
 	providerLoginReply: "provider.loginReply",
@@ -373,6 +390,29 @@ export const WS_METHODS = {
 	mcpReconnect: "mcp.reconnect",
 	mcpReadOutput: "mcp.readOutput",
 	mcpReadLog: "mcp.readLog",
+	acpClientCheck: "acp.client.check",
+	acpClientModels: "acp.client.models",
+	androidAvdsList: "android.avds.list",
+	androidEmulatorStatus: "android.emulator.status",
+	androidEmulatorStart: "android.emulator.start",
+	androidEmulatorStop: "android.emulator.stop",
+	androidEmulatorDetails: "android.emulator.details",
+	androidEmulatorScreen: "android.emulator.screen",
+	androidEmulatorTap: "android.emulator.tap",
+	androidEmulatorType: "android.emulator.type",
+	androidEmulatorSwipe: "android.emulator.swipe",
+	androidEmulatorInstallApk: "android.emulator.installApk",
+	androidEmulatorLogs: "android.emulator.logs",
+	acpSessionList: "acp.session.list",
+	acpSessionGet: "acp.session.get",
+	acpSessionCreate: "acp.session.create",
+	acpSessionResume: "acp.session.resume",
+	acpSessionPrompt: "acp.session.prompt",
+	acpSessionCancel: "acp.session.cancel",
+	acpSessionDelete: "acp.session.delete",
+	acpPermissionReply: "acp.permission.reply",
+	acpSessionSetMode: "acp.session.setMode",
+	acpSessionSetConfigOption: "acp.session.setConfigOption",
 } as const;
 
 export const WS_CHANNELS = {
@@ -403,6 +443,7 @@ export const WS_CHANNELS = {
 	mcpStatus: "mcp.status",
 	localesChanged: "locales.changed",
 	themesChanged: "themes.changed",
+	acpEvent: "acp.event",
 } as const;
 
 type SameUnion<A extends B, B extends C, C = A> = A;
@@ -945,6 +986,14 @@ export interface WsMethodMap {
 		result: ModelContextSetting[];
 	};
 	"provider.status": { params: Record<string, never>; result: ProviderStatusReport };
+	"provider.models.list": {
+		params: { providerId: string };
+		result: ProviderModelDefinition[];
+	};
+	"provider.models.save": {
+		params: { providerId: string; models: ProviderModelDefinition[] };
+		result: ProviderModelDefinition[];
+	};
 	"provider.detect": { params: Record<string, never>; result: { accounts: DetectedAccount[] } };
 	"provider.loginStart": {
 		params: { providerId: string; type?: "oauth" | "api_key" };
@@ -1086,10 +1135,79 @@ export interface WsMethodMap {
 		result: McpReadOutputResult;
 	};
 	"mcp.readLog": { params: { workspaceId: string; name: string }; result: McpServerLog };
+	"acp.client.check": { params: { clientId: string }; result: AcpClientCheckResult };
+	"acp.client.models": {
+		params: { workspaceId: string; clientId: string };
+		result: AcpConfigOption[];
+	};
+	"android.avds.list": { params: Record<string, never>; result: string[] };
+	"android.emulator.status": { params: Record<string, never>; result: AndroidEmulatorStatus };
+	"android.emulator.start": { params: { avdName: string }; result: AndroidEmulatorStatus };
+	"android.emulator.stop": { params: Record<string, never>; result: AndroidEmulatorStatus };
+	"android.emulator.details": {
+		params: Record<string, never>;
+		result: AndroidEmulatorDetails;
+	};
+	"android.emulator.screen": {
+		params: Record<string, never>;
+		result: AndroidEmulatorScreenshot;
+	};
+	"android.emulator.tap": { params: { x: number; y: number }; result: Ack };
+	"android.emulator.type": { params: { text: string }; result: Ack };
+	"android.emulator.swipe": {
+		params: { x1: number; y1: number; x2: number; y2: number; durationMs?: number };
+		result: Ack;
+	};
+	"android.emulator.installApk": {
+		params: { workspaceId: string; path: string };
+		result: Ack;
+	};
+	"android.emulator.logs": {
+		params: { lines?: number };
+		result: AndroidEmulatorLogs;
+	};
+	"acp.session.list": { params: { workspaceId: string }; result: AcpSessionSummary[] };
+	"acp.session.get": {
+		params: { workspaceId: string; sessionId: string };
+		result: AcpSessionSnapshot;
+	};
+	"acp.session.create": {
+		params: { workspaceId: string; clientId: string };
+		result: AcpSessionSnapshot;
+	};
+	"acp.session.resume": {
+		params: { workspaceId: string; sessionId: string };
+		result: AcpSessionSnapshot;
+	};
+	"acp.session.prompt": {
+		params: { workspaceId: string; sessionId: string; text: string; images?: ImageContent[] };
+		result: Ack;
+	};
+	"acp.session.cancel": {
+		params: { workspaceId: string; sessionId: string };
+		result: Ack;
+	};
+	"acp.session.delete": {
+		params: { workspaceId: string; sessionId: string };
+		result: Ack;
+	};
+	"acp.permission.reply": {
+		params: { workspaceId: string; sessionId: string; requestId: string; optionId: string };
+		result: Ack;
+	};
+	"acp.session.setMode": {
+		params: { workspaceId: string; sessionId: string; modeId: string };
+		result: Ack;
+	};
+	"acp.session.setConfigOption": {
+		params: { workspaceId: string; sessionId: string; configId: string; value: string };
+		result: Ack;
+	};
 }
 
 /** Payload of the `mcp.status` channel: one per-session snapshot per publish. */
 export type McpStatusPayload = McpStatusSnapshot;
+export type AcpEventPayload = AcpSessionEvent;
 
 export type WsMethodName = SameUnion<
 	keyof WsMethodMap,

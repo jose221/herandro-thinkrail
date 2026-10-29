@@ -229,6 +229,7 @@ describe("frontend-local layout state", () => {
 		expect(first.right.groups.flatMap((group) => group.tabs)).toEqual([
 			toolTab("specs"),
 			toolTab("files"),
+			toolTab("emulator"),
 			toolTab("plan"),
 			toolTab("review"),
 		]);
@@ -478,6 +479,39 @@ describe("frontend-local layout state", () => {
 			previewTabId: "ws:changes:branch",
 			tabs: [{ kind: "changes", id: "ws:changes:branch", scope: { kind: "branch" } }],
 		});
+	});
+
+	test("a persisted ACP tab survives reload without entering the Pi chat shape", async () => {
+		const local = new MemoryStorage();
+		const session = new MemoryStorage();
+		session.setItem("thinkrail:layout-surface-id", "surface-acp");
+		setLayoutStateStorageForTests({ local, session }, endpoint);
+		const initial = await ensureWorkspaceLayoutState("workspace");
+		if (initial.center.kind !== "group") throw new Error("expected a single center group");
+		const opened = openCenterTab(
+			initial,
+			{
+				kind: "acp-chat",
+				id: "acp-tab",
+				name: "External agent",
+				acpSessionId: "opaque-acp-id",
+			},
+			initial.center.id,
+			"keep",
+		);
+		if (!("document" in opened)) throw new Error(opened.reason);
+		await commitWorkspaceLayout("workspace", opened.document);
+
+		resetLayoutStateForTests();
+		resetStore();
+		setLayoutStateStorageForTests({ local, session }, endpoint);
+
+		const restored = await ensureWorkspaceLayoutState("workspace");
+		expect(restored.center).toMatchObject({
+			kind: "group",
+			tabs: [{ kind: "acp-chat", id: "acp-tab", acpSessionId: "opaque-acp-id" }],
+		});
+		expect(JSON.stringify(restored.center.tabs)).not.toContain('"sessionId"');
 	});
 
 	test("reload restores the same surface without another host read", async () => {

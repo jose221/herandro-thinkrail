@@ -29,9 +29,10 @@ Clear, fractal module boundaries are a top-priority requirement:
 
 ## Engine and architecture
 
-- Run `pi` in-process through `@earendil-works/pi-coding-agent` (`createAgentSession`), never as a
-  subprocess and never through a second agent runtime. Fatal provider/agent faults can take down the
-  host; that lack of crash isolation is accepted.
+- Run Pi chats in-process through `@earendil-works/pi-coding-agent` (`createAgentSession`); never run
+  Pi as a subprocess. Separately, explicit ACP chats may launch only a user-configured ACP command
+  through the server-owned ACP module. Keep Pi and ACP session ids, transcripts, permissions, and
+  lifecycle distinct.
 - The three rings are engine host (`packages/server` + `packages/shared`), typed wire
   (`packages/contracts`), and independently shippable UI (`apps/web`). `apps/cli` and `apps/desktop`
   are thin launchers over the same host.

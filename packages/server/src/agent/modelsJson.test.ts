@@ -17,9 +17,11 @@ import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-work
 import { parse } from "jsonc-parser";
 import {
 	listModelContextSettings,
-	setModelContextPublisher,
+	listProviderModelDefinitions,
+	saveProviderModelDefinitions,
 	setModelContextWindow,
-} from "./modelContext";
+	setModelsJsonPublisher,
+} from "./modelsJson";
 import { configurePiRuntime } from "./piRuntime";
 
 let directory: string;
@@ -48,7 +50,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	setModelContextPublisher(null);
+	setModelsJsonPublisher(null);
 	configurePiRuntime(null);
 	if (priorAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 	else process.env.PI_CODING_AGENT_DIR = priorAgentDir;
@@ -130,7 +132,7 @@ test("saving 1M updates Pi metadata for new chats, keeps live session models, an
 		sessionManager: SessionManager.inMemory(),
 	});
 	let published = 0;
-	setModelContextPublisher(() => {
+	setModelsJsonPublisher(() => {
 		published++;
 	});
 	try {
@@ -368,4 +370,97 @@ test("external edits are re-read on every read", async () => {
 		override: 700_000,
 	});
 	expect(pi.getModel("openai", "gpt-5.5")?.contextWindow).toBe(700_000);
+});
+
+test("provider model edits expose no secrets and preserve hidden model/provider fields", async () => {
+	const apiKey = "private-fixture-api-key";
+	const modelHeader = "private-fixture-model-header";
+	writeFileSync(
+		path,
+		JSON.stringify({
+			providers: {
+				custom: {
+					api: "openai-completions",
+					baseUrl: "http://fixture.invalid/v1",
+					apiKey,
+					models: [
+						{
+							id: "fixture-model",
+							name: "Fixture model",
+							contextWindow: 128_000,
+							maxTokens: 8_192,
+							reasoning: false,
+							input: ["text"],
+							cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+							headers: { "X-Model-Key": modelHeader },
+							samplingParams: { temperature: 0.2 },
+						},
+					],
+				},
+			},
+		}),
+	);
+	const pi = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: path,
+		allowModelNetwork: false,
+	});
+	await pi.refresh({ allowNetwork: false });
+	configurePiRuntime(pi);
+	expect(pi.getProviderAuthStatus("custom").source).toBe("models_json_key");
+
+	const listed = await listProviderModelDefinitions("custom");
+	expect(listed).toEqual([
+		{
+			id: "fixture-model",
+			name: "Fixture model",
+			contextWindow: 128_000,
+			maxTokens: 8_192,
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+		},
+	]);
+	expect(JSON.stringify(listed)).not.toContain(apiKey);
+	expect(JSON.stringify(listed)).not.toContain(modelHeader);
+
+	let published = 0;
+	setModelsJsonPublisher(() => {
+		published++;
+	});
+	const modelToEdit = listed[0];
+	if (!modelToEdit) throw new Error("provider model was not listed");
+	const updated = [{ ...modelToEdit, name: "Renamed fixture model", maxTokens: 4_096 }];
+	expect(await saveProviderModelDefinitions("custom", updated)).toEqual(updated);
+	expect(config()).toEqual({
+		providers: {
+			custom: {
+				api: "openai-completions",
+				baseUrl: "http://fixture.invalid/v1",
+				apiKey,
+				models: [
+					{
+						id: "fixture-model",
+						name: "Renamed fixture model",
+						contextWindow: 128_000,
+						maxTokens: 4_096,
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+						headers: { "X-Model-Key": modelHeader },
+						samplingParams: { temperature: 0.2 },
+					},
+				],
+			},
+		},
+	});
+	expect(pi.getModel("custom", "fixture-model")?.maxTokens).toBe(4_096);
+	expect(published).toBe(1);
+});
+
+test("models.json editor refuses providers with non-file auth", async () => {
+	await runtime();
+	await expect(listProviderModelDefinitions("openai")).rejects.toThrow(
+		"not editable from models.json",
+	);
 });

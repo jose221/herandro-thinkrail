@@ -15,6 +15,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"@agentclientprotocol/sdk": "1.9.0",
 		"@earendil-works/pi-ai": "catalog:",
 		"@earendil-works/pi-coding-agent": "catalog:",
 		"@posthog/core": "1.45.1",

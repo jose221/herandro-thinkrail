@@ -1,11 +1,13 @@
 import {
 	RiLockLine as Lock,
 	RiLogoutBoxLine as LogOut,
+	RiSettings3Line as ModelSettings,
 	RiRefreshLine as RefreshCw,
 } from "@remixicon/react";
 import {
 	type AppConfigUpdate,
 	JBCENTRAL_QUOTA_PROTOCOL_VERSION,
+	PROVIDER_MODELS_PROTOCOL_VERSION,
 	type ProviderStatus,
 } from "@thinkrail/contracts";
 import { t as translate, useT } from "@thinkrail/locales/react";
@@ -16,6 +18,7 @@ import { AUTH_KIND_LABEL } from "@/chat/modelPicker";
 import { toast, useAppStore } from "@/store";
 import { errorText, getTransport } from "@/transport";
 import { JetBrainsAiCard } from "./JetBrainsAiCard";
+import { ProviderModelsDialog } from "./ProviderModelsDialog";
 import { ProviderRow } from "./ProviderRow";
 import { SettingsGroup, SettingsPageContainer } from "./SettingsGroup";
 import { useProviderAuth } from "./useProviderAuth";
@@ -26,6 +29,7 @@ const MAX_REST_NAMES = 5;
 export function ProvidersSettings() {
 	const t = useT();
 	const [showAllKeys, setShowAllKeys] = useState(false);
+	const [modelsProvider, setModelsProvider] = useState<ProviderStatus | null>(null);
 	const {
 		report,
 		failed,
@@ -38,6 +42,8 @@ export function ProvidersSettings() {
 		loginDialog,
 	} = useProviderAuth({ ownsLoginDialog: true });
 	const protocolVersion = useAppStore((s) => s.protocolVersion);
+	const modelsEditorAvailable =
+		protocolVersion !== null && protocolVersion >= PROVIDER_MODELS_PROTOCOL_VERSION;
 	const quotaEnabled = useAppStore((s) => s.jbcentralQuotaEnabled);
 	const quotaRefreshSeconds = useAppStore((s) => s.jbcentralQuotaRefreshSeconds);
 
@@ -104,6 +110,8 @@ export function ProvidersSettings() {
 									provider={p}
 									busy={busyProvider === p.id}
 									onSignOut={() => void logout(p.id)}
+									canEditModels={modelsEditorAvailable && p.canEditModelsJson === true}
+									onEditModels={() => setModelsProvider(p)}
 								/>
 							))}
 						</SettingsGroup>
@@ -183,6 +191,16 @@ export function ProvidersSettings() {
 			)}
 
 			{loginDialog}
+			{modelsProvider ? (
+				<ProviderModelsDialog
+					providerId={modelsProvider.id}
+					providerName={modelsProvider.name}
+					open
+					onOpenChange={(open) => {
+						if (!open) setModelsProvider(null);
+					}}
+				/>
+			) : null}
 		</div>
 	);
 }
@@ -191,10 +209,14 @@ function ConnectedRow({
 	provider,
 	busy,
 	onSignOut,
+	canEditModels,
+	onEditModels,
 }: {
 	provider: ProviderStatus;
 	busy: boolean;
 	onSignOut: () => void;
+	canEditModels: boolean;
+	onEditModels: () => void;
 }) {
 	const t = useT();
 	const label = t(AUTH_KIND_LABEL[provider.kind ?? "other"]);
@@ -209,35 +231,49 @@ function ConnectedRow({
 			data-provider={provider.id}
 			data-configured="true"
 			data-kind={provider.kind}
-			className="flex items-center gap-8 border-border-muted border-b py-12"
+			className="flex min-w-0 flex-col gap-8 border-border-muted border-b py-12 sm:flex-row sm:items-center"
 		>
 			<span className="min-w-0 flex-1 truncate tr-text-ui text-text-default">{provider.name}</span>
-			<span className="truncate text-text-muted tr-text-metadata">
-				{provider.detail
-					? t("settings.providers.kindDetail", { kind: label, detail: provider.detail })
-					: label}
-			</span>
-			{provider.canLogout ? (
-				<Button
-					variant="soft-primary"
-					size="m"
-					iconLeft={LogOut}
-					data-testid="provider-signout"
-					data-provider={provider.id}
-					disabled={busy}
-					onClick={onSignOut}
-				>
-					{t("settings.providers.signOut")}
-				</Button>
-			) : (
-				<span
-					className="flex shrink-0 items-center gap-4 text-text-muted tr-text-metadata"
-					title={managedTitle}
-				>
-					<Lock className="size-12" />
-					{t("settings.providers.managed")}
+			<div className="flex min-w-0 flex-wrap items-center gap-8 sm:justify-end">
+				<span className="max-w-full truncate text-text-muted tr-text-metadata">
+					{provider.detail
+						? t("settings.providers.kindDetail", { kind: label, detail: provider.detail })
+						: label}
 				</span>
-			)}
+				{provider.canLogout ? (
+					<Button
+						variant="soft-primary"
+						size="m"
+						iconLeft={LogOut}
+						data-testid="provider-signout"
+						data-provider={provider.id}
+						disabled={busy}
+						onClick={onSignOut}
+					>
+						{t("settings.providers.signOut")}
+					</Button>
+				) : (
+					<span
+						className="flex shrink-0 items-center gap-4 text-text-muted tr-text-metadata"
+						title={managedTitle}
+					>
+						<Lock className="size-12" />
+						{t("settings.providers.managed")}
+					</span>
+				)}
+				{canEditModels ? (
+					<Button
+						variant="outline"
+						size="m"
+						iconLeft={ModelSettings}
+						data-testid="provider-edit-models"
+						data-provider={provider.id}
+						onClick={onEditModels}
+					>
+						{t("settings.providers.editModels")}
+					</Button>
+				) : null}
+			</div>
 		</div>
 	);
 }

@@ -18,6 +18,7 @@ import {
 	RiTranslate2,
 } from "@remixicon/react";
 import {
+	ACP_PROTOCOL_VERSION,
 	DEFAULT_MODEL_PROTOCOL_VERSION,
 	EXTENSION_CATALOG_PROTOCOL_VERSION,
 	HOST_ENVIRONMENT_PROTOCOL_VERSION,
@@ -57,6 +58,12 @@ const NAV_GROUPS: SettingsNavGroup[] = [
 				label: "settings.nav.mcp",
 				icon: RiPlugLine,
 				requiresProtocolVersion: MCP_PROTOCOL_VERSION,
+			},
+			{
+				id: SettingsSection.Acp,
+				label: "settings.nav.acp",
+				icon: RiApps2Line,
+				requiresProtocolVersion: ACP_PROTOCOL_VERSION,
 			},
 			{ id: SettingsSection.Templates, label: "settings.nav.templates", icon: RiLayoutGridLine },
 			{

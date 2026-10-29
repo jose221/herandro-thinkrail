@@ -19,6 +19,9 @@ host-runs-pi / typed-WS / React+shadcn model). Built so others can reuse/contrib
 a future `packages/chat-ui`). Built-in tool renderers live in the child
 [tools/SPEC.md](tools/SPEC.md); extracted extension renderers live in [[module-thinkrail-extensions]].
 
+ACP-native chats are a separate feature module ([[submodule-web-acp]]); this module remains Pi-specific
+and never interprets ACP ids, events, or transcript blocks.
+
 ## Rendering model — rows and progressive disclosure
 
 The transcript is pi-canonical turns (`ChatTurn` in `types.ts`: user/assistant are pi messages; `system`,

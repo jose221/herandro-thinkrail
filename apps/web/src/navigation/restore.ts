@@ -12,6 +12,7 @@ import { type NavigationLocation, parseFragment, serializeLocation } from "./loc
 export interface NavigationDeps {
 	driver: NavigationDriver;
 	listWorkspaces: (projectId: string) => Promise<Workspace[]>;
+	openAcpChat?: (workspaceId: string, acpSessionId: string) => Promise<boolean>;
 }
 
 type WorkspaceLayoutDocument = Parameters<
@@ -40,6 +41,14 @@ export function deriveLocation(state: {
 				projectId: workspace.projectId,
 				workspaceId,
 				sessionId: active.sessionId,
+			};
+		}
+		if (active?.kind === "acp-chat") {
+			return {
+				kind: "acp-chat",
+				projectId: workspace.projectId,
+				workspaceId,
+				acpSessionId: active.acpSessionId,
 			};
 		}
 		return { kind: "workspace", projectId: workspace.projectId, workspaceId };
@@ -105,7 +114,11 @@ function isUserNavigationEdge(
 	);
 }
 
-export function startNavigation({ driver, listWorkspaces }: NavigationDeps): () => void {
+export function startNavigation({
+	driver,
+	listWorkspaces,
+	openAcpChat,
+}: NavigationDeps): () => void {
 	let generation = 0;
 	let pending: { generation: number; location: NavigationLocation } | null = null;
 	const attempting = new Set<number>();
@@ -192,6 +205,9 @@ export function startNavigation({ driver, listWorkspaces }: NavigationDeps): () 
 					location.kind === "chat" ? location.sessionId : undefined,
 				),
 		);
+		if (location.kind === "acp-chat") {
+			await openAcpChat?.(workspace.id, location.acpSessionId);
+		}
 		resolvePending(gen);
 	};
 

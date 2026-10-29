@@ -53,12 +53,14 @@ export {
 	startMcpProbe,
 } from "./mcpSignIn";
 export { setModelListingPublisher } from "./modelAvailability";
+export { preferredDefaultModel } from "./modelDefaults";
 export {
 	listModelContextSettings,
-	setModelContextPublisher,
+	listProviderModelDefinitions,
+	saveProviderModelDefinitions,
 	setModelContextWindow,
-} from "./modelContext";
-export { preferredDefaultModel } from "./modelDefaults";
+	setModelsJsonPublisher,
+} from "./modelsJson";
 export * from "./oneshot";
 export {
 	activatePiRuntimeGeneration,

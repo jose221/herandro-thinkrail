@@ -4,8 +4,10 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
 	type AppConfig,
+	DEFAULT_ACP_CLIENTS,
 	DEFAULT_CONFIG,
 	type HostEnvironment,
+	isAcpClientCatalog,
 	isComposerGrowthLimit,
 	isJbcentralQuotaRefreshSeconds,
 	isLineWidth,
@@ -407,6 +409,9 @@ export function loadConfig(): AppConfig {
 			? value.settleIdleDays
 			: DEFAULT_CONFIG.settleIdleDays,
 		disabledExtensions: storedExtensionNames(value.disabledExtensions),
+		acpClients: isAcpClientCatalog(value.acpClients)
+			? value.acpClients.map((client) => ({ ...client, args: [...client.args] }))
+			: structuredClone(DEFAULT_ACP_CLIENTS),
 		locale: isLocalePreference(value.locale) ? value.locale : DEFAULT_CONFIG.locale,
 		onboardingDismissed: value.onboardingDismissed === true,
 	};
@@ -414,6 +419,14 @@ export function loadConfig(): AppConfig {
 
 export function saveConfig(config: AppConfig): void {
 	writeJson("config.json", config);
+}
+
+export function loadAcpSessionData(): unknown {
+	return readJson<unknown>("acp-sessions.json", null);
+}
+
+export function saveAcpSessionData(value: unknown): void {
+	writeJsonAtomic("acp-sessions.json", value, 0o600);
 }
 
 export function loadHostEnvironment(): HostEnvironment {

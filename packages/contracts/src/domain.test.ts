@@ -1,23 +1,96 @@
 import { describe, expect, test } from "bun:test";
 import {
 	ACCEPTED_IMAGE_TYPES,
+	ACP_CLIENTS_LIMIT,
 	base64EncodedLength,
 	clampToCodePoints,
+	DEFAULT_ACP_CLIENTS,
 	DEFAULT_CONFIG,
 	FIRST_PROMPT_MAX_LENGTH,
 	firstPromptHead,
 	firstPromptOfTexts,
 	IMAGE_MAX_BASE64_BYTES,
+	isAcpClientCatalog,
 	isDelegationRunDetails,
 	isJbcentralConnected,
 	isJbcentralQuotaRefreshSeconds,
 	isLocalePreference,
 	isPlanReviewResult,
+	isProviderModelDefinitions,
 	isRetriedAttempt,
 	JBCENTRAL_QUOTA_REFRESH_SECONDS,
 	REQUEST_IMAGE_BASE64_BUDGET,
 	TODO_NUDGE_PREFIX,
 } from "./domain";
+
+describe("ACP client catalog", () => {
+	test("ships Droid and Antigravity as editable defaults", () => {
+		expect(DEFAULT_CONFIG.acpClients).toEqual(DEFAULT_ACP_CLIENTS);
+		expect(DEFAULT_ACP_CLIENTS.map(({ id }) => id)).toEqual(["droid", "antigravity"]);
+	});
+
+	test("accepts bounded unique launcher definitions", () => {
+		expect(isAcpClientCatalog(DEFAULT_ACP_CLIENTS)).toBe(true);
+		expect(
+			isAcpClientCatalog([
+				...DEFAULT_ACP_CLIENTS,
+				{ id: "custom", name: "Custom", command: "/opt/agent", args: ["--stdio"], enabled: true },
+			]),
+		).toBe(true);
+	});
+
+	test("rejects ambiguous, oversized, and shell-hostile definitions", () => {
+		expect(isAcpClientCatalog([...DEFAULT_ACP_CLIENTS, { ...DEFAULT_ACP_CLIENTS[0] }])).toBe(false);
+		expect(isAcpClientCatalog(new Array(ACP_CLIENTS_LIMIT + 1).fill(DEFAULT_ACP_CLIENTS[0]))).toBe(
+			false,
+		);
+		expect(
+			isAcpClientCatalog([
+				{ id: "bad", name: "Bad", command: "agent", args: ["x\0y"], enabled: true },
+			]),
+		).toBe(false);
+		expect(
+			isAcpClientCatalog([
+				{
+					...DEFAULT_ACP_CLIENTS[0],
+					extra: "unexpected",
+				},
+			]),
+		).toBe(false);
+	});
+});
+
+describe("provider models.json editor contract", () => {
+	const model = {
+		id: "custom-model",
+		name: "Custom model",
+		reasoning: true,
+		input: ["text", "image"],
+		contextWindow: 128_000,
+		maxTokens: 8_192,
+		cost: {
+			input: 1,
+			output: 2,
+			cacheRead: 0.1,
+			cacheWrite: 0.2,
+			tiers: [{ input: 3, output: 4, cacheRead: 0.3, cacheWrite: 0.4, inputTokensAbove: 100_000 }],
+		},
+	};
+
+	test("accepts safe model definitions and an empty catalog", () => {
+		expect(isProviderModelDefinitions([model])).toBe(true);
+		expect(isProviderModelDefinitions([])).toBe(true);
+	});
+
+	test("rejects duplicates, unbounded values, and fields that could carry secrets", () => {
+		expect(isProviderModelDefinitions([model, model])).toBe(false);
+		expect(isProviderModelDefinitions([{ ...model, headers: { Authorization: "secret" } }])).toBe(
+			false,
+		);
+		expect(isProviderModelDefinitions([{ ...model, contextWindow: 10_000_001 }])).toBe(false);
+		expect(isProviderModelDefinitions([{ ...model, id: "model\0private" }])).toBe(false);
+	});
+});
 
 describe("isRetriedAttempt", () => {
 	const failed = { role: "assistant", stopReason: "error" };

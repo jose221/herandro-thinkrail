@@ -1,5 +1,6 @@
 import type {
 	Ack,
+	AcpEventPayload,
 	AppConfig,
 	ExtUiRequest,
 	HostUpdateNotice,
@@ -18,6 +19,8 @@ import type {
 	WorkspaceRemoved,
 } from "@thinkrail/contracts";
 import {
+	ACP_CONFIG_OPTIONS_PROTOCOL_VERSION,
+	ACP_PROTOCOL_VERSION,
 	CHANGE_MUTATIONS_PROTOCOL_VERSION,
 	HOST_UPDATE_RUN_PROTOCOL_VERSION,
 	LOCALES_PROTOCOL_VERSION,
@@ -31,6 +34,7 @@ import {
 	WS_CHANNELS,
 } from "@thinkrail/contracts";
 import { isConnectedGeneration, useAppStore } from "../store";
+import { publishAcpWireEvent } from "./acpEvents";
 import { createPiEventBatcher, shouldFlushPiEventsBefore } from "./piEventBatcher";
 import { WsTransport } from "./transport";
 
@@ -246,6 +250,11 @@ export function initTransport(): WsTransport {
 				typeof welcome.appVersion === "string" ? welcome.appVersion : undefined,
 			);
 		const connectionGeneration = useAppStore.getState().connectionGeneration;
+		publishAcpWireEvent({
+			kind: "welcome",
+			protocolVersion: welcome.protocolVersion,
+			connectionGeneration,
+		});
 		refreshLoadedWorkspaceLists(connectionGeneration);
 		refreshLocalLocales(connectionGeneration);
 		refreshUserThemes(connectionGeneration);
@@ -323,6 +332,23 @@ export function initTransport(): WsTransport {
 		useAppStore.getState().applyMcpStatus(data as McpStatusPayload);
 	});
 
+	transport.subscribe(WS_CHANNELS.acpEvent, (data) => {
+		const state = useAppStore.getState();
+		if (state.protocolVersion === null || state.protocolVersion < ACP_PROTOCOL_VERSION) return;
+		const event = data as AcpEventPayload;
+		if (
+			event.type === "configOptions" &&
+			state.protocolVersion < ACP_CONFIG_OPTIONS_PROTOCOL_VERSION
+		) {
+			return;
+		}
+		publishAcpWireEvent({
+			kind: "event",
+			event,
+			connectionGeneration: state.connectionGeneration,
+		});
+	});
+
 	transport.subscribe(WS_CHANNELS.providerChanged, () => {
 		useAppStore.getState().noteProviderChanged();
 		const providerVersion = useAppStore.getState().providerVersion;
@@ -365,6 +391,7 @@ export function initTransport(): WsTransport {
 		const state = useAppStore.getState();
 		const login = state.activeLogin;
 		state.applyWorkspaceRemoved(projectId, id);
+		publishAcpWireEvent({ kind: "workspaceRemoved", workspaceId: id });
 		if (login?.target?.workspaceId === id) {
 			void getTransport()
 				.request("provider.loginCancel", { loginId: login.loginId })

@@ -3,6 +3,7 @@ type BoundedRunBase = {
 	err: string;
 	timedOut: boolean;
 	launchFailed: boolean;
+	truncated?: true;
 	aborted?: true;
 	waitedMs: number;
 };
@@ -16,13 +17,14 @@ export type BoundedRunOptions = {
 	env?: Record<string, string | undefined>;
 	stdout?: "text";
 	signal?: AbortSignal;
+	maxOutputBytes?: number;
 };
 
 export type BoundedBytesRunOptions = Omit<BoundedRunOptions, "stdout"> & {
 	stdout: "bytes";
 };
 
-export type BoundedStreamOptions = Omit<BoundedRunOptions, "stdout" | "signal">;
+export type BoundedStreamOptions = Omit<BoundedRunOptions, "stdout" | "signal" | "maxOutputBytes">;
 export type BoundedStream = {
 	stdout: ReadableStream<Uint8Array>;
 	exited: Promise<BoundedRunBase>;
@@ -38,8 +40,24 @@ function boundedTimeout(ms: number): number {
 }
 
 type Drain = { done: Promise<void>; cancel: () => void };
-type TextSink = Drain & { kind: "text"; value: () => string };
-type BytesSink = Drain & { kind: "bytes"; value: () => Uint8Array };
+type TextSink = Drain & { kind: "text"; value: () => string; truncated: () => boolean };
+type BytesSink = Drain & { kind: "bytes"; value: () => Uint8Array; truncated: () => boolean };
+
+function outputLimit(value: number | undefined): number {
+	if (value === undefined || value === Number.POSITIVE_INFINITY) return Number.POSITIVE_INFINITY;
+	if (!Number.isFinite(value)) return 0;
+	return Math.max(0, Math.trunc(value));
+}
+
+function boundedChunk(
+	chunk: Uint8Array,
+	captured: number,
+	limit: number,
+): { value: Uint8Array; truncated: boolean } {
+	const remaining = Math.max(0, limit - captured);
+	const value = chunk.byteLength <= remaining ? chunk : chunk.subarray(0, remaining);
+	return { value, truncated: value.byteLength < chunk.byteLength };
+}
 
 function drain(stream: ReadableStream<Uint8Array>, chunk: (value: Uint8Array) => void): Drain {
 	const reader = stream.getReader();
@@ -58,21 +76,34 @@ function drain(stream: ReadableStream<Uint8Array>, chunk: (value: Uint8Array) =>
 	};
 }
 
-function textSink(stream: ReadableStream<Uint8Array>): TextSink {
+function textSink(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes = Number.POSITIVE_INFINITY,
+): TextSink {
 	const decoder = new TextDecoder();
 	let text = "";
+	let captured = 0;
+	let wasTruncated = false;
 	return {
 		kind: "text",
-		value: () => text,
+		value: () => text + decoder.decode(),
+		truncated: () => wasTruncated,
 		...drain(stream, (chunk) => {
-			text += decoder.decode(chunk, { stream: true });
+			const bounded = boundedChunk(chunk, captured, maxBytes);
+			captured += bounded.value.byteLength;
+			wasTruncated ||= bounded.truncated;
+			text += decoder.decode(bounded.value, { stream: true });
 		}),
 	};
 }
 
-function bytesSink(stream: ReadableStream<Uint8Array>): BytesSink {
+function bytesSink(
+	stream: ReadableStream<Uint8Array>,
+	maxBytes = Number.POSITIVE_INFINITY,
+): BytesSink {
 	const chunks: Uint8Array[] = [];
 	let length = 0;
+	let wasTruncated = false;
 	return {
 		kind: "bytes",
 		value: () => {
@@ -84,9 +115,12 @@ function bytesSink(stream: ReadableStream<Uint8Array>): BytesSink {
 			}
 			return bytes;
 		},
+		truncated: () => wasTruncated,
 		...drain(stream, (chunk) => {
-			chunks.push(chunk.slice());
-			length += chunk.byteLength;
+			const bounded = boundedChunk(chunk, length, maxBytes);
+			if (bounded.value.byteLength > 0) chunks.push(bounded.value.slice());
+			length += bounded.value.byteLength;
+			wasTruncated ||= bounded.truncated;
 		}),
 	};
 }
@@ -271,8 +305,12 @@ export async function runBounded(
 		return opts.stdout === "bytes" ? { ...failed, out: new Uint8Array() } : { ...failed, out: "" };
 	}
 
-	const out = opts.stdout === "bytes" ? bytesSink(proc.stdout) : textSink(proc.stdout);
-	const err = textSink(proc.stderr);
+	const maxOutputBytes = outputLimit(opts.maxOutputBytes);
+	const out =
+		opts.stdout === "bytes"
+			? bytesSink(proc.stdout, maxOutputBytes)
+			: textSink(proc.stdout, maxOutputBytes);
+	const err = textSink(proc.stderr, maxOutputBytes);
 	const drained = Promise.all([out.done, err.done]);
 	const deadline = delay(boundedTimeout(opts.timeoutMs));
 
@@ -304,6 +342,7 @@ export async function runBounded(
 		err: err.value(),
 		timedOut: outcome === "timed-out",
 		launchFailed: false,
+		...(out.truncated() || err.truncated() ? { truncated: true as const } : {}),
 		...(outcome === "aborted" && { aborted: true as const }),
 		waitedMs: waitedMs(),
 	};

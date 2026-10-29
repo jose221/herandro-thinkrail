@@ -359,6 +359,11 @@ function isWorkspaceView(value: unknown): value is WorkspaceViewState {
 				return (
 					hasOnlyKeys(tab, ["kind", "id", "name", "sessionId"]) && typeof tab.sessionId === "string"
 				);
+			case "acp-chat":
+				return (
+					hasOnlyKeys(tab, ["kind", "id", "name", "acpSessionId"]) &&
+					typeof tab.acpSessionId === "string"
+				);
 			case "document":
 				return (
 					hasOnlyKeys(tab, ["kind", "id", "name", "documentKind", "sourceId", "docPath"]) &&

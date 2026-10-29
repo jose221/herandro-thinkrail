@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { resolveBuildRuntimeSources } from "./buildSupport";
 import {
@@ -20,6 +21,9 @@ test("runtime source manifest covers the launcher artifact surface", () => {
 	);
 	const piPackageSkillRoots = sources.extensions.map((extension) =>
 		join(dirname(extension.entry), "skills"),
+	);
+	expect(existsSync(join(import.meta.dir, "..", "skills", "android-emulator", "SKILL.md"))).toBe(
+		true,
 	);
 	expect(sources.skillRoots).toEqual([
 		...[...piPackageSkillRoots, join(import.meta.dir, "..", "skills")].map((source) => ({

@@ -3,6 +3,7 @@ import { useT } from "@thinkrail/locales/react";
 import { TooltipProvider } from "@thinkrail/ui/tooltip";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { initAcpStoreProjection, openAcpChatInTab } from "./acp";
 import { initChatPreferencesPersistence } from "./chat/chatPreferences";
 import { initModelVisibilityPersistence } from "./chat/modelVisibility";
 import { ErrorBoundary, setErrorBoundaryReporter } from "./components/ErrorBoundary";
@@ -23,6 +24,7 @@ import {
 
 initializeThemes();
 applyThemePreference(readThemeHint());
+initAcpStoreProjection();
 initTransport();
 installClientErrorReporting();
 setErrorBoundaryReporter((error, reportId) =>
@@ -32,7 +34,7 @@ initChatPreferencesPersistence();
 initModelVisibilityPersistence();
 initProjectExpansionPersistence();
 initFilesTreePersistence();
-initNavigation();
+initNavigation(undefined, openAcpChatInTab);
 registerWebExtensions();
 
 function App() {

@@ -9,9 +9,14 @@ depends-on: [module-contracts]
 
 ## Responsibility
 
-The single Zustand store: connection status, projects/workspaces, one frontend-local workbench frame plus
-per-workspace views/attention, terminal catalogs, and one **per-session chat runtime** for every live
-`AgentSession` (so several chats stream concurrently).
+The main Zustand store: connection status, projects/workspaces, one frontend-local workbench frame plus
+per-workspace views/attention, terminal catalogs, one **per-session Pi chat runtime** for every live
+`AgentSession` (so several Pi chats stream concurrently), and ACP layout placement.
+
+The separate `acp` module store owns ACP session summaries, transcript rows, live status, permissions, and
+reconnect hydration. They never enter Pi's `sessions` map or `session.state` model. ACP projections are
+removed by ACP deletion, workspace removal, and unsupported-host welcome; generation fences reject stale
+reads and events.
 
 ## Chat Resources
 

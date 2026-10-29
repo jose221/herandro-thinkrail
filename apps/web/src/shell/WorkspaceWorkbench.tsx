@@ -1,8 +1,10 @@
 import {
 	RiGitBranchLine as GitBranch,
 	RiChatNewLine as MessageSquarePlus,
+	RiRobot2Line as Robot,
 	RiTerminalBoxLine as SquareTerminal,
 } from "@remixicon/react";
+import { ACP_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { t, useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
@@ -18,12 +20,14 @@ import {
 	useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { AcpChatPane, AcpNewChatDialog } from "../acp";
 import { prepareChatTitle } from "../chat/chatTitle";
 import { useAutoPlanSummary } from "../chat/useChatTodos";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { preloadedLazy } from "../components/preloadedLazy";
 import { QuietScrollArea } from "../components/QuietScrollArea";
 import { type LayoutAttention, layoutResourceIdentity } from "../lib";
+import { AndroidEmulatorPane } from "../panels/AndroidEmulatorPane";
 import { DiffPane } from "../panels/DiffPane";
 import { FilePane } from "../panels/FilePane";
 import { FilesPanel } from "../panels/FilesPanel";
@@ -313,6 +317,7 @@ function useTerminalReservation(workspaceId: string): void {
 export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 	const t = useT();
 	const status = useAppStore((state) => state.status);
+	const protocolVersion = useAppStore((state) => state.protocolVersion);
 	const connectionGeneration = useAppStore((state) => state.connectionGeneration);
 	const canRenameChat = useAppStore(selectCanRenameChat);
 	const document = useAppStore((state) => state.layoutDocumentsByWorkspace[workspaceId]);
@@ -346,6 +351,9 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 		void ChatView.preload();
 	}, []);
 	const [focusRequest, setFocusRequest] = useState<LayoutTabFocusRequest | null>(null);
+	const [newAcpGroupId, setNewAcpGroupId] = useState<string | null>(null);
+	const acpSupported =
+		status === "connected" && protocolVersion !== null && protocolVersion >= ACP_PROTOCOL_VERSION;
 	const requestRenameChat = useCallback(
 		(sessionId: string, titleInput: string, currentTitle: string) => {
 			const prepared = prepareChatTitle(titleInput);
@@ -584,6 +592,11 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 			if (tab.kind === "chat") {
 				return <ChatResourceBody workspaceId={workspaceId} tab={tab} onOpenFile={openToolFile} />;
 			}
+			if (tab.kind === "acp-chat") {
+				return (
+					<AcpChatPane workspaceId={workspaceId} sessionId={tab.acpSessionId} tabId={tab.id} />
+				);
+			}
 			if (tab.kind === "document") {
 				if (deletedSessions?.[tab.sourceId]) return <MissingResource kind="plan" />;
 				return (
@@ -669,6 +682,7 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 					{t("shell.workbench.planRailEmpty")}
 				</div>
 			),
+			emulator: <AndroidEmulatorPane key={workspaceId} workspaceId={workspaceId} />,
 		};
 		for (const tool of Object.keys(bodies) as LayoutToolId[]) {
 			bodies[tool] = (
@@ -807,9 +821,20 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 					onClick={() => useAppStore.getState().addTerminal(workspaceId, undefined, groupId)}
 					className="shrink-0 self-center"
 				/>
+				{acpSupported ? (
+					<IconButton
+						variant="ghost"
+						size="m"
+						icon={Robot}
+						label={t("acp.chat.new.open")}
+						data-testid="new-acp-chat"
+						onClick={() => setNewAcpGroupId(groupId)}
+						className="shrink-0 self-center"
+					/>
+				) : null}
 			</>
 		),
-		[canRenameChat, requestRenameChat, t, workspaceId],
+		[acpSupported, canRenameChat, requestRenameChat, t, workspaceId],
 	);
 
 	if (!rendered) {
@@ -822,6 +847,14 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 
 	return (
 		<div data-testid="workspace-workbench" data-layout-status="settled" className="contents">
+			<AcpNewChatDialog
+				open={newAcpGroupId !== null}
+				onOpenChange={(open) => {
+					if (!open) setNewAcpGroupId(null);
+				}}
+				workspaceId={workspaceId}
+				targetGroupId={newAcpGroupId}
+			/>
 			{planSessionIds.map((sessionId) => (
 				<PlanSummaryAutoDraft
 					key={`plan-summary-draft:${workspaceId}:${sessionId}`}

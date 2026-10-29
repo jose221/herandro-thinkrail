@@ -16,6 +16,8 @@ import {
 	hideBottom,
 	hideSide,
 	isLayoutUnavailable,
+	LAYOUT_TOOL_DEFAULT_SIDES,
+	LAYOUT_TOOLS,
 	type LayoutOperationResult,
 	layoutTabName,
 	moveTabToGroup,
@@ -944,6 +946,9 @@ describe("workspace layout model", () => {
 		const balanced = BUILTIN_LAYOUT_PRESETS.find((preset) => preset.id === "balanced");
 		const focus = BUILTIN_LAYOUT_PRESETS.find((preset) => preset.id === "focus");
 		const review = BUILTIN_LAYOUT_PRESETS.find((preset) => preset.id === "review");
+		expect(LAYOUT_TOOLS).toContain("emulator");
+		expect(LAYOUT_TOOL_DEFAULT_SIDES.emulator).toBe("right");
+		expect(balanced?.right.groups.some((group) => group.tools.includes("emulator"))).toBe(true);
 		expect(balanced?.bottom).toMatchObject({
 			visible: true,
 			height: 0.3,
@@ -954,6 +959,12 @@ describe("workspace layout model", () => {
 		expect(focus?.bottom.groups).toHaveLength(1);
 		expect(review?.bottom).toMatchObject({ visible: true, alignment: "center" });
 		expect(review?.bottom.groups).toHaveLength(1);
+	});
+
+	test("frames without the emulator restore it to the default right rail", () => {
+		const oldFrame = baseDocument();
+		expect(unplacedToolsForRegion(oldFrame, "right")).toContain("emulator");
+		expect(unplacedToolsForRegion(oldFrame, "left")).not.toContain("emulator");
 	});
 
 	test("successful generated mutation sequences preserve every layout invariant", () => {

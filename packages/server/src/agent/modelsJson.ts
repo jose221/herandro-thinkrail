@@ -15,10 +15,12 @@ import { dirname, join, resolve } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
 	isModelContextWindow,
+	isProviderModelDefinitions,
 	isSharedModelContextTarget,
 	MODEL_CONTEXT_WINDOW_LIMITS,
 	type ModelContextSetting,
 	type ModelContextTarget,
+	type ProviderModelDefinition,
 } from "@thinkrail/contracts";
 import {
 	applyEdits,
@@ -29,6 +31,7 @@ import {
 	parseTree,
 } from "jsonc-parser";
 import { usePiRuntime } from "./agentSessionManager";
+import type { PiRuntimeGeneration } from "./piRuntime";
 import { type AvailableModelsRuntime, settledAvailableModels } from "./piRuntime";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "openai-codex-responses"]);
@@ -37,11 +40,20 @@ const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "
 const EMPTY_CONFIG = '{\n  "providers": {}\n}\n';
 const SAVE_FAILURE =
 	"Couldn't save pi's models.json. Check the file and its permissions, then retry.";
+const MODEL_FIELDS = [
+	"id",
+	"name",
+	"reasoning",
+	"input",
+	"contextWindow",
+	"maxTokens",
+	"cost",
+] as const;
 
-let publishContextChange: (() => void) | null = null;
+let publishModelsJsonChange: (() => void) | null = null;
 
-export function setModelContextPublisher(publisher: (() => void) | null): void {
-	publishContextChange = publisher;
+export function setModelsJsonPublisher(publisher: (() => void) | null): void {
+	publishModelsJsonChange = publisher;
 }
 
 function modelsPath(): string {
@@ -68,6 +80,97 @@ function parseConfig(source: string | undefined): Node | undefined {
 
 function overridePath(model: Pick<ModelContextSetting, "provider" | "id">): string[] {
 	return ["providers", model.provider, "modelOverrides", model.id, "contextWindow"];
+}
+
+function providerModelsPath(providerId: string): string[] {
+	return ["providers", providerId, "models"];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function projectModelDefinition(value: unknown): ProviderModelDefinition | null {
+	if (!isRecord(value) || typeof value.id !== "string") return null;
+	const projected: Record<string, unknown> = { id: value.id };
+	for (const key of MODEL_FIELDS.slice(1)) {
+		if (Object.hasOwn(value, key)) projected[key] = value[key];
+	}
+	const definitions: unknown = [projected];
+	return isProviderModelDefinitions(definitions) ? (definitions[0] ?? null) : null;
+}
+
+function valueFromNode(node: Node): unknown {
+	if (node.type === "array") return (node.children ?? []).map(valueFromNode);
+	if (node.type === "object") {
+		const result: Record<string, unknown> = {};
+		for (const property of node.children ?? []) {
+			const [key, value] = property.children ?? [];
+			if (key?.type === "string" && value) result[String(key.value)] = valueFromNode(value);
+		}
+		return result;
+	}
+	return node.value;
+}
+
+function assertEditableProvider(
+	runtime: PiRuntimeGeneration["runtime"],
+	opaqueProviderIds: ReadonlySet<string>,
+	providerId: string,
+): void {
+	if (
+		typeof providerId !== "string" ||
+		providerId.length === 0 ||
+		providerId.length > 256 ||
+		providerId.includes("\0")
+	) {
+		throw new Error("Provider models are unavailable");
+	}
+	const auth = runtime.getProviderAuthStatus(providerId);
+	if (
+		opaqueProviderIds.has(providerId) ||
+		(auth.source !== "models_json_key" && auth.source !== "models_json_command")
+	)
+		throw new Error("Provider models are not editable from models.json");
+}
+
+function providerModelDefinitions(
+	config: Node | undefined,
+	providerId: string,
+): { definitions: ProviderModelDefinition[]; stored: unknown[] } {
+	const node = config && findNodeAtLocation(config, providerModelsPath(providerId));
+	if (!node) return { definitions: [], stored: [] };
+	const value = valueFromNode(node);
+	if (node.type !== "array" || !Array.isArray(value))
+		throw new Error("Provider model definitions are invalid");
+	const stored = value;
+	const definitions = stored.map(projectModelDefinition);
+	if (definitions.some((definition) => definition === null)) {
+		throw new Error("Provider model definitions are invalid");
+	}
+	const result = definitions as ProviderModelDefinition[];
+	if (!isProviderModelDefinitions(result))
+		throw new Error("Provider model definitions are invalid");
+	return { definitions: result, stored };
+}
+
+function mergeModelDefinitions(
+	stored: unknown[],
+	definitions: ProviderModelDefinition[],
+): Record<string, unknown>[] {
+	const previousById = new Map(
+		stored.flatMap((entry) =>
+			isRecord(entry) && typeof entry.id === "string" ? [[entry.id, entry] as const] : [],
+		),
+	);
+	return definitions.map((definition) => {
+		const merged = { ...(previousById.get(definition.id) ?? {}) };
+		for (const key of MODEL_FIELDS) {
+			if (Object.hasOwn(definition, key)) merged[key] = definition[key];
+			else delete merged[key];
+		}
+		return merged;
+	});
 }
 
 function listSettings(
@@ -162,9 +265,61 @@ export function setModelContextWindow(
 			),
 		);
 	}
-	const run = saving.catch(() => undefined).then(() => save(target, contextWindow));
+	return serializeSave(() => save(target, contextWindow));
+}
+
+export function listProviderModelDefinitions(
+	providerId: string,
+): Promise<ProviderModelDefinition[]> {
+	return usePiRuntime(async (runtime, generation) => {
+		await runtime.refresh({ allowNetwork: false });
+		assertEditableProvider(runtime, generation.opaqueProviderIds, providerId);
+		return providerModelDefinitions(parseConfig(readSource(modelsPath())), providerId).definitions;
+	});
+}
+
+export function saveProviderModelDefinitions(
+	providerId: string,
+	definitions: ProviderModelDefinition[],
+): Promise<ProviderModelDefinition[]> {
+	if (!isProviderModelDefinitions(definitions)) {
+		return Promise.reject(new Error("Provider model definitions are invalid"));
+	}
+	return serializeSave(() => saveProviderModelDefinitionsToFile(providerId, definitions));
+}
+
+function serializeSave<T>(operation: () => Promise<T>): Promise<T> {
+	const run = saving.catch(() => undefined).then(operation);
 	saving = run;
 	return run;
+}
+
+function saveProviderModelDefinitionsToFile(
+	providerId: string,
+	definitions: ProviderModelDefinition[],
+): Promise<ProviderModelDefinition[]> {
+	return usePiRuntime(async (runtime, generation) => {
+		await runtime.refresh({ allowNetwork: false });
+		assertEditableProvider(runtime, generation.opaqueProviderIds, providerId);
+		const path = modelsPath();
+		const source = readSource(path);
+		if (source === undefined) throw new Error("Provider models are not editable from models.json");
+		const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
+		const content = source.slice(bom.length);
+		const config = parseConfig(source);
+		const { stored } = providerModelDefinitions(config, providerId);
+		const merged = mergeModelDefinitions(stored, definitions);
+		const next = applyEdits(
+			content,
+			modify(content, providerModelsPath(providerId), merged, FORMATTING),
+		);
+		if (bom + next !== source) {
+			writeModelsFile(path, bom + next);
+			await runtime.refresh({ allowNetwork: false });
+			publishModelsJsonChange?.();
+		}
+		return definitions;
+	});
 }
 
 function save(
@@ -187,7 +342,7 @@ function save(
 		if (bom + next !== source) {
 			writeModelsFile(path, bom + next);
 			await runtime.refresh({ allowNetwork: false });
-			publishContextChange?.();
+			publishModelsJsonChange?.();
 		}
 		return listSettings(runtime, parseConfig(bom + next));
 	});

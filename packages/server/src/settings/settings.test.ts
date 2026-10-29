@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	type AppConfig,
 	type AppConfigUpdate,
+	DEFAULT_ACP_CLIENTS,
 	DEFAULT_CONFIG,
 	type LayoutPreset,
 } from "@thinkrail/contracts";
@@ -57,6 +58,37 @@ afterEach(() => {
 
 test("getConfig falls back to DEFAULT_CONFIG when no config.json exists", () => {
 	expect(getConfig()).toEqual(DEFAULT_CONFIG);
+});
+
+test("legacy config receives the built-in ACP catalog without migration", () => {
+	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ theme: "dark" }));
+	resetConfigCache();
+	expect(getConfig().acpClients).toEqual(DEFAULT_ACP_CLIENTS);
+});
+
+test("ACP client catalog validates, persists, and publishes as one setting", () => {
+	const clients = DEFAULT_ACP_CLIENTS.map((client) => ({ ...client, args: [...client.args] }));
+	const seen: Array<{ config: AppConfig; update: AppConfigUpdate }> = [];
+	setSettingsPublisher((config, update) => seen.push({ config, update }));
+
+	const next = updateConfig({ acpClients: clients });
+	expect(next.acpClients).toEqual(clients);
+	expect(seen).toEqual([{ config: next, update: { acpClients: clients } }]);
+	expect(JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")).acpClients).toEqual(
+		clients,
+	);
+
+	const before = readFileSync(join(dataDir, "config.json"), "utf8");
+	const invalid = [
+		{ id: "duplicate", name: "First", command: "agent-a", args: [], enabled: true },
+		{ id: "duplicate", name: "Second", command: "agent-b", args: [], enabled: true },
+	];
+	expect(() => updateConfig({ acpClients: invalid })).toThrow(
+		"valid list of ACP client definitions",
+	);
+	expect(readFileSync(join(dataDir, "config.json"), "utf8")).toBe(before);
+	expect(getConfig()).toEqual(next);
+	expect(seen).toHaveLength(1);
 });
 
 test.each([
@@ -778,14 +810,19 @@ test("custom preset updates validate the complete catalog and permit empty struc
 	);
 });
 
-test("a custom preset may place every layout tool, the TODO List included", () => {
+test("a custom preset may place every layout tool, including TODO List and Android Emulator", () => {
 	const withTools: LayoutPreset = {
 		...preset(),
 		right: {
 			visible: true,
 			width: 0.28,
 			groups: [
-				{ id: "custom-right", weight: 1, folded: false, tools: ["specs", "plan", "review"] },
+				{
+					id: "custom-right",
+					weight: 1,
+					folded: false,
+					tools: ["specs", "plan", "review", "emulator"],
+				},
 			],
 		},
 	};

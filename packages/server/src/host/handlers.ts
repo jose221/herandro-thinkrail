@@ -14,11 +14,16 @@ import type {
 	WsResult,
 } from "@thinkrail/contracts";
 import {
+	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
+	ACP_PROTOCOL_VERSION,
+	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	isControlMessage,
+	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
 } from "@thinkrail/contracts";
 import { CodedError } from "@thinkrail/shared/codedError";
+import type { AcpSessionManager } from "../acp";
 import {
 	abortSession,
 	acknowledgeCompletion,
@@ -44,6 +49,7 @@ import {
 	listAvailableModels,
 	listModelContextSettings,
 	listProjectAliasSkillNames,
+	listProviderModelDefinitions,
 	listSessionStates,
 	listSessions,
 	listSkillCatalog,
@@ -67,6 +73,7 @@ import {
 	replyMcpProbe,
 	resolveExtUi,
 	respondToTool,
+	saveProviderModelDefinitions,
 	sendReviewFixToSession,
 	setModelContextWindow,
 	setSessionModel,
@@ -82,6 +89,7 @@ import {
 	type SendMode,
 	track,
 } from "../analytics";
+import { getAndroidEmulatorManager } from "../android";
 import { suggestPrDescription } from "../assist";
 import {
 	cancelLogin,
@@ -284,6 +292,8 @@ export interface RequestContext {
 	/** The socket's advertised protocol; absent for in-process callers, who speak the current one. */
 	protocolVersion?: number;
 	runHostUpdate?: () => void;
+	resolveWorkspaceCwd?: (workspaceId: string) => string;
+	acp?: AcpSessionManager;
 }
 
 type WsHandler<M extends WsMethodName> = (
@@ -1124,6 +1134,68 @@ const handlers: WsHandlers = {
 	"mcp.readOutput": (params) => mcpReadOutput(params),
 	"mcp.readLog": (params) => mcpReadLog(params),
 	"mcp.testConnection": (params, ctx) => mcpTestConnection(params, ctx.clientKey),
+	"android.avds.list": () => getAndroidEmulatorManager().listAvds(),
+	"android.emulator.status": () => getAndroidEmulatorManager().status(),
+	"android.emulator.start": (params) => getAndroidEmulatorManager().start(params.avdName),
+	"android.emulator.stop": () => getAndroidEmulatorManager().stop(),
+	"android.emulator.details": () => getAndroidEmulatorManager().details(),
+	"android.emulator.screen": () => getAndroidEmulatorManager().screenshot(),
+	"android.emulator.tap": async (params) => {
+		await getAndroidEmulatorManager().tap(params.x, params.y);
+		return { ok: true };
+	},
+	"android.emulator.type": async (params) => {
+		await getAndroidEmulatorManager().typeText(params.text);
+		return { ok: true };
+	},
+	"android.emulator.swipe": async (params) => {
+		await getAndroidEmulatorManager().swipe(
+			params.x1,
+			params.y1,
+			params.x2,
+			params.y2,
+			params.durationMs,
+		);
+		return { ok: true };
+	},
+	"android.emulator.installApk": async (params, ctx) => {
+		const workspaceRoot = ctx.resolveWorkspaceCwd?.(params.workspaceId);
+		if (!workspaceRoot) throw new Error("Android APK installation requires an active workspace.");
+		await getAndroidEmulatorManager().installApk(workspaceRoot, params.path);
+		return { ok: true };
+	},
+	"android.emulator.logs": (params) => getAndroidEmulatorManager().logs(params.lines),
+	"acp.client.check": (params, ctx) => acpManager(ctx).checkClient(params.clientId),
+	"acp.client.models": (params, ctx) =>
+		acpManager(ctx).listClientModels(params.workspaceId, params.clientId),
+	"acp.session.list": (params, ctx) => acpManager(ctx).list(params.workspaceId),
+	"acp.session.get": (params, ctx) => acpManager(ctx).get(params.workspaceId, params.sessionId),
+	"acp.session.create": (params, ctx) =>
+		acpManager(ctx).create(params.workspaceId, params.clientId),
+	"acp.session.resume": (params, ctx) =>
+		acpManager(ctx).resume(params.workspaceId, params.sessionId),
+	"acp.session.prompt": (params, ctx) =>
+		acpManager(ctx).prompt(params.workspaceId, params.sessionId, params.text, params.images),
+	"acp.session.cancel": (params, ctx) =>
+		acpManager(ctx).cancel(params.workspaceId, params.sessionId),
+	"acp.session.delete": (params, ctx) =>
+		acpManager(ctx).delete(params.workspaceId, params.sessionId),
+	"acp.permission.reply": (params, ctx) =>
+		acpManager(ctx).replyPermission(
+			params.workspaceId,
+			params.sessionId,
+			params.requestId,
+			params.optionId,
+		),
+	"acp.session.setMode": (params, ctx) =>
+		acpManager(ctx).setMode(params.workspaceId, params.sessionId, params.modeId),
+	"acp.session.setConfigOption": (params, ctx) =>
+		acpManager(ctx).setConfigOption(
+			params.workspaceId,
+			params.sessionId,
+			params.configId,
+			params.value,
+		),
 	"session.resources": (params) => {
 		const p = resourceParams(params, ["workspaceId", "sessionId"]);
 		return getSessionResources(p.workspaceId, p.sessionId, resourceCwd(p.workspaceId));
@@ -1204,6 +1276,9 @@ const handlers: WsHandlers = {
 		observeSetupRead(getProviderStatus, (report) => ({
 			provider_available: providerAvailability(report),
 		})),
+	"provider.models.list": (params) => listProviderModelDefinitions(params.providerId),
+	"provider.models.save": (params) =>
+		saveProviderModelDefinitions(params.providerId, params.models),
 	"provider.detect": async () => ({ accounts: await detectAccounts() }),
 	"provider.loginStart": (p) => {
 		const type = p.type ?? "oauth";
@@ -1250,8 +1325,15 @@ const handlers: WsHandlers = {
 		ctx.runHostUpdate();
 		return { ok: true } as const;
 	},
-	"settings.update": (params) => {
+	"settings.update": (params, ctx) => {
 		const config = params.config;
+		if (
+			ctx.protocolVersion !== undefined &&
+			ctx.protocolVersion < ACP_PROTOCOL_VERSION &&
+			Object.hasOwn(config, "acpClients")
+		) {
+			throw new Error("ACP settings require a newer host protocol.");
+		}
 		return updateConfig(config);
 	},
 	"environment.get": () => hostEnvironmentStatus(),
@@ -1377,6 +1459,11 @@ function isWsMethod(method: string): method is WsMethodName {
 	return Object.hasOwn(handlers, method);
 }
 
+function acpManager(ctx: RequestContext): AcpSessionManager {
+	if (!ctx.acp) throw new Error("ACP chat service is unavailable.");
+	return ctx.acp;
+}
+
 function dispatch<M extends WsMethodName>(method: M, params: WsParams<M>, ctx: RequestContext) {
 	return handlers[method](params, ctx);
 }
@@ -1412,5 +1499,33 @@ export async function handleRequest(
 	ctx: RequestContext,
 ): Promise<unknown> {
 	if (!isWsMethod(method)) throw new Error(`Unknown method: ${method}`);
+	if (
+		method.startsWith("android.") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < ANDROID_EMULATOR_PROTOCOL_VERSION
+	) {
+		throw new Error("Android emulator controls require a newer host protocol.");
+	}
+	if (
+		method.startsWith("acp.") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < ACP_PROTOCOL_VERSION
+	) {
+		throw new Error("ACP chats require a newer host protocol.");
+	}
+	if (
+		method === "acp.client.models" &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < ACP_MODEL_CATALOG_PROTOCOL_VERSION
+	) {
+		throw new Error("ACP model discovery requires a newer host protocol.");
+	}
+	if (
+		method.startsWith("provider.models.") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < PROVIDER_MODELS_PROTOCOL_VERSION
+	) {
+		throw new Error("Provider model editing requires a newer host protocol.");
+	}
 	return dispatch(method, params as WsParams<typeof method>, ctx);
 }

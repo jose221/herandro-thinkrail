@@ -60,7 +60,17 @@ export function buildProviderReport(sources: ProviderStatusSources): ProviderSta
 			...(source === undefined ? {} : { source }),
 			...(label === undefined ? {} : { label }),
 		});
-		return { id, name, configured: true, ...auth, ...login };
+		const canEditModelsJson =
+			!sources.centralProviders.has(id) &&
+			(source === "models_json_key" || source === "models_json_command");
+		return {
+			id,
+			name,
+			configured: true,
+			...auth,
+			...(canEditModelsJson ? { canEditModelsJson: true } : {}),
+			...login,
+		};
 	});
 
 	providers.sort((a, b) => {

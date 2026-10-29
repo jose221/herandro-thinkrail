@@ -21,7 +21,7 @@ action, never an automatic backend-owned active location.
 ## Boundary
 
 - **Owns:** `NavigationLocation`; the versioned fragment codec; the `NavigationDriver` seam (`read`/`replace`/`push`/incoming-location subscription); the browser fragment driver; startup/direct-link restoration and canonical fallback; the push-vs-replace history decision; loop/idempotency guards between serialized intent and validated store state.
-- **Public surface (barrel):** route types + codec and `initNavigation(driver?)`; the browser driver is the default. Native adapters may consume/produce the same backend-relative route without changing store or transport.
+- **Public surface (barrel):** route types + codec and `initNavigation(driver?, openAcpChat?)`; the browser driver is the default, and the composition root injects the ACP route opener without a navigation-to-ACP module dependency. Native adapters may consume/produce the same backend-relative route without changing store or transport.
 - **External deps:** `contracts` (project/workspace/session DTO types, type-only); browser History/Location APIs.
 - **Forbidden:** server/shared/pi; owning project/workspace/session snapshots; persisting credentials or raw backend secrets; importing panels/chat/shell; writing a backend-owned “active location.”
 
@@ -34,7 +34,8 @@ The versioned browser fragment represents exactly one of:
 - `#/v1` — main/Welcome;
 - `#/v1/projects/<projectId>` — Project Home;
 - `#/v1/projects/<projectId>/workspaces/<workspaceId>` — workspace;
-- `#/v1/projects/<projectId>/workspaces/<workspaceId>/chats/<sessionId>` — exact chat.
+- `#/v1/projects/<projectId>/workspaces/<workspaceId>/chats/<sessionId>` — exact Pi chat;
+- `#/v1/projects/<projectId>/workspaces/<workspaceId>/acp-chats/<acpSessionId>` — exact ACP chat.
 
 Each id is one encoded path segment. Empty ids, extra segments, malformed encoding, and unknown versions are invalid and canonicalize to main. The route is backend-relative: same-origin web gets backend identity from its origin; independently hosted/native clients pair it with a selected backend profile. No credential belongs in it.
 
@@ -69,7 +70,7 @@ An incoming route is intent, never domain truth:
 2. validate the project against that open-project snapshot;
 3. fetch/install the project's authoritative `workspace.list({ includeDiffStats: false })` before validating/activating a workspace — membership/order stay complete while the synchronous per-workspace diff-stat fan-out stays off automatic startup;
 4. re-check the route generation and open project after the read, then atomically activate a valid workspace, advance its center-navigation tick (so older deferred reads are superseded), and either install an exact-chat target stamped with the resulting tick or clear any older exact target for a workspace-level route; a workspace route carries no tab intent, so existing browser-local attention remains and ordinary store sync may canonicalize the fragment to an already-selected chat;
-5. let `shell/chatReconciliation` validate/hydrate that exact session; an exact-target install advances a dedicated generation so this also runs when the workspace was already active, while target consumption does not duplicate the pass. Ordinary domain hydration never auto-opens another frontend's chat, and while the exact target is unresolved no background work may activate a different chat or advance its navigation tick;
+5. let `shell/chatReconciliation` validate/hydrate an exact Pi session; an ACP route instead uses the injected opener and only `acp.session.get`, never Pi session methods. An exact Pi target install advances a dedicated generation so this also runs when the workspace was already active, while target consumption does not duplicate the pass. Ordinary domain hydration never auto-opens another frontend's chat, and while an exact target is unresolved no background work may activate a different chat or advance its navigation tick;
 6. apply every resolved level, including main itself, then canonicalize ids only after **successful authoritative absence**: completed session list lacks chat → workspace, completed workspace list lacks workspace → Project Home, completed welcome lacks project → main. Falling back from a missing chat does not erase an existing local placement or this window's attention; after the exact target is consumed, the derived location truthfully reflects whatever remains selected. A timeout, disconnect, unreadable response, or ordinary server error says nothing about existence: navigation leaves route/target unchanged and the data loader performs its standard retry/reconnect or error UI.
 
 Every incoming route advances one monotonic restore generation; every asynchronous continuation checks it. Any project/workspace scope move **or center-navigation tick** cancels a still-pending authoritative read, so a same-workspace file/chat click beats its late response too. The exact-chat target may focus only while its workspace and stamped navigation tick are still current. Store→driver writes pause while an incoming exact route is unresolved, so temporary workspace/no-tab/error state cannot erase the chat fragment. Duplicate initialization/welcome delivery and React Strict Mode are idempotent; reconnect retries unresolved intent but does not replay a completed startup route.

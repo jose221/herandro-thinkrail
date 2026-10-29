@@ -6,12 +6,13 @@ import {
 	serializeLocation,
 } from "./location";
 
-test("the codec round-trips all four location kinds", () => {
+test("the codec round-trips all location kinds", () => {
 	const locations: NavigationLocation[] = [
 		{ kind: "main" },
 		{ kind: "project", projectId: "p1" },
 		{ kind: "workspace", projectId: "p1", workspaceId: "w1" },
 		{ kind: "chat", projectId: "p1", workspaceId: "w1", sessionId: "s1" },
+		{ kind: "acp-chat", projectId: "p1", workspaceId: "w1", acpSessionId: "agent/one" },
 	];
 	for (const location of locations) {
 		expect(parseFragment(serializeLocation(location))).toEqual(location);
@@ -20,10 +21,10 @@ test("the codec round-trips all four location kinds", () => {
 
 test("ids that need encoding survive the round trip as single path segments", () => {
 	const location: NavigationLocation = {
-		kind: "chat",
+		kind: "acp-chat",
 		projectId: "p/with slash",
 		workspaceId: "w#hash?q",
-		sessionId: "s%25already",
+		acpSessionId: "s%25already",
 	};
 	const fragment = serializeLocation(location);
 	expect(fragment.split("/")).toHaveLength(8);

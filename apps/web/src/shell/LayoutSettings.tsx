@@ -12,7 +12,11 @@ import {
 	RiDeleteBin6Line as Trash2,
 	RiCloseLine as X,
 } from "@remixicon/react";
-import { LAYOUT_PLAN_PRESET_PROTOCOL_VERSION, type LayoutPreset } from "@thinkrail/contracts";
+import {
+	ANDROID_EMULATOR_PROTOCOL_VERSION,
+	LAYOUT_PLAN_PRESET_PROTOCOL_VERSION,
+	type LayoutPreset,
+} from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { t as translate, useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
@@ -62,6 +66,16 @@ async function updateCustomPresets(customLayoutPresets: LayoutPreset[]): Promise
 	) {
 		toast.error(
 			translate("workbench.layoutSettings.planNeedsNewerHost"),
+			translate("workbench.layoutSettings.saveFailed"),
+		);
+		return false;
+	}
+	if (
+		protocolVersion < ANDROID_EMULATOR_PROTOCOL_VERSION &&
+		customLayoutPresets.some((preset) => presetPlacesTool(preset, "emulator"))
+	) {
+		toast.error(
+			translate("androidEmulator.hostTooOld"),
 			translate("workbench.layoutSettings.saveFailed"),
 		);
 		return false;

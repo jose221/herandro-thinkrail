@@ -36,6 +36,7 @@ type LayoutResourceIdentityInput =
 	| { kind: "diff"; path: string; before: string }
 	| { kind: "changes"; scope: LayoutDiffScopeInput }
 	| { kind: "chat"; sessionId: string }
+	| { kind: "acp-chat"; acpSessionId: string }
 	| { kind: "document"; documentKind: string; sourceId: string }
 	| { kind: "terminal"; tabKey: string }
 	| { kind: "tool"; tool: string };
@@ -80,6 +81,8 @@ export function layoutResourceIdentity<T extends LayoutResourceIdentityInput>(ta
 			);
 		case "chat":
 			return tupleKey("layout-resource", "chat", tab.sessionId);
+		case "acp-chat":
+			return tupleKey("layout-resource", "acp-chat", tab.acpSessionId);
 		case "document":
 			return tupleKey("layout-resource", "document", tab.documentKind, tab.sourceId);
 		case "terminal":

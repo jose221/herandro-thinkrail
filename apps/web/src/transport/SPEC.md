@@ -33,7 +33,8 @@ batches high-frequency Pi events without allowing later wire messages to overtak
   `resume` repairs them all at once by restating the truth rather than confirming the confirmations —, channel
   `subscribe` with last-value replay for snapshots; append-only terminal data and the one-shot terminal
   exit/detach + session-creation/deletion + `provider.changed` invalidation + addressed `feedback.interview`
-  channels, plus scoped `session.resourcesChanged` invalidations and per-session `mcp.status` snapshots, are never cached or replayed to late
+  channels, plus scoped `session.resourcesChanged` invalidations, per-session `mcp.status` snapshots,
+  and `acp.event` updates, are never cached or replayed to late
   subscribers. Resource metadata hydration belongs to the mounted chat integration, not replayed
   invalidation payloads. Reconnect/backoff;
   `inferUrl` defaults to
@@ -72,6 +73,10 @@ batches high-frequency Pi events without allowing later wire messages to overtak
   `workspace.fsChanged` via `noteFsChanged(payload)`, **`mcp.status`** via the generation-guarded
   `applyMcpStatus(snapshot)`, and **`settings.changed`** via `applyConfig(config)` — the post-startup server-synced app config broadcast;
   welcome config lands in the atomic install above.
+
+  ACP session events are never replayed or cached. `wireTransport` generation-gates `acp.event` and
+  forwards it, complete welcomes, and workspace removals through `acpEvents.ts`'s typed
+  `subscribeAcpWireEvents` seam; the ACP module owns applying those notices to its isolated projection.
 
   **Session state hydrates on every supported welcome.** `session.stateList` is tokenized by connection
   generation and buffers `session.state` pushes until the complete snapshot returns, folds those full-record
@@ -144,7 +149,8 @@ injected `_posthogChunkIds` registry assigns to URLs in its own stack, so upload
 The browser never scrubs or holds a vendor client: the host is the only sanitizer.
 `main.tsx` installs the listeners and injects the forwarder into `components`' error-boundary seam.
 
-- **Public surface (barrel):** `initTransport`, `getTransport`, `prewarmWorkspaceSkillLoad`, the three
+- **Public surface (barrel):** `initTransport`, `getTransport`, `subscribeAcpWireEvents`, `AcpWireNotice`,
+  `prewarmWorkspaceSkillLoad`, the three
   skill-load-safe session request wrappers, `errorText`, `RequestError`, `wsErrorCode`, `requestMcpList`,
   `watchMcpWorkspace`, `ConnectionStatus`,
   `TransportOptions`, `runHostUpdate`, `supportsHostUpdateRun`, `supportsPlanReview`,
@@ -184,7 +190,8 @@ The browser never scrubs or holds a vendor client: the host is the only sanitize
   `client.reportError`, `provider.changed`, the empty
   addressed `feedback.interview` invitation, `HostUpdateNotice` for `server.welcome` +
   `host.updateAvailable`,
-  `WorkspaceFsChangedPayload` for `workspace.fsChanged`, and `AppConfig` for `server.welcome`'s config +
+  `WorkspaceFsChangedPayload` for `workspace.fsChanged`, `AcpEventPayload` + `ACP_PROTOCOL_VERSION`
+  for `acp.event`, and `AppConfig` for `server.welcome`'s config +
   `settings.changed`); `store`
   (welcome + event routing — a runtime edge owned by the parent graph); `lib` (plain-HTTP-safe random page
   identity); `@thinkrail/locales` (user-visible request-failure messages); the browser `WebSocket`.

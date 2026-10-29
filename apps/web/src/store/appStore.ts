@@ -1,4 +1,5 @@
 import type {
+	AcpClientConfig,
 	AppConfig,
 	ComposerGrowthLimit,
 	ExtUiRequest,
@@ -44,6 +45,7 @@ import {
 	canMarkCompletionUnread,
 	customMessageText,
 	DEFAULT_CONFIG,
+	isAcpClientCatalog,
 	isBackgroundCommandCompletionMessage,
 	isControlMessage,
 	isLineWidth,
@@ -160,6 +162,13 @@ export interface ChatTab {
 	name: string;
 	sessionId: string;
 }
+export interface AcpChatTab {
+	kind: "acp-chat";
+	id: string;
+	workspaceId: string;
+	name: string;
+	acpSessionId: string;
+}
 export interface DocTab {
 	kind: "doc";
 	id: string;
@@ -243,10 +252,14 @@ export interface PlanTab {
 	name: string;
 	sessionId: string;
 }
-export type EditorTab = FileTab | ChatTab | DocTab | DiffTab | ChangesTab | PlanTab;
+export type EditorTab = FileTab | ChatTab | AcpChatTab | DocTab | DiffTab | ChangesTab | PlanTab;
 
 export function chatTabId(workspaceId: string, sessionId: string): string {
 	return tupleKey("chat", workspaceId, sessionId);
+}
+
+export function acpChatTabId(workspaceId: string, acpSessionId: string): string {
+	return tupleKey("acp-chat", workspaceId, acpSessionId);
 }
 
 export function createChangesTab(
@@ -409,6 +422,7 @@ export const SettingsSection = {
 	Feedback: "feedback",
 	Extensions: "extensions",
 	Environment: "environment",
+	Acp: "acp",
 } as const;
 export type SettingsSection = (typeof SettingsSection)[keyof typeof SettingsSection];
 
@@ -1072,6 +1086,7 @@ interface AppState {
 	reviewAutoFix: boolean;
 	agentReviewEnabled: boolean;
 	disabledExtensions: string[];
+	acpClients: AcpClientConfig[];
 	locale: string;
 	localLocales: LocalLocalesSnapshot | null;
 	installLocalLocales: (snapshot: LocalLocalesSnapshot | null) => void;
@@ -1458,6 +1473,9 @@ function configPatch(config: AppConfig) {
 		disabledExtensions: Array.isArray(config.disabledExtensions)
 			? config.disabledExtensions
 			: DEFAULT_CONFIG.disabledExtensions,
+		acpClients: isAcpClientCatalog(config.acpClients)
+			? config.acpClients.map((client) => ({ ...client, args: [...client.args] }))
+			: DEFAULT_CONFIG.acpClients.map((client) => ({ ...client, args: [...client.args] })),
 		locale: isLocalePreference(config.locale) ? config.locale : DEFAULT_CONFIG.locale,
 		onboardingDismissed: config.onboardingDismissed === true,
 	};
@@ -2340,6 +2358,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 	reviewAutoFix: DEFAULT_CONFIG.reviewAutoFix,
 	agentReviewEnabled: DEFAULT_CONFIG.agentReviewEnabled,
 	disabledExtensions: DEFAULT_CONFIG.disabledExtensions,
+	acpClients: DEFAULT_CONFIG.acpClients.map((client) => ({ ...client, args: [...client.args] })),
 	locale: DEFAULT_CONFIG.locale,
 	localLocales: null,
 	installLocalLocales: (snapshot) => set({ localLocales: snapshot }),

@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@thinkrail/ui/
 import { cn } from "@thinkrail/ui/utils";
 import type { ReactNode } from "react";
 import { SettingsSection, useAppStore } from "@/store";
+import { AcpSettings } from "./AcpSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { ChatSettings } from "./ChatSettings";
 import { EnvironmentSettings } from "./EnvironmentSettings";
@@ -115,6 +116,8 @@ export function SettingsDialog({
 							<ProvidersSettings />
 						) : selectedSection === SettingsSection.Mcp ? (
 							<McpSettings />
+						) : selectedSection === SettingsSection.Acp ? (
+							<AcpSettings />
 						) : selectedSection === SettingsSection.Templates ? (
 							<TemplatesSettings />
 						) : selectedSection === SettingsSection.Environment ? (

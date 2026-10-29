@@ -16,6 +16,7 @@ import type {
 } from "@thinkrail/contracts";
 import {
 	BRANCH_STATUS_PROTOCOL_VERSION,
+	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
 	WS_METHODS,
 } from "@thinkrail/contracts";
@@ -374,6 +375,16 @@ test("request diagnostics expose only registered method names", async () => {
 	expect(requestMethodDiagnostic("secret prompt value")).toBe("unknown method");
 	expect(requestMethodDiagnostic("toString")).toBe("unknown method");
 	await expect(handleRequest("toString", undefined, CTX)).rejects.toThrow("Unknown method");
+});
+
+test("provider model editing is unavailable to pre-v97 clients", async () => {
+	await expect(
+		handleRequest(
+			"provider.models.list",
+			{ providerId: "custom" },
+			{ ...CTX, protocolVersion: PROVIDER_MODELS_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("Provider model editing requires a newer host protocol.");
 });
 
 test("host.update invokes only the context-injected parameterless operation", async () => {

@@ -45,15 +45,17 @@ to move fast without losing control of what the agent did.
   sees and steers the agent's work instead of reconstructing it from a scrollback.
 - **Specs as ground truth.** The project's intent lives in a spec graph beside the code that the agent
   reads, searches, and maintains, so intent survives the session.
-- **All of pi, nothing hidden.** Models, skills, extensions, and session state stay pi's; ThinkRail adds
-  a surface, not a second agent.
+- **Pi by default, ACP by choice.** Pi remains the in-process default and owns Pi chats. A user may
+  explicitly start a separate ACP chat with a configured external agent; ThinkRail preserves that
+  agent's protocol and session boundary rather than disguising it as a Pi session.
 
 ## Principles
 
 Durable decisions every feature follows; [[architecture]] carries the structure that enforces them.
 
-- **pi is the only engine**, run in-process — no second runtime (no `claude-agent-sdk`). `pi` owns the
-  model registry, system prompt, skills/extensions, compaction, cost, and session state.
+- **Pi is the default engine**, run in-process. Explicit ACP chats are the sole external-agent exception:
+  each runs as a separately configured ACP process with its own sessions and capabilities. Pi remains
+  authoritative only for Pi chats; ACP state is never projected into Pi's model registry or transcripts.
 - **Influence by feeding, never by assembling.** Features shape the agent only through what they feed
   `pi` — prompt context, files, pi's own skills/extensions — and the flags a session starts with.
 - **Expose, don't recompute.** The host shows what `pi` reports rather than deriving its own copy.
@@ -81,6 +83,10 @@ What ThinkRail does, at product level; the linked spec owns the detail.
 - **Chats** — concurrent `pi` sessions per workspace, each with its own model, pi-reported token/cost,
   steering and follow-ups mid-run, skill and prompt-template autocomplete, and history search
   ([[submodule-web-chat]], [[submodule-server-agent]]).
+- **ACP chats** — separate workspace chats with configured ACP agents, initially Factory Droid and
+  Google Antigravity through its ACP adapter; custom agents use the same validated command/argument
+  configuration. ACP process, transcript, permissions, and lifecycle stay separate from Pi
+  ([[submodule-web-acp]], [[submodule-server-acp]]).
 - **Existing skills reused** — portable Agent Skills kept for other coding agents are read in place;
   `pi` stays the parser and runtime ([[submodule-server-agent]]).
 - **Plans with per-step review** — a shared TODO plan the agent works and the user edits; a completed step
@@ -134,6 +140,7 @@ What ThinkRail does, at product level; the linked spec owns the detail.
 Only these are excluded by decision. Anything neither listed above nor excluded here is open, not
 forbidden.
 
-- **A second agent runtime**, or any host-side agent loop or prompt assembly (see Principles).
+- **A general second agent runtime or host-side agent loop.** The only external-agent path is an
+  explicitly configured ACP chat; it does not replace Pi or let ThinkRail assemble a second agent loop.
 - **ThinkRail accounts or a login UI.** Who may reach a host is decided by the network — Tailscale ACLs
   and device identity ([[architecture]]).

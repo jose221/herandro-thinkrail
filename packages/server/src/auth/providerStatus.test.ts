@@ -122,6 +122,7 @@ describe("buildProviderReport", () => {
 				configured: true,
 				kind: "api-key",
 				detail: "models.json",
+				canEditModelsJson: true,
 				canApiKey: true,
 			},
 			{
@@ -133,6 +134,18 @@ describe("buildProviderReport", () => {
 				canApiKey: true,
 			},
 		]);
+	});
+
+	test("models.json editing is not offered for Central providers", () => {
+		const report = buildProviderReport(
+			sources({
+				modelProviderIds: new Set(["central-provider"]),
+				availableProviders: new Set(["central-provider"]),
+				centralProviders: new Set(["central-provider"]),
+				providerAuth: () => ({ source: "models_json_key" }),
+			}),
+		);
+		expect(report.providers[0]?.canEditModelsJson).toBeUndefined();
 	});
 
 	test("a model-less stored credential remains visible without inventing login support", () => {

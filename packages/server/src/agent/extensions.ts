@@ -27,6 +27,7 @@ import {
 	serverExtensions,
 } from "../extensions";
 import { type BundledTrashHelpers, setBundledTrashHelpers } from "../trash";
+import { androidEmulatorToolsExtension } from "./androidTools";
 import { headlessSearchPolicy } from "./headlessSearch";
 import { oversizedImageGuard } from "./imageGuard";
 import { requestReviewExtension } from "./requestReviewTool";
@@ -258,6 +259,7 @@ export async function buildResourceLoader(
 		headlessSearchPolicy,
 		reviewToolExtension,
 		requestReviewExtension,
+		androidEmulatorToolsExtension,
 		setTitleExtension,
 		oversizedImageGuard,
 		skillCarryover,

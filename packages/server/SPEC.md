@@ -92,6 +92,8 @@ internals**. The edges between them are owned here (see the dependency graph), n
 | `watch` | per-worktree fs watcher → debounced `workspace.fsChanged` invalidation push | [watch/SPEC.md](src/watch/SPEC.md) |
 | `terminal` | workspace-scoped `bun-pty` terminals | [terminal/SPEC.md](src/terminal/SPEC.md) |
 | `agent` | in-process pi sessions + current/retained runtime generations + one-shot completions | [agent/SPEC.md](src/agent/SPEC.md) |
+| `android` | one optional host-local Android emulator, bounded controls and five-minute idle stop | [android/SPEC.md](src/android/SPEC.md) |
+| `acp` | explicitly configured ACP child processes, workspace chats, and durable ACP transcripts | [acp/SPEC.md](src/acp/SPEC.md) |
 | `extensions` | the server registry of ThinkRail extensions (`@thinkrail/ext-*/server`): ordered descriptors + public specifiers, inline flattening, owner-scoped skill resolution | [extensions/SPEC.md](src/extensions/SPEC.md) |
 | `auth` | provider status/login plus native JetBrains Central lifecycle and quota orchestration | [auth/SPEC.md](src/auth/SPEC.md) |
 | `assist` | ad-hoc one-shot tasks (plan summaries, PR descriptions) on a cheap model, best-effort | [assist/SPEC.md](src/assist/SPEC.md) |
@@ -110,7 +112,7 @@ the host from env via `bootHost` for dev/e2e.
 
 `host` is the **only composition root** — it wires each feature's handlers into the WS registry.
 
-- `host` → `projects`, `workspaces`, `git`, `github`, `branch-review`, `pr`, `fs`, `spec`, `todos`, `reviews`, `changes`, `turns`, `watch`, `terminal`, `dialog`, `editors`, `agent`, `auth`, `assist`, `settings`, `environment`, `locales`, `themes`, `history`, `templates`, `analytics`, `feedback`, `log`, `persistence` (`dataDir`, for the crash report)
+- `host` → `projects`, `workspaces`, `git`, `github`, `branch-review`, `pr`, `fs`, `spec`, `todos`, `reviews`, `changes`, `turns`, `watch`, `terminal`, `android`, `dialog`, `editors`, `agent`, `acp`, `auth`, `assist`, `settings`, `environment`, `locales`, `themes`, `history`, `templates`, `analytics`, `feedback`, `log`, `persistence` (`dataDir`, for the crash report)
 - `workspaces` → `projects`, `git`, `persistence`
 - `branch-review` → `git`, `subprocess`
 - `pr` → `workspaces`, `git`, `todos`, `branch-review` (provider detection + gh-output parsing + the shared CLI runner), `github` (`ghSetupProblem` — the named compare-fallback reason)
@@ -135,13 +137,15 @@ the host from env via `bootHost` for dev/e2e.
   `host` installs (`agent.setReviewCommentHandler` → `reviews.resolveCommentFromAgent`)
 - `environment` → `persistence` (`environment.json`), `log` (+ `@thinkrail/shared/shellEnv` for the launch keys and pi's `getAgentDir`, external); never `settings`
 - `assist` → `agent` (the one-shot completion primitive)
+- `acp` → `persistence`, `log`, and the official ACP SDK; workspace cwd and validated user ACP command are injected by `host`, so it has no sibling registry dependency
 - `auth` → `agent` (the current runtime/auth facade plus candidate prepare/activate; one-way, `agent` never imports `auth`)
-- `agent` → `log`, `persistence` (`dataDir` for delegation plus session lifecycle/receipt load-save operations),
+- `agent` → `android` (explicit Pi tools for the host-local emulator), `log`, `persistence` (`dataDir` for delegation plus session lifecycle/receipt load-save operations),
   `trash` (a chat delete's recoverable transcript move), `extensions` (the registry's flattened parent and
   child inline extensions plus, in unbundled dev, its skill roots) — otherwise the pi runtime alone; auth
   passes desired opaque Central paths through its public generation seam
 - `extensions` → `@thinkrail/ext-*/server` + `@thinkrail/extension-api/server` (external); `buildSupport.ts`
   (build-only) also reads it to stage the extensions' skill roots
+- `android` → `subprocess`, `contracts`
 - `persistence`, `dialog`, `history`, `templates`, `subprocess`, `trash` → (leaves)
 
 Rules: features never import `host`, and never each other except the edges above. The graph is acyclic.

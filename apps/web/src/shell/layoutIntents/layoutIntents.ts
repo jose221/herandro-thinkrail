@@ -168,6 +168,13 @@ export function toLayoutTab(tab: EditorTab): LayoutCenterTab | null {
 				name: tab.name,
 				sessionId: tab.sessionId,
 			};
+		case "acp-chat":
+			return {
+				kind: "acp-chat",
+				id: tab.id,
+				name: tab.name,
+				acpSessionId: tab.acpSessionId,
+			};
 		case "doc": {
 			if (!tab.sourceId) return null;
 			return {

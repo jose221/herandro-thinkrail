@@ -14,6 +14,8 @@ import {
 	RiLayout2Fill,
 	RiLayout2Line,
 	RiListCheck3,
+	RiSmartphoneFill,
+	RiSmartphoneLine,
 	RiTaskFill,
 	RiTaskLine,
 	RiTerminalBoxFill,
@@ -36,6 +38,7 @@ export function tabIcon(tab: LayoutTab, active = false, cls = "size-14 shrink-0"
 		case "changes":
 			return <CustomIcon name={active ? "file-diff-fill" : "file-diff-line"} className={cls} />;
 		case "chat":
+		case "acp-chat":
 			return active ? <RiChat2Fill className={cls} /> : <RiChat2Line className={cls} />;
 		case "document":
 			return <RiListCheck3 className={cls} />;
@@ -53,6 +56,12 @@ export function tabIcon(tab: LayoutTab, active = false, cls = "size-14 shrink-0"
 					return active ? <RiDiscussFill className={cls} /> : <RiDiscussLine className={cls} />;
 				case "plan":
 					return active ? <RiTaskFill className={cls} /> : <RiTaskLine className={cls} />;
+				case "emulator":
+					return active ? (
+						<RiSmartphoneFill className={cls} />
+					) : (
+						<RiSmartphoneLine className={cls} />
+					);
 				default:
 					return active ? <RiLayout2Fill className={cls} /> : <RiLayout2Line className={cls} />;
 			}
