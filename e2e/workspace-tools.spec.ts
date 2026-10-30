@@ -44,7 +44,17 @@ test("workspace tools share host state: requests, memory, git and an agent-drive
 		.getByRole("tab", { name: /History/ })
 		.click();
 	await page.getByTestId("git-commit-entry").first().click();
-	await expect(page.getByTestId("git-pane").locator("pre")).toBeVisible();
+	await expect(page.getByTestId("git-commit-files")).toBeVisible();
+	const commitFiles = page.getByTestId("git-commit-file");
+	await expect(commitFiles.first()).toHaveAttribute("aria-pressed", "true");
+	await expect(page.getByTestId("git-patch")).toBeVisible();
+	if ((await commitFiles.count()) > 1) {
+		const firstPatch = await page.getByTestId("git-patch").innerText();
+		await commitFiles.nth(1).click();
+		await expect(commitFiles.nth(1)).toHaveAttribute("aria-pressed", "true");
+		await expect(commitFiles.first()).toHaveAttribute("aria-pressed", "false");
+		await expect.poll(async () => page.getByTestId("git-patch").innerText()).not.toBe(firstPatch);
+	}
 
 	await page.getByTestId("tool-rail-browser").click();
 	await expect(page.getByTestId("browser-pane")).toBeVisible();

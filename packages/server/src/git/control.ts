@@ -155,14 +155,13 @@ export async function gitControlDiff(
 	const cwd = worktree(workspaceId);
 	const [safePath] = assertPaths(cwd, [path]);
 	if (!safePath) throw new Error("Invalid path");
-	const result = await gitAsync(cwd, [
-		"diff",
-		...(staged ? ["--staged"] : []),
-		"--no-color",
-		"--",
-		safePath,
-	]);
-	if (!result.ok) failure(result);
+	const tracked = staged
+		? { ok: true }
+		: await gitAsync(cwd, ["ls-files", "--error-unmatch", "--", safePath]);
+	const result = tracked.ok
+		? await gitAsync(cwd, ["diff", ...(staged ? ["--staged"] : []), "--no-color", "--", safePath])
+		: await gitAsync(cwd, ["diff", "--no-index", "--no-color", "--", "/dev/null", safePath]);
+	if (!result.ok && result.out.length === 0) failure(result);
 	const { text, truncated } = bounded(result.out);
 	return { path: safePath, staged, diff: text, truncated };
 }

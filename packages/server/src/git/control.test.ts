@@ -93,6 +93,8 @@ posix("diffs are bounded to the workspace and branches can be created", async ()
 	const diff = await gitControlDiff("w1", "README.md");
 	expect(diff.diff).toContain("-# repo");
 	expect(diff.diff).toContain("+# changed");
+	writeFileSync(join(repo, "untracked.txt"), "brand new\n");
+	expect((await gitControlDiff("w1", "untracked.txt")).diff).toContain("+brand new");
 	await expect(gitControlDiff("w1", "../outside")).rejects.toThrow("Invalid path");
 	expect(await gitControlBranches("w1")).toMatchObject({ current: "main", local: ["main"] });
 	await gitControlCreateBranch("w1", "feature/x");

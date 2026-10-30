@@ -50,8 +50,9 @@ are additive v108 features.
   persists checkpoints/analysis host-side. Termination is confirmed and never targets the host.
 - **`GitPane`** uses `git.control.status/branches/log/diff/stage/unstage/commit/fetch/pull/push` and
   branch switching in a list/detail layout: history or changes on one side, and the selected commit
-  (metadata, files, patch) or file diff on the other. It commits only the staged index and shows
-  bounded diffs; destructive history operations are absent.
+  (metadata, per-file switcher, and the selected file's colored patch) or the selected change's colored
+  patch on the other. It commits only the staged index and shows bounded diffs; destructive history
+  operations are absent.
 
 All four wait for a compatible host before making requests and show no controls on an older client.
 

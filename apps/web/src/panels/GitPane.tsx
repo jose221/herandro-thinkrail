@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyText } from "../lib";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
+import { PatchLinesView, PatchView, parsePatch } from "./GitPatch";
 
 const INPUT_CLASS =
 	"min-h-28 min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text";
@@ -74,11 +75,6 @@ function fileBase(path: string): string {
 	return path.split("/").at(-1) ?? path;
 }
 
-function commitPatch(output: string): string {
-	const start = output.indexOf("diff --git ");
-	return start >= 0 ? output.slice(start) : output;
-}
-
 export function GitPane({ workspaceId }: { workspaceId: string }) {
 	const t = useT();
 	const protocolVersion = useAppStore((state) => state.protocolVersion);
@@ -90,6 +86,7 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 	const [selectedFile, setSelectedFile] = useState<{ path: string; staged: boolean } | null>(null);
 	const [diff, setDiff] = useState<DiffSelection | null>(null);
 	const [selectedCommit, setSelectedCommit] = useState<GitControlLogEntry | null>(null);
+	const [selectedCommitPath, setSelectedCommitPath] = useState<string | null>(null);
 	const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
 	const [commitMessage, setCommitMessage] = useState("");
 	const [branchName, setBranchName] = useState("");
@@ -166,12 +163,18 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 	const openCommit = (entry: GitControlLogEntry) =>
 		run("commit-detail", async () => {
 			setSelectedCommit(entry);
+			setSelectedCommitPath(null);
 			setCommitDetail(null);
 			const result = await getTransport().request("git.control.showCommit", {
 				workspaceId,
 				sha: entry.sha,
 			});
 			setCommitDetail(result);
+			const sections = parsePatch(result.output);
+			const matched = result.files.find((file) =>
+				sections.some((section) => section.path === file.path),
+			);
+			setSelectedCommitPath(matched?.path ?? sections[0]?.path ?? result.files[0]?.path ?? null);
 		});
 
 	const commitStaged = () =>
@@ -206,6 +209,7 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 			setSelectedFile(null);
 			setDiff(null);
 			setSelectedCommit(null);
+			setSelectedCommitPath(null);
 			setCommitDetail(null);
 			await load();
 		});
@@ -240,6 +244,22 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 				entry.shortSha.toLowerCase().includes(query),
 		);
 	}, [filter, log]);
+	const commitSections = useMemo(() => parsePatch(commitDetail?.output ?? ""), [commitDetail]);
+	const commitFiles = useMemo<GitControlCommitFile[]>(() => {
+		const hostFiles = commitDetail?.files ?? [];
+		if (hostFiles.length > 0) return hostFiles;
+		return commitSections.map((section) => ({
+			path: section.path,
+			status: "modified",
+			added: section.added,
+			removed: section.removed,
+		}));
+	}, [commitDetail, commitSections]);
+	const activeCommitSection = useMemo(() => {
+		if (commitSections.length === 0) return null;
+		if (!selectedCommitPath) return commitSections[0] ?? null;
+		return commitSections.find((section) => section.path === selectedCommitPath) ?? null;
+	}, [commitSections, selectedCommitPath]);
 	const canCommit = commitMessage.trim() !== "" && staged.length > 0 && busy === null;
 
 	return (
@@ -598,48 +618,75 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 												{selectedCommit.author} · {selectedCommit.committedAt}
 											</p>
 										</div>
-										{commitDetail && commitDetail.files.length > 0 ? (
-											<div className="flex shrink-0 gap-2 overflow-x-auto border-border-default border-b bg-container-elevated-bg px-8 py-4">
-												{commitDetail.files.map((file) => (
-													<span
-														key={file.path}
-														className="flex shrink-0 items-center gap-2 rounded-sm border border-border-default px-4 py-2 tr-text-metadata"
-														title={file.path}
-													>
-														<span
+										{commitFiles.length > 0 ? (
+											<div
+												data-testid="git-commit-files"
+												className="flex shrink-0 gap-4 overflow-x-auto border-border-default border-b bg-container-elevated-bg px-8 py-4"
+											>
+												{commitFiles.map((file) => {
+													const active = file.path === activeCommitSection?.path;
+													return (
+														<button
+															key={file.path}
+															type="button"
+															data-testid="git-commit-file"
+															aria-pressed={active}
 															className={cn(
-																"tr-code-text",
-																file.status === "added"
-																	? "text-feedback-success"
-																	: file.status === "deleted"
-																		? "text-feedback-error"
-																		: "text-feedback-warning",
+																"flex shrink-0 items-center gap-4 rounded-sm border px-4 py-2 tr-text-metadata",
+																active
+																	? "border-primary bg-primary-subtle text-text-default"
+																	: "border-border-default text-text-default hover:bg-control-bg-hovered",
 															)}
+															onClick={() => setSelectedCommitPath(file.path)}
+															title={file.path}
 														>
-															{file.status === "added"
-																? "A"
-																: file.status === "deleted"
-																	? "D"
-																	: file.status === "renamed"
-																		? "R"
-																		: "M"}
-														</span>
-														<span className="max-w-[12rem] truncate text-text-default">
-															{fileBase(file.path)}
-														</span>
-														{file.added !== undefined ? (
-															<span className="text-feedback-success">+{file.added}</span>
-														) : null}
-														{file.removed !== undefined ? (
-															<span className="text-feedback-error">-{file.removed}</span>
-														) : null}
-													</span>
-												))}
+															<span className={cn("tr-code-text", STATUS_CLASS[file.status])}>
+																{STATUS_LABEL[file.status]}
+															</span>
+															<span className="max-w-[12rem] truncate">{fileBase(file.path)}</span>
+															{file.added !== undefined ? (
+																<span className="text-feedback-success">+{file.added}</span>
+															) : null}
+															{file.removed !== undefined ? (
+																<span className="text-feedback-error">-{file.removed}</span>
+															) : null}
+														</button>
+													);
+												})}
 											</div>
 										) : null}
-										<pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-8 tr-code-text text-text-default">
-											{commitDetail ? commitPatch(commitDetail.output) : t("git.loading")}
-										</pre>
+										{activeCommitSection ? (
+											<>
+												<div className="flex shrink-0 items-center gap-4 border-border-default border-b bg-container-elevated-bg px-8 py-4">
+													<span className="min-w-0 flex-1 truncate tr-code-text text-text-default">
+														{activeCommitSection.path}
+													</span>
+													<span className="shrink-0 text-feedback-success tr-code-text">
+														+{activeCommitSection.added}
+													</span>
+													<span className="shrink-0 text-feedback-error tr-code-text">
+														-{activeCommitSection.removed}
+													</span>
+													{commitDetail?.truncated ? (
+														<span className="text-feedback-warning tr-text-metadata">
+															{t("git.diffTruncated")}
+														</span>
+													) : null}
+												</div>
+												<PatchLinesView lines={activeCommitSection.lines} />
+											</>
+										) : (
+											<div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-12 text-center text-text-subtle">
+												<RiGitBranchLine className="size-24" aria-hidden="true" />
+												<p className="tr-text-metadata">
+													{!commitDetail
+														? t("git.loading")
+														: commitFiles.length > 0
+															? t("git.commitFileUnavailable")
+															: t("git.noCommitChanges")}
+												</p>
+											</div>
+										)}
 									</>
 								) : (
 									<div className="flex h-full flex-col items-center justify-center gap-4 p-12 text-center text-text-subtle">
@@ -662,9 +709,13 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 											</span>
 										) : null}
 									</div>
-									<pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-8 tr-code-text text-text-default">
-										{diff.diff || t("git.noDiff")}
-									</pre>
+									{diff.diff ? (
+										<PatchView text={diff.diff} />
+									) : (
+										<div className="flex min-h-0 flex-1 items-center justify-center p-12 text-center text-text-subtle">
+											<p className="tr-text-metadata">{t("git.noDiff")}</p>
+										</div>
+									)}
 								</>
 							) : (
 								<div className="flex h-full flex-col items-center justify-center gap-4 p-12 text-center text-text-subtle">
