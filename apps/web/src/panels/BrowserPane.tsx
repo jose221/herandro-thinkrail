@@ -4,13 +4,16 @@ import {
 	RiArrowRightLine,
 	RiCloseLine,
 	RiCodeSSlashLine,
+	RiComputerLine,
 	RiExternalLinkLine,
 	RiGlobalFill,
 	RiGlobalLine,
 	RiRecordCircleLine,
 	RiRefreshLine,
 	RiScreenshotLine,
+	RiSmartphoneLine,
 	RiStopCircleLine,
+	RiTabletLine,
 } from "@remixicon/react";
 import {
 	BROWSER_LIMITS,
@@ -82,6 +85,12 @@ const VIEWPORT_KEYS = {
 	tablet: "browser.viewport.tablet",
 	mobile: "browser.viewport.mobile",
 } as const satisfies Record<Viewport, MessageKey>;
+
+const VIEWPORT_ICONS = {
+	desktop: RiComputerLine,
+	tablet: RiTabletLine,
+	mobile: RiSmartphoneLine,
+} as const satisfies Record<Viewport, typeof RiComputerLine>;
 
 const INPUT_CLASS =
 	"min-h-32 min-w-0 flex-1 rounded-sm border border-control-border-default bg-control-bg px-8 tr-code-text text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active";
@@ -261,19 +270,28 @@ function DevicePreview({
 		if (!host) return;
 		const update = () => {
 			const bounds = host.getBoundingClientRect();
-			const next = Math.min(0.9, Math.max(0.1, Math.max(0, bounds.width - 24) / frameWidth));
+			const next = Math.min(
+				0.9,
+				Math.max(
+					0.1,
+					Math.min(
+						Math.max(0, bounds.width - 24) / frameWidth,
+						Math.max(0, bounds.height - 24) / frameHeight,
+					),
+				),
+			);
 			setScale(next);
 		};
 		update();
 		const observer = new ResizeObserver(update);
 		observer.observe(host);
 		return () => observer.disconnect();
-	}, [frameWidth]);
+	}, [frameHeight, frameWidth]);
 
 	return (
 		<div
 			ref={hostRef}
-			className="flex h-full min-h-0 w-full items-start justify-center overflow-y-auto overflow-x-hidden bg-sunken p-8"
+			className="m-8 flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-sm border border-border-muted bg-container-content-bg p-8"
 		>
 			<div style={{ width: frameWidth * scale, height: frameHeight * scale }}>
 				<div
@@ -361,7 +379,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const deviceFrameRef = useRef<HTMLDivElement>(null);
 	const deviceHostRef = useRef<HTMLDivElement>(null);
-	const captureControlsRef = useRef<HTMLDivElement>(null);
 	const captureVideo = useRef<HTMLVideoElement>(null);
 	const captureStream = useRef<MediaStream | null>(null);
 	const recordingRef = useRef<BrowserRecordingSession | null>(null);
@@ -586,9 +603,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		const target = viewport === "desktop" ? iframeRef.current : deviceFrameRef.current;
 		const clip = viewport === "desktop" ? null : deviceHostRef.current;
 		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
-		const controls = captureControlsRef.current;
-		const previousVisibility = controls?.style.visibility ?? "";
-		if (controls) controls.style.visibility = "hidden";
 		setCapturing(true);
 		let saved: MediaCapture | null = null;
 		let frame: CaptureFrame | null = null;
@@ -610,7 +624,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			captureError(error, t("browser.captureFailed"));
 		}
 		setCapturing(false);
-		if (controls) controls.style.visibility = previousVisibility;
 		if (!saved || !frame) return;
 		const note = t("browser.captureNote", {
 			path: saved.path,
@@ -908,75 +921,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		supported && !suspended && activeTab !== null && activeTab.url !== "about:blank";
 
 	return (
-		<div
+		<section
 			ref={rootRef}
 			data-testid="browser-pane"
+			aria-label={t("browser.title")}
 			className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
 		>
 			<video ref={captureVideo} className="hidden" muted playsInline />
-			<header className="flex h-panel-header-row shrink-0 items-center gap-8 border-border-default border-b px-12">
-				<RiGlobalLine className="size-16 shrink-0 text-text-muted" aria-hidden="true" />
-				<h2 className="min-w-0 flex-1 truncate tr-title-compact text-text-default">
-					{t("browser.title")}
-				</h2>
-				{recording ? (
-					<div className="flex shrink-0 items-center gap-4" data-testid="browser-recording">
-						<span className="flex items-center gap-2 text-feedback-error tr-text-metadata">
-							<span
-								className="size-6 animate-pulse rounded-full bg-feedback-error"
-								aria-hidden="true"
-							/>
-							{t("browser.recording")} {formatRecordingTime(recordedMs)}
-						</span>
-						<Button
-							variant="outline"
-							size="s"
-							iconLeft={RiStopCircleLine}
-							loading={recordingBusy}
-							onClick={() => void stopRecording()}
-							data-testid="browser-record-stop"
-						>
-							{t("browser.recordStop")}
-						</Button>
-					</div>
-				) : null}
-				{!recording && activeTab && activeTab.url !== "about:blank" ? (
-					<>
-						<IconButton
-							icon={RiCodeSSlashLine}
-							label={t("browser.inspect")}
-							variant="ghost"
-							size="m"
-							selected={snapshot !== null}
-							loading={reading}
-							onClick={() => void readPage()}
-						/>
-						<IconButton
-							icon={RiExternalLinkLine}
-							label={t("browser.copyUrl")}
-							variant="ghost"
-							size="m"
-							onClick={() => void copyUrl()}
-						/>
-					</>
-				) : null}
-				<IconButton
-					icon={RiRefreshLine}
-					label={t("browser.refresh")}
-					variant="ghost"
-					size="m"
-					disabled={!supported}
-					onClick={() => {
-						void loadPorts();
-						if (session) {
-							getTransport()
-								.request("browser.state", { workspaceId })
-								.then(setSession)
-								.catch(() => undefined);
-						}
-					}}
-				/>
-			</header>
 
 			<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 				<div className="flex min-w-0 flex-wrap items-center gap-4 border-border-default border-b px-8 py-4">
@@ -1022,13 +973,37 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 							{t("browser.go")}
 						</Button>
 					</form>
-					<div className="flex items-center gap-2">
+					{activeTab && activeTab.url !== "about:blank" ? (
+						<>
+							<IconButton
+								icon={RiCodeSSlashLine}
+								label={t("browser.inspect")}
+								variant="ghost"
+								size="s"
+								selected={snapshot !== null}
+								loading={reading}
+								onClick={() => void readPage()}
+							/>
+							<IconButton
+								icon={RiExternalLinkLine}
+								label={t("browser.copyUrl")}
+								variant="ghost"
+								size="s"
+								onClick={() => void copyUrl()}
+							/>
+						</>
+					) : null}
+				</div>
+
+				<div className="flex min-w-0 flex-wrap items-center gap-8 border-border-default border-b px-8 py-4">
+					<div className="flex shrink-0 items-center gap-2 rounded-sm border border-border-default bg-container-content-bg p-2">
 						{(["desktop", "tablet", "mobile"] as const).map((preset) => (
 							<Button
 								key={preset}
 								variant="ghost"
 								size="s"
 								selected={viewport === preset}
+								iconLeft={VIEWPORT_ICONS[preset]}
 								data-testid={`browser-viewport-${preset}`}
 								onClick={() => changeViewport(preset)}
 								aria-label={t(VIEWPORT_KEYS[preset])}
@@ -1037,29 +1012,26 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 							</Button>
 						))}
 					</div>
-				</div>
-
-				{devices ? (
-					<div className="grid min-w-0 grid-cols-3 gap-4 border-border-default border-b px-8 py-4">
-						{devices.map((candidate) => (
-							<Button
-								key={candidate.id}
-								variant="ghost"
-								size="s"
-								selected={device?.id === candidate.id}
-								data-testid={`browser-device-${candidate.id}`}
-								onClick={() => setDeviceId(candidate.id)}
-							>
-								<span className="flex min-w-0 flex-col items-start">
-									<span className="w-full truncate tr-text-metadata">{t(candidate.label)}</span>
-									<span className="text-text-subtle tr-text-metadata">
-										{candidate.width}×{candidate.height}
+					{devices ? (
+						<div className="ml-auto flex min-w-0 flex-wrap items-center gap-4">
+							{devices.map((candidate) => (
+								<Button
+									key={candidate.id}
+									variant="ghost"
+									size="s"
+									selected={device?.id === candidate.id}
+									data-testid={`browser-device-${candidate.id}`}
+									onClick={() => setDeviceId(candidate.id)}
+								>
+									<span className="tr-text-metadata">{t(candidate.label)}</span>
+									<span className="whitespace-nowrap text-text-subtle tr-text-metadata">
+										· {candidate.width}×{candidate.height}
 									</span>
-								</span>
-							</Button>
-						))}
-					</div>
-				) : null}
+								</Button>
+							))}
+						</div>
+					) : null}
+				</div>
 
 				{(session?.tabs.length ?? 0) > 0 ? (
 					<div className="flex min-w-0 items-center gap-2 overflow-x-auto border-border-default border-b px-8 py-4">
@@ -1188,42 +1160,62 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 									/>
 								</DevicePreview>
 							) : null}
-							{captureSupported && !recording && !recordingBusy ? (
-								<div
-									ref={captureControlsRef}
-									className="absolute right-12 bottom-64 z-20 flex items-center gap-8"
-								>
-									<Button
-										variant="primary"
-										size="m"
-										iconLeft={RiScreenshotLine}
-										loading={capturing}
-										className="shadow-[var(--shadow-md)]"
-										data-testid="browser-capture"
-										onClick={() => requestCapture("capture")}
-									>
-										{t("browser.capture")}
-									</Button>
-									<Button
-										variant="outline"
-										size="m"
-										iconLeft={RiRecordCircleLine}
-										disabled={capturing}
-										className="shadow-[var(--shadow-md)]"
-										data-testid="browser-record"
-										onClick={() => requestCapture("record")}
-									>
-										{t("browser.record")}
-									</Button>
-								</div>
-							) : null}
-							<p className="shrink-0 border-border-default border-t px-12 py-4 text-text-subtle tr-text-metadata">
-								{viewport === "desktop"
-									? t("browser.frameHint")
-									: t("browser.deviceHint", {
-											device: device ? t(device.label) : "",
-										})}
-							</p>
+							<div className="flex shrink-0 flex-wrap items-center gap-8 border-border-default border-t px-12 py-8">
+								<p className="min-w-0 flex-1 truncate text-text-subtle tr-text-metadata">
+									{viewport === "desktop"
+										? t("browser.frameHint")
+										: t("browser.deviceHint", {
+												device: device ? t(device.label) : "",
+											})}
+								</p>
+								{captureSupported ? (
+									recording ? (
+										<div className="flex shrink-0 items-center gap-8">
+											<span className="flex items-center gap-2 text-feedback-error tr-text-metadata">
+												<span
+													className="size-6 animate-pulse rounded-full bg-feedback-error"
+													aria-hidden="true"
+												/>
+												{t("browser.recording")} {formatRecordingTime(recordedMs)}
+											</span>
+											<Button
+												variant="primary"
+												size="s"
+												iconLeft={RiStopCircleLine}
+												loading={recordingBusy}
+												onClick={() => void stopRecording()}
+												data-testid="browser-record-stop"
+											>
+												{t("browser.recordStop")}
+											</Button>
+										</div>
+									) : (
+										<div className="flex shrink-0 items-center gap-4">
+											<Button
+												variant="outline"
+												size="s"
+												iconLeft={RiRecordCircleLine}
+												disabled={capturing || recordingBusy}
+												onClick={() => requestCapture("record")}
+												data-testid="browser-record"
+											>
+												{t("browser.record")}
+											</Button>
+											<Button
+												variant="primary"
+												size="s"
+												iconLeft={RiScreenshotLine}
+												loading={capturing}
+												disabled={recordingBusy}
+												onClick={() => requestCapture("capture")}
+												data-testid="browser-capture"
+											>
+												{t("browser.capture")}
+											</Button>
+										</div>
+									)
+								) : null}
+							</div>
 						</div>
 					)}
 				</div>
@@ -1296,6 +1288,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 					else void capture();
 				}}
 			/>
-		</div>
+		</section>
 	);
 }
