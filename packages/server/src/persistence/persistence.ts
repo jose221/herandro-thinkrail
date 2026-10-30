@@ -9,6 +9,7 @@ import {
 	DEFAULT_CONFIG,
 	type HostEnvironment,
 	isAcpClientCatalog,
+	isAcpStartTimeoutMs,
 	isComposerGrowthLimit,
 	isJbcentralQuotaRefreshSeconds,
 	isLineWidth,
@@ -413,6 +414,9 @@ export function loadConfig(): AppConfig {
 		acpClients: isAcpClientCatalog(value.acpClients)
 			? value.acpClients.map((client) => ({ ...client, args: [...client.args] }))
 			: structuredClone(DEFAULT_ACP_CLIENTS),
+		acpStartTimeoutMs: isAcpStartTimeoutMs(value.acpStartTimeoutMs)
+			? value.acpStartTimeoutMs
+			: DEFAULT_CONFIG.acpStartTimeoutMs,
 		locale: isLocalePreference(value.locale) ? value.locale : DEFAULT_CONFIG.locale,
 		onboardingDismissed: value.onboardingDismissed === true,
 	};

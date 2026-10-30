@@ -61,8 +61,9 @@ create the tools it needs based on how you actually work.
   sign-in through methods an adapter advertises, with terminal-based login inline. A separate ACP model
   picker in the Pi composer opens an ACP chat with the selected model without changing Pi's model. The
   `agy` CLI alone is not an ACP adapter. ThinkRail supports stable ACP v1 and experimental draft v2;
-  v2 adapter-owned tools are outside ThinkRail's filesystem and terminal permission controls. ThinkRail
-  does not install adapters.
+  v2 adapter-owned tools are outside ThinkRail's filesystem and terminal permission controls. ACP start
+  timeouts are configurable in Settings for slow adapters such as Antigravity. ThinkRail does not install
+  adapters.
 - **Specs as ground truth.** A connected graph of `SPEC.md` files lives beside the code; the agent reads,
   searches, and maintains it through dedicated `spec_*` tools, so intent survives the session. The
   read-only Specs tool renders the graph as a tree in the workbench.

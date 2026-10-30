@@ -133,13 +133,14 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 103;
+export const PROTOCOL_VERSION = 104;
 export const ACP_PROTOCOL_VERSION = 96;
 export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
 export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
 export const ANDROID_EMULATOR_PROTOCOL_VERSION = 100;
 export const ACP_AUTH_PROTOCOL_VERSION = 102;
 export const ACP_SESSION_TITLE_PROTOCOL_VERSION = 103;
+export const ACP_START_TIMEOUT_PROTOCOL_VERSION = 104;
 export const PROVIDER_MODELS_PROTOCOL_VERSION = 97;
 export const PROJECT_CLONE_PROTOCOL_VERSION = 95;
 export const ONBOARDING_PROTOCOL_VERSION = 94;

@@ -91,6 +91,24 @@ test("ACP client catalog validates, persists, and publishes as one setting", () 
 	expect(seen).toHaveLength(1);
 });
 
+test("ACP start timeout validates, persists, and publishes", () => {
+	const seen: Array<{ config: AppConfig; update: AppConfigUpdate }> = [];
+	setSettingsPublisher((config, update) => seen.push({ config, update }));
+
+	const next = updateConfig({ acpStartTimeoutMs: 30_000 });
+	expect(next.acpStartTimeoutMs).toBe(30_000);
+	expect(seen).toEqual([{ config: next, update: { acpStartTimeoutMs: 30_000 } }]);
+	expect(JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8")).acpStartTimeoutMs).toBe(
+		30_000,
+	);
+
+	const before = readFileSync(join(dataDir, "config.json"), "utf8");
+	expect(() => updateConfig({ acpStartTimeoutMs: 999 })).toThrow(
+		"acpStartTimeoutMs must be an integer number of milliseconds in range",
+	);
+	expect(readFileSync(join(dataDir, "config.json"), "utf8")).toBe(before);
+});
+
 test.each([
 	true,
 	false,

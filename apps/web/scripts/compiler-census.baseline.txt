@@ -15,6 +15,7 @@
 src/chat/ChatTranscript.tsx useVirtualRows
 src/chat/HistoryOverlay.tsx Highlight
 src/chat/resources/ResourcesInspector.tsx ResourcesInspector
+src/panels/AndroidEmulatorPane.tsx AndroidEmulatorPane
 src/panels/branches.ts useBranchList
 src/panels/useBranchStatus.ts useBranchStatus
 src/panels/useLiveTabContent.ts useLiveTabContent

@@ -3,6 +3,7 @@ import {
 	type AppConfigUpdate,
 	COMPOSER_GROWTH_LIMITS,
 	isAcpClientCatalog,
+	isAcpStartTimeoutMs,
 	isComposerGrowthLimit,
 	isJbcentralQuotaRefreshSeconds,
 	isLineWidth,
@@ -56,6 +57,7 @@ const ACCEPTED_UPDATE_KEYS = {
 	settleIdleDays: true,
 	disabledExtensions: true,
 	acpClients: true,
+	acpStartTimeoutMs: true,
 	locale: true,
 	onboardingDismissed: true,
 	chatMessageOrder: true,
@@ -237,6 +239,12 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 	const current = getConfig();
 	if (acpClients !== undefined && !isAcpClientCatalog(acpClients)) {
 		throw new Error("acpClients must be a valid list of ACP client definitions");
+	}
+	if (
+		runtimeUpdate.acpStartTimeoutMs !== undefined &&
+		!isAcpStartTimeoutMs(runtimeUpdate.acpStartTimeoutMs)
+	) {
+		throw new Error("acpStartTimeoutMs must be an integer number of milliseconds in range");
 	}
 	if (
 		runtimeUpdate.analyticsEnabled === true &&

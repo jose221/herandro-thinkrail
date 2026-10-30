@@ -1,12 +1,26 @@
-import { RiDeleteBinLine, RiLoader4Line, RiPlayLine, RiStopLine } from "@remixicon/react";
+import {
+	RiArrowDownSLine,
+	RiCheckboxCircleLine,
+	RiCloseLine,
+	RiDeleteBinLine,
+	RiErrorWarningLine,
+	RiImageAddLine,
+	RiLoader4Line,
+	RiPlayLine,
+	RiRobot2Line,
+	RiSendPlane2Line,
+	RiStopLine,
+	RiToolsLine,
+} from "@remixicon/react";
 import type {
 	AcpConfigOption,
 	AcpPermissionOption,
+	AcpToolCallSummary,
 	AcpTranscriptEntry,
 } from "@thinkrail/contracts";
 import { ACP_CONFIG_OPTIONS_PROTOCOL_VERSION, ACP_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import { useT } from "@thinkrail/locales/react";
-import { Button } from "@thinkrail/ui/button";
+import { Button, IconButton } from "@thinkrail/ui/button";
 import {
 	Dialog,
 	DialogContent,
@@ -16,12 +30,18 @@ import {
 	DialogTitle,
 } from "@thinkrail/ui/dialog";
 import { Textarea } from "@thinkrail/ui/textarea";
-import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { cn } from "@thinkrail/ui/utils";
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { QuietScrollArea } from "../components/QuietScrollArea";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { useAcpStore } from "./acpStore";
 import { acpSessionStateKey as statusKey } from "./sessionState";
+import {
+	type AcpPromptImagesController,
+	acpImagePasteDropHandlers,
+	useAcpImages,
+} from "./useAcpImages";
 
 const SAFE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -100,11 +120,12 @@ function MessageRow({ entry }: { entry: AcpTranscriptEntry }) {
 	return (
 		<article
 			data-testid={`acp-message-${entry.id}`}
-			className={`flex min-w-0 flex-col gap-4 rounded-sm border px-12 py-8 ${
+			className={cn(
+				"flex min-w-0 flex-col gap-4 rounded-lg border px-12 py-8",
 				user
-					? "ml-auto w-fit max-w-full border-border-default bg-control-bg"
-					: "mr-auto w-full max-w-full border-border-default bg-container-sidebar-bg"
-			}`}
+					? "ml-auto w-fit max-w-[85%] border-border-default bg-control-bg"
+					: "mr-auto w-full max-w-full border-border-default bg-container-sidebar-bg",
+			)}
 		>
 			<span className="text-text-muted tr-text-metadata">{t(roleKey(entry.role))}</span>
 			{entry.text ? (
@@ -168,6 +189,137 @@ function ConfigControl({
 	);
 }
 
+function PillSelect({
+	label,
+	value,
+	options,
+	onChange,
+	testId,
+	disabled = false,
+}: {
+	label: string;
+	value: string;
+	options: Array<{ value: string; label: string }>;
+	onChange: (value: string) => void;
+	testId: string;
+	disabled?: boolean;
+}) {
+	return (
+		<label className="flex min-h-32 min-w-0 items-center gap-6 rounded-full border border-border-default bg-control-bg py-2 pr-8 pl-8">
+			<span className="shrink-0 text-text-muted tr-text-metadata">{label}</span>
+			<span className="relative min-w-0">
+				<select
+					aria-label={label}
+					data-testid={testId}
+					value={value}
+					disabled={disabled}
+					onChange={(event) => onChange(event.currentTarget.value)}
+					className="max-w-224 min-w-0 appearance-none truncate bg-transparent pr-16 text-text-default tr-text-ui outline-none disabled:text-control-disabled-text"
+				>
+					{options.map((option) => (
+						<option key={option.value} value={option.value}>
+							{option.label}
+						</option>
+					))}
+				</select>
+				<RiArrowDownSLine
+					aria-hidden
+					className="pointer-events-none absolute top-1/2 right-0 size-14 -translate-y-1/2 text-text-muted"
+				/>
+			</span>
+		</label>
+	);
+}
+
+function AcpImageChips({ controller }: { controller: AcpPromptImagesController }) {
+	const t = useT();
+	const { images, pending, errors, removeImage, dismissError } = controller;
+	if (images.length === 0 && pending === 0 && errors.length === 0) return null;
+	return (
+		<div data-testid="acp-prompt-images" className="flex min-w-0 flex-wrap gap-6">
+			{errors.map((error) => (
+				<div
+					key={error.id}
+					role="status"
+					className="flex max-w-full items-center gap-4 rounded-sm border border-feedback-error bg-control-bg px-8 py-4 text-feedback-error tr-text-metadata"
+				>
+					<RiErrorWarningLine className="size-14 shrink-0" />
+					<span className="max-w-160 truncate">{error.name}</span>
+					<span className="shrink-0">
+						·{" "}
+						{t(
+							error.reason === "unsupported" ? "acp.chat.imageUnsupported" : "acp.chat.imageLimit",
+						)}
+					</span>
+					<IconButton
+						icon={RiCloseLine}
+						size="s"
+						label={t("common.dismiss")}
+						onClick={() => dismissError(error.id)}
+					/>
+				</div>
+			))}
+			{images.map((image) => (
+				<div
+					key={image.id}
+					data-testid="acp-prompt-image"
+					className="flex w-80 min-w-0 flex-col gap-2"
+				>
+					<div className="relative size-64 overflow-hidden rounded-sm border border-border-default bg-control-bg">
+						<img
+							src={`data:${image.content.mimeType};base64,${image.content.data}`}
+							alt={image.name}
+							className="size-full object-cover"
+						/>
+						<IconButton
+							icon={RiCloseLine}
+							size="s"
+							label={t("acp.chat.removeImage")}
+							onClick={() => removeImage(image.id)}
+							className="absolute top-2 right-2"
+						/>
+					</div>
+					<span className="truncate text-text-muted tr-text-metadata">{image.name}</span>
+				</div>
+			))}
+			{pending > 0 ? (
+				<div className="flex size-64 items-center justify-center rounded-sm border border-border-default bg-control-bg text-text-muted">
+					<RiLoader4Line className="size-16 animate-spin" />
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function ToolCallRow({ toolCall }: { toolCall: AcpToolCallSummary }) {
+	const t = useT();
+	const failed = toolCall.status === "failed";
+	const completed = toolCall.status === "completed";
+	return (
+		<li
+			data-testid={`acp-tool-${toolCall.id}`}
+			className="flex min-w-0 items-center gap-8 rounded-sm border border-border-default bg-control-bg px-8 py-6"
+		>
+			{failed ? (
+				<RiErrorWarningLine className="size-14 shrink-0 text-feedback-error" />
+			) : completed ? (
+				<RiCheckboxCircleLine className="size-14 shrink-0 text-feedback-success" />
+			) : (
+				<RiToolsLine className="size-14 shrink-0 text-text-muted" />
+			)}
+			<span className="min-w-0 flex-1 truncate text-text-default tr-text-ui">{toolCall.title}</span>
+			<span
+				className={cn(
+					"shrink-0 tr-text-metadata",
+					failed ? "text-feedback-error" : completed ? "text-feedback-success" : "text-text-muted",
+				)}
+			>
+				{t(toolStateKey(toolCall.status))}
+			</span>
+		</li>
+	);
+}
+
 export function AcpChatPane({
 	workspaceId,
 	sessionId,
@@ -188,21 +340,8 @@ export function AcpChatPane({
 		() => snapshot?.messages.map((entry) => <MessageRow key={entry.id} entry={entry} />),
 		[snapshot?.messages],
 	);
-	const toolCallRows = useMemo(
-		() =>
-			snapshot?.toolCalls.map((toolCall) => (
-				<li
-					key={toolCall.id}
-					className="min-w-0 break-words rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
-				>
-					<span className="tr-text-ui text-text-default">{toolCall.title}</span>
-					<span className="ml-8 text-text-muted tr-text-metadata">
-						{t(toolStateKey(toolCall.status))}
-					</span>
-				</li>
-			)),
-		[snapshot?.toolCalls, t],
-	);
+	const attachments = useAcpImages();
+	const imageInputRef = useRef<HTMLInputElement>(null);
 	const [text, setText] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [loadFailed, setLoadFailed] = useState(false);
@@ -215,6 +354,33 @@ export function AcpChatPane({
 		protocolVersion !== null && protocolVersion >= ACP_CONFIG_OPTIONS_PROTOCOL_VERSION
 			? (snapshot?.configOptions ?? [])
 			: [];
+	const modelOptions = configOptions.filter(
+		(option) => option.category === "model" && option.options.length > 0,
+	);
+	const effortOptions = configOptions.filter(
+		(option) => option.category === "thought_level" && option.options.length > 0,
+	);
+	const otherConfigOptions = configOptions.filter(
+		(option) =>
+			option.category !== "model" &&
+			option.category !== "thought_level" &&
+			option.category !== "mode",
+	);
+	const hasContent = text.trim().length > 0 || attachments.images.length > 0;
+	const isRunning = snapshot?.summary.state === "running";
+	const isInterrupted = snapshot?.summary.state === "interrupted";
+	const isBlocked =
+		isRunning ||
+		isInterrupted ||
+		snapshot?.permission !== null ||
+		sending ||
+		attachments.pending > 0;
+	const isEmpty =
+		!!snapshot &&
+		snapshot.messages.length === 0 &&
+		!draft?.assistantText &&
+		!draft?.thoughtText &&
+		snapshot.toolCalls.length === 0;
 
 	useEffect(() => {
 		if (!supported || connectionGeneration === 0 || snapshotGeneration === connectionGeneration)
@@ -255,19 +421,20 @@ export function AcpChatPane({
 
 	const send = () => {
 		const message = text.trim();
-		if (
-			!message ||
-			sending ||
-			snapshot?.summary.state === "running" ||
-			snapshot?.summary.state === "interrupted" ||
-			snapshot?.permission !== null
-		) {
-			return;
-		}
+		if (!snapshot || !hasContent || isBlocked) return;
+		const images = attachments.images.map((image) => image.content);
 		setSending(true);
 		void getTransport()
-			.request("acp.session.prompt", { workspaceId, sessionId, text: message })
-			.then(() => setText(""))
+			.request("acp.session.prompt", {
+				workspaceId,
+				sessionId,
+				text: message,
+				...(images.length > 0 ? { images } : {}),
+			})
+			.then(() => {
+				setText("");
+				attachments.reset();
+			})
 			.catch((error: unknown) => {
 				toast.error(errorText(error), t("acp.chat.actionFailed"));
 			})
@@ -315,6 +482,19 @@ export function AcpChatPane({
 		}
 	};
 
+	const setConfigOption = async (option: AcpConfigOption, value: string) => {
+		try {
+			await getTransport().request("acp.session.setConfigOption", {
+				workspaceId,
+				sessionId,
+				configId: option.id,
+				value,
+			});
+		} catch {
+			actionFailed();
+		}
+	};
+
 	const replyToPermission = async (option: AcpPermissionOption) => {
 		if (!snapshot?.permission) return;
 		try {
@@ -335,86 +515,133 @@ export function AcpChatPane({
 		void send();
 	};
 
+	const imageHandlers = acpImagePasteDropHandlers(attachments);
+
 	return (
 		<section
 			data-testid="acp-chat-pane"
 			data-acp-session-id={sessionId}
 			className="flex h-full min-h-0 min-w-0 flex-col bg-container-content-bg"
 		>
-			<header className="flex min-w-0 flex-wrap items-center gap-8 border-b border-border-default px-12 py-8">
-				<div className="min-w-0 flex-1">
-					<h2 className="truncate tr-title-compact text-text-default">
-						{snapshot?.summary.title || t("acp.chat.title")}
-					</h2>
-					<p className="truncate text-text-muted tr-text-metadata">
-						{snapshot
-							? `${snapshot.summary.clientName} · ${t(statusKey(snapshot.summary.state))}`
-							: t("acp.chat.subtitle")}
-					</p>
-				</div>
-				<div className="flex min-w-0 flex-wrap items-center gap-4">
-					{configOptions
-						.filter((option) => option.category === "model" && option.options.length > 0)
-						.map((option) => (
-							<ConfigControl
-								key={option.id}
-								workspaceId={workspaceId}
-								sessionId={sessionId}
-								option={option}
-								onError={actionFailed}
-								displayAsModel
+			<header className="border-b border-border-default bg-container-content-bg px-16 py-12">
+				<div className="mx-auto flex w-full max-w-896 min-w-0 flex-col gap-8">
+					<div className="flex min-w-0 items-start justify-between gap-12">
+						<div className="flex min-w-0 items-center gap-8">
+							<span className="flex size-36 shrink-0 items-center justify-center rounded-sm border border-border-default bg-control-bg text-text-muted">
+								<RiRobot2Line className="size-18" />
+							</span>
+							<div className="min-w-0">
+								<h2 className="truncate tr-title-compact text-text-default">
+									{snapshot?.summary.title || t("acp.chat.title")}
+								</h2>
+								<p className="truncate text-text-muted tr-text-metadata">
+									{snapshot ? (
+										<>
+											<span
+												aria-hidden
+												className={cn(
+													"mr-4",
+													snapshot.summary.state === "failed"
+														? "text-feedback-error"
+														: snapshot.summary.state === "running"
+															? "text-feedback-info"
+															: "text-feedback-success",
+												)}
+											>
+												●
+											</span>
+											{snapshot.summary.clientName} · {t(statusKey(snapshot.summary.state))}
+										</>
+									) : (
+										t("acp.chat.subtitle")
+									)}
+								</p>
+							</div>
+						</div>
+						<div className="flex shrink-0 flex-wrap items-center justify-end gap-4">
+							{snapshot?.summary.resumable ? (
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiPlayLine}
+									onClick={() => void resume()}
+									disabled={!supported}
+								>
+									{t("acp.chat.resume")}
+								</Button>
+							) : null}
+							{snapshot?.summary.state === "running" ? (
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiStopLine}
+									onClick={() => void cancel()}
+								>
+									{t("acp.chat.stop")}
+								</Button>
+							) : null}
+							<IconButton
+								icon={RiDeleteBinLine}
+								label={t("acp.chat.delete")}
+								onClick={() => setDeleteOpen(true)}
+								disabled={!snapshot || !supported}
+								data-testid="acp-delete-chat"
 							/>
-						))}
-					{snapshot?.modes.length ? (
-						<label className="flex min-w-0 items-center gap-4">
-							<span className="sr-only">{t("acp.chat.mode")}</span>
-							<select
-								aria-label={t("acp.chat.mode")}
-								value={snapshot.currentMode ?? ""}
-								onChange={(event) => void setMode(event.currentTarget.value)}
-								className="min-h-40 max-w-full rounded-sm border border-border-default bg-control-bg px-8 text-text-default tr-text-metadata"
-							>
-								{snapshot.modes.map((mode) => (
-									<option key={mode.id} value={mode.id}>
-										{mode.name}
-									</option>
-								))}
-							</select>
-						</label>
+						</div>
+					</div>
+					{snapshot ? (
+						<div className="flex min-w-0 flex-wrap items-center gap-6">
+							{modelOptions.map((option) => (
+								<PillSelect
+									key={option.id}
+									label={t("acp.chat.model")}
+									value={option.currentValue}
+									options={option.options.map((choice) => ({
+										value: choice.value,
+										label: choice.name,
+									}))}
+									onChange={(value) => void setConfigOption(option, value)}
+									testId="acp-model-select"
+								/>
+							))}
+							{effortOptions.map((option) => (
+								<PillSelect
+									key={option.id}
+									label={t("acp.chat.effort")}
+									value={option.currentValue}
+									options={option.options.map((choice) => ({
+										value: choice.value,
+										label: choice.name,
+									}))}
+									onChange={(value) => void setConfigOption(option, value)}
+									testId="acp-effort-select"
+								/>
+							))}
+							{snapshot.modes.length ? (
+								<PillSelect
+									label={t("acp.chat.mode")}
+									value={snapshot.currentMode ?? ""}
+									options={snapshot.modes.map((mode) => ({
+										value: mode.id,
+										label: mode.name,
+									}))}
+									onChange={(value) => void setMode(value)}
+									testId="acp-mode-select"
+								/>
+							) : null}
+							{otherConfigOptions.map((option) => (
+								<ConfigControl
+									key={option.id}
+									workspaceId={workspaceId}
+									sessionId={sessionId}
+									option={option}
+									onError={actionFailed}
+								/>
+							))}
+						</div>
 					) : null}
-					{snapshot?.summary.resumable ? (
-						<Button
-							type="button"
-							variant="outline"
-							size="s"
-							iconLeft={RiPlayLine}
-							onClick={() => void resume()}
-							disabled={!supported}
-						>
-							{t("acp.chat.resume")}
-						</Button>
-					) : null}
-					{snapshot?.summary.state === "running" ? (
-						<Button
-							type="button"
-							variant="outline"
-							size="s"
-							iconLeft={RiStopLine}
-							onClick={() => void cancel()}
-						>
-							{t("acp.chat.stop")}
-						</Button>
-					) : null}
-					<Button
-						type="button"
-						variant="ghost"
-						size="s"
-						iconLeft={RiDeleteBinLine}
-						onClick={() => setDeleteOpen(true)}
-						disabled={!snapshot || !supported}
-					>
-						{t("acp.chat.delete")}
-					</Button>
 				</div>
 			</header>
 
@@ -448,93 +675,132 @@ export function AcpChatPane({
 			) : null}
 			{snapshot ? (
 				<>
-					<QuietScrollArea className="min-h-0 flex-1" viewportClassName="px-12 py-12">
-						<div className="mx-auto flex w-full max-w-768 min-w-0 flex-col gap-12">
-							{messageRows}
-							{draft?.thoughtText || draft?.thoughtImages.length ? (
-								<article
-									data-testid="acp-thought-draft"
-									className="mr-auto flex w-full min-w-0 flex-col gap-4 rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
+					<QuietScrollArea className="min-h-0 flex-1" viewportClassName="px-16 py-16">
+						<div className="mx-auto flex min-h-full w-full max-w-896 min-w-0 flex-col gap-16">
+							{isEmpty ? (
+								<div
+									data-testid="acp-empty-state"
+									className="flex flex-1 flex-col items-center justify-center gap-12 px-16 py-24 text-center"
 								>
-									<span className="text-text-muted tr-text-metadata">
-										{t("acp.chat.role.thought")}
+									<span className="flex size-56 items-center justify-center rounded-sm border border-border-default bg-control-bg text-text-muted">
+										<RiRobot2Line className="size-28" />
 									</span>
-									<p className="whitespace-pre-wrap break-words text-text-muted tr-text-ui">
-										{draft.thoughtText}
-									</p>
-									<ImageList images={draft.thoughtImages} />
-								</article>
-							) : null}
-							{draft?.assistantText || draft?.assistantImages.length ? (
-								<article
-									data-testid="acp-assistant-draft"
-									aria-live="polite"
-									className="mr-auto flex w-full min-w-0 flex-col gap-4 rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
-								>
-									<span className="text-text-muted tr-text-metadata">
-										{t("acp.chat.role.assistant")}
-									</span>
-									<p className="whitespace-pre-wrap break-words text-text-default tr-text-ui">
-										{draft.assistantText}
-									</p>
-									<ImageList images={draft.assistantImages} />
-								</article>
-							) : null}
-							{snapshot.toolCalls.length > 0 ? (
-								<section className="flex min-w-0 flex-col gap-8">
-									<h3 className="tr-title-compact text-text-default">{t("acp.chat.tools")}</h3>
-									<ul className="flex min-w-0 flex-col gap-4">{toolCallRows}</ul>
-								</section>
-							) : null}
-							{snapshot.plan.length > 0 ? (
-								<section className="flex min-w-0 flex-col gap-8">
-									<h3 className="tr-title-compact text-text-default">{t("acp.chat.plan")}</h3>
-									<ul className="flex min-w-0 flex-col gap-4">
-										{snapshot.plan.map((entry, index) => (
-											<li
-												key={`${index}-${entry.content}`}
-												className="flex min-w-0 flex-wrap items-start gap-8 rounded-sm border border-border-default px-12 py-8"
-											>
-												<span className="min-w-0 flex-1 break-words whitespace-pre-wrap tr-text-ui text-text-default">
-													{entry.content}
-												</span>
-												<span className="shrink-0 text-text-muted tr-text-metadata">
-													{t(planStateKey(entry.status))}
-												</span>
-											</li>
-										))}
-									</ul>
-								</section>
-							) : null}
-							{snapshot.availableCommands.length > 0 ? (
-								<section className="flex min-w-0 flex-col gap-8">
-									<h3 className="tr-title-compact text-text-default">{t("acp.chat.commands")}</h3>
-									<ul className="flex min-w-0 flex-wrap gap-8">
-										{snapshot.availableCommands.map((command) => (
-											<li
-												key={command.name}
-												className="max-w-full break-words rounded-sm border border-border-default px-8 py-4 tr-code-text"
-											>
-												{command.name}
-											</li>
-										))}
-									</ul>
-								</section>
-							) : null}
-							{snapshot.usage ? (
-								<p className="text-text-muted tr-text-metadata">
-									{snapshot.usage.cost
-										? t("acp.chat.usageCost", {
-												used: snapshot.usage.used.toLocaleString(),
-												size: snapshot.usage.size.toLocaleString(),
-												cost: `${snapshot.usage.cost.amount.toLocaleString()} ${snapshot.usage.cost.currency}`,
-											})
-										: t("acp.chat.usage", {
-												used: snapshot.usage.used.toLocaleString(),
-												size: snapshot.usage.size.toLocaleString(),
-											})}
-								</p>
-							) : null}
+									<div className="flex max-w-[30rem] flex-col gap-4">
+										<h3 className="tr-title-section text-text-default">
+											{t("acp.chat.emptyTitle", { client: snapshot.summary.clientName })}
+										</h3>
+										<p className="text-text-muted tr-text-ui">
+											{t("acp.chat.emptyDescription", { client: snapshot.summary.clientName })}
+										</p>
+									</div>
+									{snapshot.availableCommands.length > 0 ? (
+										<ul className="flex min-w-0 flex-wrap justify-center gap-6">
+											{snapshot.availableCommands.map((command) => (
+												<li
+													key={command.name}
+													className="max-w-full break-words rounded-full border border-border-default bg-control-bg px-8 py-4 tr-code-text text-text-muted"
+												>
+													{command.name}
+												</li>
+											))}
+										</ul>
+									) : null}
+								</div>
+							) : (
+								<>
+									{messageRows}
+									{draft?.thoughtText || draft?.thoughtImages.length ? (
+										<article
+											data-testid="acp-thought-draft"
+											className="mr-auto flex w-full min-w-0 flex-col gap-4 rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
+										>
+											<span className="text-text-muted tr-text-metadata">
+												{t("acp.chat.role.thought")}
+											</span>
+											<p className="whitespace-pre-wrap break-words text-text-muted tr-text-ui">
+												{draft.thoughtText}
+											</p>
+											<ImageList images={draft.thoughtImages} />
+										</article>
+									) : null}
+									{draft?.assistantText || draft?.assistantImages.length ? (
+										<article
+											data-testid="acp-assistant-draft"
+											aria-live="polite"
+											className="mr-auto flex w-full min-w-0 flex-col gap-4 rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
+										>
+											<span className="text-text-muted tr-text-metadata">
+												{t("acp.chat.role.assistant")}
+											</span>
+											<p className="whitespace-pre-wrap break-words text-text-default tr-text-ui">
+												{draft.assistantText}
+											</p>
+											<ImageList images={draft.assistantImages} />
+										</article>
+									) : null}
+									{snapshot.toolCalls.length > 0 ? (
+										<section className="flex min-w-0 flex-col gap-8">
+											<h3 className="tr-title-compact text-text-default">{t("acp.chat.tools")}</h3>
+											<ul className="flex min-w-0 flex-col gap-4">
+												{snapshot.toolCalls.map((toolCall) => (
+													<ToolCallRow key={toolCall.id} toolCall={toolCall} />
+												))}
+											</ul>
+										</section>
+									) : null}
+									{snapshot.plan.length > 0 ? (
+										<section className="flex min-w-0 flex-col gap-8">
+											<h3 className="tr-title-compact text-text-default">{t("acp.chat.plan")}</h3>
+											<ul className="flex min-w-0 flex-col gap-4">
+												{snapshot.plan.map((entry, index) => (
+													<li
+														key={`${index}-${entry.content}`}
+														className="flex min-w-0 flex-wrap items-start gap-8 rounded-sm border border-border-default px-12 py-8"
+													>
+														<span className="min-w-0 flex-1 break-words whitespace-pre-wrap tr-text-ui text-text-default">
+															{entry.content}
+														</span>
+														<span className="shrink-0 text-text-muted tr-text-metadata">
+															{t(planStateKey(entry.status))}
+														</span>
+													</li>
+												))}
+											</ul>
+										</section>
+									) : null}
+									{snapshot.availableCommands.length > 0 ? (
+										<details className="rounded-sm border border-border-default px-12 py-8">
+											<summary className="cursor-pointer text-text-muted tr-text-metadata">
+												{t("acp.chat.commands")}
+											</summary>
+											<ul className="mt-8 flex min-w-0 flex-wrap gap-6">
+												{snapshot.availableCommands.map((command) => (
+													<li
+														key={command.name}
+														className="max-w-full break-words rounded-full border border-border-default bg-control-bg px-8 py-4 tr-code-text text-text-muted"
+													>
+														{command.name}
+													</li>
+												))}
+											</ul>
+										</details>
+									) : null}
+									{snapshot.usage ? (
+										<p className="text-text-muted tr-text-metadata">
+											{snapshot.usage.cost
+												? t("acp.chat.usageCost", {
+														used: snapshot.usage.used.toLocaleString(),
+														size: snapshot.usage.size.toLocaleString(),
+														cost: `${snapshot.usage.cost.amount.toLocaleString()} ${snapshot.usage.cost.currency}`,
+													})
+												: t("acp.chat.usage", {
+														used: snapshot.usage.used.toLocaleString(),
+														size: snapshot.usage.size.toLocaleString(),
+													})}
+										</p>
+									) : null}
+								</>
+							)}
 						</div>
 					</QuietScrollArea>
 
@@ -567,69 +833,70 @@ export function AcpChatPane({
 						</section>
 					) : null}
 
-					{configOptions.some((option) => option.category !== "model") ? (
-						<div className="flex min-w-0 flex-wrap gap-8 border-t border-border-default px-12 py-8">
-							{configOptions
-								.filter((option) => option.category !== "model")
-								.map((option) => (
-									<ConfigControl
-										key={option.id}
-										workspaceId={workspaceId}
-										sessionId={sessionId}
-										option={option}
-										onError={actionFailed}
+					<div className="border-t border-border-default bg-container-content-bg px-16 py-12">
+						<form
+							onSubmit={(event) => {
+								event.preventDefault();
+								void send();
+							}}
+							className="mx-auto flex w-full max-w-896 min-w-0 flex-col gap-8 rounded-sm border border-border-default bg-control-bg p-8 focus-within:border-control-border-active"
+						>
+							<AcpImageChips controller={attachments} />
+							<input
+								ref={imageInputRef}
+								type="file"
+								accept="image/png,image/jpeg,image/gif,image/webp"
+								multiple
+								hidden
+								onChange={(event) => {
+									const files = [...(event.currentTarget.files ?? [])];
+									event.currentTarget.value = "";
+									attachments.addFiles(files);
+								}}
+							/>
+							<label htmlFor={`acp-prompt-${tabId}`} className="sr-only">
+								{t("acp.chat.promptLabel")}
+							</label>
+							<Textarea
+								id={`acp-prompt-${tabId}`}
+								data-testid="acp-prompt"
+								value={text}
+								onChange={(event) => setText(event.currentTarget.value)}
+								onKeyDown={submitOnShortcut}
+								onPaste={imageHandlers.onPaste}
+								onDrop={imageHandlers.onDrop}
+								onDragOver={(event) => event.preventDefault()}
+								rows={3}
+								maxLength={100_000}
+								disabled={!supported || isBlocked}
+								placeholder={t("acp.chat.promptPlaceholder")}
+								className="max-h-192 min-h-64 w-full min-w-0 resize-none border-0 bg-transparent px-0 py-0 shadow-none focus-visible:ring-0 tr-text-ui"
+							/>
+							<div className="flex flex-col-reverse gap-8 sm:flex-row sm:items-center sm:justify-between">
+								<div className="flex min-w-0 items-center gap-6">
+									<IconButton
+										icon={RiImageAddLine}
+										label={t("acp.chat.attachImage")}
+										onClick={() => imageInputRef.current?.click()}
+										disabled={!supported || isBlocked}
+										data-testid="acp-attach-image"
 									/>
-								))}
-						</div>
-					) : null}
-
-					<form
-						onSubmit={(event) => {
-							event.preventDefault();
-							void send();
-						}}
-						className="flex min-w-0 flex-col gap-8 border-t border-border-default px-12 py-8"
-					>
-						<label htmlFor={`acp-prompt-${tabId}`} className="sr-only">
-							{t("acp.chat.promptLabel")}
-						</label>
-						<Textarea
-							id={`acp-prompt-${tabId}`}
-							data-testid="acp-prompt"
-							value={text}
-							onChange={(event) => setText(event.currentTarget.value)}
-							onKeyDown={submitOnShortcut}
-							rows={3}
-							maxLength={100_000}
-							disabled={
-								!supported ||
-								snapshot.summary.state === "running" ||
-								snapshot.summary.state === "interrupted" ||
-								snapshot.permission !== null ||
-								sending
-							}
-							placeholder={t("acp.chat.promptPlaceholder")}
-							className="max-h-192 min-h-64 w-full min-w-0 resize-y px-8 py-8 tr-text-ui"
-						/>
-						<div className="flex flex-col-reverse gap-8 sm:flex-row sm:items-center sm:justify-between">
-							<p className="text-text-muted tr-text-metadata">{t("acp.chat.promptHint")}</p>
-							<Button
-								type="submit"
-								variant="primary"
-								size="m"
-								disabled={
-									!supported ||
-									snapshot.summary.state === "running" ||
-									snapshot.summary.state === "interrupted" ||
-									snapshot.permission !== null ||
-									sending ||
-									text.trim().length === 0
-								}
-							>
-								{sending ? t("acp.chat.sending") : t("acp.chat.send")}
-							</Button>
-						</div>
-					</form>
+									<p className="truncate text-text-muted tr-text-metadata">
+										{t("acp.chat.promptHint")}
+									</p>
+								</div>
+								<Button
+									type="submit"
+									variant="primary"
+									size="m"
+									iconLeft={RiSendPlane2Line}
+									disabled={!supported || isBlocked || !hasContent}
+								>
+									{sending ? t("acp.chat.sending") : t("acp.chat.send")}
+								</Button>
+							</div>
+						</form>
+					</div>
 				</>
 			) : null}
 

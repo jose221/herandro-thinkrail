@@ -46,6 +46,7 @@ import {
 	customMessageText,
 	DEFAULT_CONFIG,
 	isAcpClientCatalog,
+	isAcpStartTimeoutMs,
 	isBackgroundCommandCompletionMessage,
 	isControlMessage,
 	isLineWidth,
@@ -1087,6 +1088,7 @@ interface AppState {
 	agentReviewEnabled: boolean;
 	disabledExtensions: string[];
 	acpClients: AcpClientConfig[];
+	acpStartTimeoutMs: number;
 	locale: string;
 	localLocales: LocalLocalesSnapshot | null;
 	installLocalLocales: (snapshot: LocalLocalesSnapshot | null) => void;
@@ -1476,6 +1478,9 @@ function configPatch(config: AppConfig) {
 		acpClients: isAcpClientCatalog(config.acpClients)
 			? config.acpClients.map((client) => ({ ...client, args: [...client.args] }))
 			: DEFAULT_CONFIG.acpClients.map((client) => ({ ...client, args: [...client.args] })),
+		acpStartTimeoutMs: isAcpStartTimeoutMs(config.acpStartTimeoutMs)
+			? config.acpStartTimeoutMs
+			: DEFAULT_CONFIG.acpStartTimeoutMs,
 		locale: isLocalePreference(config.locale) ? config.locale : DEFAULT_CONFIG.locale,
 		onboardingDismissed: config.onboardingDismissed === true,
 	};
@@ -2359,6 +2364,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 	agentReviewEnabled: DEFAULT_CONFIG.agentReviewEnabled,
 	disabledExtensions: DEFAULT_CONFIG.disabledExtensions,
 	acpClients: DEFAULT_CONFIG.acpClients.map((client) => ({ ...client, args: [...client.args] })),
+	acpStartTimeoutMs: DEFAULT_CONFIG.acpStartTimeoutMs,
 	locale: DEFAULT_CONFIG.locale,
 	localLocales: null,
 	installLocalLocales: (snapshot) => set({ localLocales: snapshot }),

@@ -1,8 +1,8 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { promises as fs, constants as fsConstants } from "node:fs";
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { accessSync, promises as fs, constants as fsConstants, statSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import {
@@ -17,6 +17,8 @@ import {
 } from "@agentclientprotocol/sdk";
 import * as AcpV2 from "@agentclientprotocol/sdk/experimental/v2";
 import {
+	ACP_START_TIMEOUT_MAX_MS,
+	ACP_START_TIMEOUT_MIN_MS,
 	type AcpAuthMethodSummary,
 	type AcpAuthTerminalEvent,
 	type AcpAvailableCommand,
@@ -33,6 +35,7 @@ import {
 	type AcpToolCallSummary,
 	type AcpTranscriptEntry,
 	type AcpUsage,
+	DEFAULT_ACP_START_TIMEOUT_MS,
 	IMAGE_MAX_BASE64_BYTES,
 	type ImageContent,
 	isAcpClientConfig,
@@ -44,7 +47,6 @@ import { loadAcpSessionData, saveAcpSessionData } from "../persistence";
 
 const ACP_V1 = 1;
 const ACP_V2 = 2;
-const ACP_START_TIMEOUT_MS = 15_000;
 const ACP_AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 const ACP_AUTH_TERMINAL_TIMEOUT_MS = 15 * 60 * 1000;
 const ACP_AUTH_TERMINAL_OUTPUT_LIMIT = 8 * 1024 * 1024;
@@ -219,6 +221,7 @@ interface AuthTerminal {
 
 export interface AcpSessionManagerOptions {
 	getClient: (id: string) => AcpClientConfig | undefined;
+	getStartTimeout?: () => number;
 	resolveWorkspaceCwd: (workspaceId: string) => string;
 	publish: (event: AcpSessionEvent) => void;
 	publishAuthTerminal: (clientKey: string, event: AcpAuthTerminalEvent) => boolean;
@@ -228,6 +231,25 @@ export interface AcpSessionManagerOptions {
 const log = logger("acp");
 
 class UnsupportedAcpProtocolError extends Error {}
+
+class AcpTimeoutError extends Error {
+	constructor(readonly timeoutMs: number) {
+		super(`ACP request timed out after ${timeoutMs} ms.`);
+		this.name = "AcpTimeoutError";
+	}
+}
+
+class AcpExecutableUnavailableError extends Error {
+	constructor() {
+		super("ACP executable is unavailable.");
+		this.name = "AcpExecutableUnavailableError";
+	}
+}
+
+function normalizeAcpStartTimeout(value: number): number {
+	if (!Number.isFinite(value)) return DEFAULT_ACP_START_TIMEOUT_MS;
+	return Math.min(ACP_START_TIMEOUT_MAX_MS, Math.max(ACP_START_TIMEOUT_MIN_MS, Math.trunc(value)));
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -615,6 +637,39 @@ function hasControlCharacter(value: string): boolean {
 function isExecutableUnavailable(error: Error): boolean {
 	const code = "code" in error && typeof error.code === "string" ? error.code : undefined;
 	return ["EACCES", "ENOENT", "ENOTDIR"].includes(code ?? "");
+}
+
+function resolveExecutable(command: string): string | null {
+	const windows = process.platform === "win32";
+	const inspect = (candidate: string): string | null => {
+		try {
+			accessSync(candidate, windows ? fsConstants.F_OK : fsConstants.X_OK);
+			if (!statSync(candidate).isFile()) return null;
+			return candidate;
+		} catch {
+			return null;
+		}
+	};
+	if (isAbsolute(command) || command.includes("/") || command.includes("\\")) {
+		return inspect(command);
+	}
+	const extensions = windows
+		? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+		: [""];
+	const directories = (process.env.PATH ?? "").split(delimiter);
+	for (const entry of directories) {
+		const directory = entry.replace(/^"(.*)"$/, "$1");
+		if (!directory) continue;
+		for (const extension of extensions) {
+			const found = inspect(join(directory, `${command}${extension}`));
+			if (found) return found;
+		}
+		if (windows) {
+			const found = inspect(join(directory, command));
+			if (found) return found;
+		}
+	}
+	return null;
 }
 
 function cleanAuthLabel(value: unknown, maxLength: number): string | null {
@@ -1058,6 +1113,12 @@ export class AcpSessionManager {
 		}
 	}
 
+	private startTimeoutMs(): number {
+		return normalizeAcpStartTimeout(
+			this.options.getStartTimeout?.() ?? DEFAULT_ACP_START_TIMEOUT_MS,
+		);
+	}
+
 	list(workspaceId: string): AcpSessionSummary[] {
 		if (this.removingWorkspaces.has(workspaceId)) return [];
 		return [...this.records.values()]
@@ -1087,8 +1148,14 @@ export class AcpSessionManager {
 			if (error instanceof UnsupportedAcpProtocolError) {
 				return { available: false, issue: "protocol" };
 			}
-			log.warn("ACP client handshake failed");
-			return { available: false, issue: executableUnavailable ? "executable" : "handshake" };
+			if (error instanceof AcpTimeoutError) {
+				return { available: false, issue: "timeout" };
+			}
+			if (error instanceof AcpExecutableUnavailableError || executableUnavailable) {
+				return { available: false, issue: "executable" };
+			}
+			log.warn("ACP client handshake failed", error);
+			return { available: false, issue: "handshake" };
 		} finally {
 			if (connection) await this.closeChild(connection);
 		}
@@ -1150,8 +1217,8 @@ export class AcpSessionManager {
 			);
 			this.assertCurrentAuthClient(config);
 			return { ok: true };
-		} catch {
-			log.warn("ACP client authentication failed");
+		} catch (error) {
+			log.warn("ACP client authentication failed", error);
 			throw new Error("ACP sign-in failed. Return to Settings and try again.");
 		} finally {
 			try {
@@ -1358,10 +1425,11 @@ export class AcpSessionManager {
 				throw new Error("Enable this ACP client in Settings before listing its models.");
 			}
 			const cwd = this.options.resolveWorkspaceCwd(workspaceId);
+			const timeoutMs = this.startTimeoutMs();
 			let connection: ConnectedAcp | undefined;
 			try {
 				connection = await this.connectClient(config, cwd);
-				const created = await this.createAgentSession(connection, cwd);
+				const created = await this.createAgentSession(connection, cwd, timeoutMs);
 				return created.configOptions
 					.filter((option) => option.category === "model")
 					.slice(0, ACP_CONFIG_OPTION_LIMIT)
@@ -1370,8 +1438,8 @@ export class AcpSessionManager {
 						options: option.options.slice(0, ACP_MODEL_OPTION_VALUES_LIMIT),
 					}))
 					.filter((option) => option.options.length > 0);
-			} catch {
-				log.warn("ACP model catalog discovery failed");
+			} catch (error) {
+				log.warn("ACP model catalog discovery failed", error);
 				throw new Error(
 					`Could not list models from ${config.name}. Check that its ACP adapter is installed and configured.`,
 				);
@@ -1388,6 +1456,7 @@ export class AcpSessionManager {
 				throw new Error("Enable this ACP client in Settings before starting a chat.");
 			this.ensureSessionCapacity();
 			const cwd = this.options.resolveWorkspaceCwd(workspaceId);
+			const timeoutMs = this.startTimeoutMs();
 			const now = Date.now();
 			const sessionId = `acp_${randomUUID()}`;
 			const summary: AcpSessionSummary = {
@@ -1410,7 +1479,7 @@ export class AcpSessionManager {
 			this.records.set(sessionId, record);
 			try {
 				const { live, initialized } = await this.openSession(record, config, cwd);
-				const created = await this.createAgentSession(live.connection, cwd);
+				const created = await this.createAgentSession(live.connection, cwd, timeoutMs);
 				live.agentSessionId = created.sessionId;
 				record.agentSessionId = created.sessionId;
 				record.canLoadSession = initialized.canResumeSession;
@@ -1430,7 +1499,17 @@ export class AcpSessionManager {
 				this.persist();
 				if (error instanceof Error && error.message.startsWith("Authenticate with")) throw error;
 				if (error instanceof UnsupportedAcpProtocolError) throw error;
-				log.warn("ACP session creation failed");
+				if (error instanceof AcpTimeoutError) {
+					throw new Error(
+						`Could not start ${config.name} within ${Math.round(error.timeoutMs / 1000)} seconds. Increase the ACP start timeout in Settings → ACP or check the adapter.`,
+					);
+				}
+				if (error instanceof AcpExecutableUnavailableError) {
+					throw new Error(
+						`Could not start ${config.name}. Check that its ACP adapter is installed and available on the ThinkRail host PATH.`,
+					);
+				}
+				log.warn("ACP session creation failed", error);
 				throw new Error(
 					`Could not start ${config.name}. Check that its ACP adapter is installed and configured.`,
 				);
@@ -1470,13 +1549,19 @@ export class AcpSessionManager {
 			);
 		}
 		const cwd = this.options.resolveWorkspaceCwd(record.snapshot.summary.workspaceId);
+		const timeoutMs = this.startTimeoutMs();
 		const { live, initialized } = await this.openSession(record, config, cwd);
 		try {
 			if (!initialized.canResumeSession) {
 				throw new Error("This ACP agent no longer supports session restoration.");
 			}
 			live.v2StateUpdateReceived = false;
-			const loaded = await this.resumeAgentSession(live.connection, cwd, record.agentSessionId);
+			const loaded = await this.resumeAgentSession(
+				live.connection,
+				cwd,
+				record.agentSessionId,
+				timeoutMs,
+			);
 			live.booleanConfigOptionIds = new Set(loaded.booleanConfigOptionIds);
 			this.applySessionSetup(record, loaded);
 			if (live.connection.version === ACP_V1 || !live.v2StateUpdateReceived) {
@@ -2160,27 +2245,40 @@ export class AcpSessionManager {
 	}
 
 	private spawnChild(config: AcpClientConfig, cwd: string): ChildProcess {
-		const child = spawn(config.command, config.args, {
-			cwd,
-			env: process.env,
-			shell: false,
-			windowsHide: true,
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		child.stderr.setEncoding("utf8");
-		child.stderr.on("data", () => {});
-		return child;
+		const executable = resolveExecutable(config.command);
+		if (!executable) throw new AcpExecutableUnavailableError();
+		try {
+			const child = spawn(executable, config.args, {
+				cwd,
+				env: process.env,
+				shell: false,
+				windowsHide: true,
+				stdio: ["pipe", "pipe", "pipe"],
+			});
+			child.stderr.setEncoding("utf8");
+			child.stderr.on("data", () => {});
+			return child;
+		} catch (error) {
+			if (error instanceof Error && isExecutableUnavailable(error)) {
+				throw new AcpExecutableUnavailableError();
+			}
+			throw error;
+		}
 	}
 
 	private spawnV1Connection(
 		config: AcpClientConfig,
 		cwd: string,
 		app: ClientApp = client(),
+		onChildError?: (error: Error) => void,
 	): Extract<WireConnection, { version: typeof ACP_V1 }> {
 		const child = this.spawnChild(config, cwd);
 		const stream = ndJsonStream(Writable.toWeb(child.stdin), readableWebStream(child.stdout));
 		const connection = app.connect(stream);
-		child.once("error", () => connection.close());
+		child.once("error", (error) => {
+			onChildError?.(error);
+			connection.close();
+		});
 		return { version: ACP_V1, child, connection };
 	}
 
@@ -2188,11 +2286,15 @@ export class AcpSessionManager {
 		config: AcpClientConfig,
 		cwd: string,
 		app: AcpV2.ClientApp = AcpV2.client(),
+		onChildError?: (error: Error) => void,
 	): Extract<WireConnection, { version: typeof ACP_V2 }> {
 		const child = this.spawnChild(config, cwd);
 		const stream = AcpV2.ndJsonStream(Writable.toWeb(child.stdin), readableWebStream(child.stdout));
 		const connection = app.connect(stream);
-		child.once("error", () => connection.close());
+		child.once("error", (error) => {
+			onChildError?.(error);
+			connection.close();
+		});
 		return { version: ACP_V2, child, connection };
 	}
 
@@ -2201,67 +2303,51 @@ export class AcpSessionManager {
 		cwd: string,
 		version: AcpProtocolVersion,
 		apps?: { v1?: ClientApp; v2?: AcpV2.ClientApp },
+		onChildError?: (error: Error) => void,
 	): WireConnection {
 		return version === ACP_V1
-			? this.spawnV1Connection(config, cwd, apps?.v1)
-			: this.spawnV2Connection(config, cwd, apps?.v2);
+			? this.spawnV1Connection(config, cwd, apps?.v1, onChildError)
+			: this.spawnV2Connection(config, cwd, apps?.v2, onChildError);
 	}
 
-	private async detectProtocolVersion(
+	private shouldTryNextProtocol(error: unknown, isCancelled?: () => boolean): boolean {
+		if (isCancelled?.()) return false;
+		return !(
+			error instanceof AcpExecutableUnavailableError ||
+			error instanceof AcpTimeoutError ||
+			error instanceof UnsupportedAcpProtocolError
+		);
+	}
+
+	private async startConnection(
 		config: AcpClientConfig,
 		cwd: string,
-		onChildError?: (error: Error) => void,
-		onConnection?: (connection: WireConnection) => void,
-		isCancelled?: () => boolean,
-		cancelledPromise?: Promise<never>,
-	): Promise<AcpProtocolVersion | null> {
+		version: AcpProtocolVersion,
+		apps: { v1?: ClientApp; v2?: AcpV2.ClientApp } | undefined,
+		onChildError: ((error: Error) => void) | undefined,
+		onConnection: ((connection: WireConnection) => void) | undefined,
+		isCancelled: (() => boolean) | undefined,
+		cancelledPromise: Promise<never> | undefined,
+		timeoutMs: number,
+	): Promise<ConnectedAcp> {
 		if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-		const signature = sessionSignature(config);
-		if (this.protocolVersions.has(signature)) return this.protocolVersions.get(signature) ?? null;
-		let executableUnavailable = false;
-		const childError = (error: Error) => {
-			executableUnavailable ||= isExecutableUnavailable(error);
+		let spawnError: Error | undefined;
+		const connection = this.spawnConnection(config, cwd, version, apps, (error) => {
+			spawnError = error;
 			onChildError?.(error);
-		};
-		let v1Error: unknown;
-		const probeV1 = this.spawnV1Connection(config, cwd);
-		onConnection?.(probeV1);
-		probeV1.child.once("error", childError);
+		});
+		onConnection?.(connection);
 		try {
 			if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-			const initialized = await this.initializeConnection(probeV1, cancelledPromise);
+			const initialized = await this.initializeConnection(connection, timeoutMs, cancelledPromise);
 			if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-			if (initialized.protocolVersion === ACP_V1 || initialized.protocolVersion === ACP_V2) {
-				this.protocolVersions.set(signature, initialized.protocolVersion);
-				return initialized.protocolVersion;
-			}
-			this.protocolVersions.set(signature, null);
-			return null;
+			return { ...connection, initialized };
 		} catch (error) {
-			v1Error = error;
-		} finally {
-			await this.closeChild(probeV1);
-		}
-
-		if (executableUnavailable) throw v1Error ?? new Error("ACP executable is unavailable.");
-		if (isCancelled?.()) throw v1Error ?? new Error("ACP connection start was cancelled.");
-		const probeV2 = this.spawnV2Connection(config, cwd);
-		onConnection?.(probeV2);
-		probeV2.child.once("error", childError);
-		try {
-			if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-			const initialized = await this.initializeConnection(probeV2, cancelledPromise);
-			if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-			if (initialized.protocolVersion === ACP_V2) {
-				this.protocolVersions.set(signature, ACP_V2);
-				return ACP_V2;
+			await this.closeChild(connection);
+			if (spawnError && isExecutableUnavailable(spawnError)) {
+				throw new AcpExecutableUnavailableError();
 			}
-			this.protocolVersions.set(signature, null);
-			return null;
-		} catch (error) {
-			throw v1Error ?? error;
-		} finally {
-			await this.closeChild(probeV2);
+			throw error;
 		}
 	}
 
@@ -2274,39 +2360,83 @@ export class AcpSessionManager {
 		isCancelled?: () => boolean,
 		cancelledPromise?: Promise<never>,
 	): Promise<ConnectedAcp> {
-		for (let attempt = 0; attempt < 2; attempt++) {
-			if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-			const version = await this.detectProtocolVersion(
+		const signature = sessionSignature(config);
+		const timeoutMs = this.startTimeoutMs();
+		const cached = this.protocolVersions.get(signature);
+
+		if (cached === ACP_V1 || cached === ACP_V2) {
+			try {
+				const connected = await this.startConnection(
+					config,
+					cwd,
+					cached,
+					apps,
+					onChildError,
+					onConnection,
+					isCancelled,
+					cancelledPromise,
+					timeoutMs,
+				);
+				if (connected.initialized.protocolVersion === cached) return connected;
+				await this.closeChild(connected);
+				this.protocolVersions.delete(signature);
+			} catch (error) {
+				if (!this.shouldTryNextProtocol(error, isCancelled)) throw error;
+				this.protocolVersions.delete(signature);
+				log.warn("ACP cached protocol handshake failed; probing again", error);
+			}
+		}
+
+		let v1Error: unknown;
+		try {
+			const connected = await this.startConnection(
 				config,
 				cwd,
+				ACP_V1,
+				apps,
 				onChildError,
 				onConnection,
 				isCancelled,
 				cancelledPromise,
+				timeoutMs,
 			);
-			if (version === null) throw new UnsupportedAcpProtocolError("ACP v1 or v2 is required.");
-			const connection = this.spawnConnection(config, cwd, version, apps);
-			onConnection?.(connection);
-			if (onChildError) connection.child.once("error", onChildError);
-			try {
-				if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-				const initialized = await this.initializeConnection(connection, cancelledPromise);
-				if (isCancelled?.()) throw new Error("ACP connection start was cancelled.");
-				if (initialized.protocolVersion === version) {
-					return { ...connection, initialized };
-				}
-				this.protocolVersions.delete(sessionSignature(config));
-				await this.closeChild(connection);
-			} catch (error) {
-				await this.closeChild(connection);
-				throw error;
+			if (connected.initialized.protocolVersion === ACP_V1) {
+				this.protocolVersions.set(signature, ACP_V1);
+				return connected;
 			}
+			await this.closeChild(connected);
+		} catch (error) {
+			if (!this.shouldTryNextProtocol(error, isCancelled)) throw error;
+			v1Error = error;
 		}
-		throw new UnsupportedAcpProtocolError("The ACP protocol version changed during connection.");
+
+		try {
+			const connected = await this.startConnection(
+				config,
+				cwd,
+				ACP_V2,
+				apps,
+				onChildError,
+				onConnection,
+				isCancelled,
+				cancelledPromise,
+				timeoutMs,
+			);
+			if (connected.initialized.protocolVersion === ACP_V2) {
+				this.protocolVersions.set(signature, ACP_V2);
+				return connected;
+			}
+			await this.closeChild(connected);
+		} catch (error) {
+			if (!this.shouldTryNextProtocol(error, isCancelled)) throw error;
+			throw v1Error ?? error;
+		}
+		throw new UnsupportedAcpProtocolError("ACP v1 or v2 is required.");
 	}
 
 	private async initializeConnection(
 		connection: WireConnection,
+		timeoutMs: number,
 		cancelledPromise?: Promise<never>,
 	): Promise<AcpInitialization> {
 		if (connection.version === ACP_V1) {
@@ -2322,7 +2452,7 @@ export class AcpSessionManager {
 					},
 					clientInfo: { name: "ThinkRail", version: this.options.clientVersion },
 				}),
-				ACP_START_TIMEOUT_MS,
+				timeoutMs,
 				cancelledPromise,
 			);
 			return {
@@ -2337,7 +2467,7 @@ export class AcpSessionManager {
 				info: { name: "ThinkRail", version: this.options.clientVersion },
 				capabilities: { auth: { terminal: {} } },
 			}),
-			ACP_START_TIMEOUT_MS,
+			timeoutMs,
 			cancelledPromise,
 		);
 		return {
@@ -2349,7 +2479,7 @@ export class AcpSessionManager {
 
 	private async requestWithTimeout<T>(
 		promise: Promise<T>,
-		timeoutMs = ACP_START_TIMEOUT_MS,
+		timeoutMs: number,
 		cancelledPromise?: Promise<never>,
 	): Promise<T> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2357,7 +2487,7 @@ export class AcpSessionManager {
 			const pending: Promise<T>[] = [
 				promise,
 				new Promise<never>((_resolve, reject) => {
-					timer = setTimeout(() => reject(new Error("ACP request timed out")), timeoutMs);
+					timer = setTimeout(() => reject(new AcpTimeoutError(timeoutMs)), timeoutMs);
 				}),
 			];
 			if (cancelledPromise) pending.push(cancelledPromise);
@@ -2370,15 +2500,18 @@ export class AcpSessionManager {
 	private async createAgentSession(
 		connection: ConnectedAcp,
 		cwd: string,
+		timeoutMs: number,
 	): Promise<NormalizedSessionSetup> {
 		if (connection.version === ACP_V1) {
 			const setup = await this.requestWithTimeout(
 				connection.connection.agent.request(methods.agent.session.new, { cwd, mcpServers: [] }),
+				timeoutMs,
 			);
 			return normalizeV1SessionSetup(setup);
 		}
 		const setup = await this.requestWithTimeout(
 			connection.connection.agent.request(AcpV2.methods.agent.session.new, { cwd, mcpServers: [] }),
+			timeoutMs,
 		);
 		return normalizeV2SessionSetup(setup.sessionId, setup);
 	}
@@ -2387,6 +2520,7 @@ export class AcpSessionManager {
 		connection: ConnectedAcp,
 		cwd: string,
 		sessionId: string,
+		timeoutMs: number,
 	): Promise<NormalizedSessionSetup> {
 		if (connection.version === ACP_V1) {
 			const setup = await this.requestWithTimeout(
@@ -2395,6 +2529,7 @@ export class AcpSessionManager {
 					sessionId,
 					mcpServers: [],
 				}),
+				timeoutMs,
 			);
 			return normalizeV1SessionSetup({ ...setup, sessionId });
 		}
@@ -2404,6 +2539,7 @@ export class AcpSessionManager {
 				sessionId,
 				mcpServers: [],
 			}),
+			timeoutMs,
 		);
 		return normalizeV2SessionSetup(sessionId, setup);
 	}

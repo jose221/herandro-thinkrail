@@ -20,6 +20,10 @@ import { AcpSessionManager } from "./runtime";
 
 const fakeAgent = `
 import { appendFileSync } from "node:fs";
+const auditStart = process.argv.indexOf("--audit-start");
+if (auditStart >= 0) appendFileSync(process.argv[auditStart + 1], "started\\n");
+const initDelayIndex = process.argv.indexOf("--init-delay");
+const initDelayMs = initDelayIndex >= 0 ? Number(process.argv[initDelayIndex + 1]) : 0;
 let buffered = "";
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 const options = process.argv.includes("--large-config")
@@ -51,9 +55,12 @@ if (process.argv.includes("--large-config")) {
   options[31].name = "x".repeat(300);
 }
 const auditClose = process.argv.indexOf("--audit-close");
+const recordClose = () => {
+  if (auditClose >= 0) appendFileSync(process.argv[auditClose + 1], "closed\\n");
+};
 if (auditClose >= 0) {
   process.on("SIGTERM", () => {
-    appendFileSync(process.argv[auditClose + 1], "closed\\n");
+    recordClose();
     process.exit(0);
   });
 }
@@ -66,7 +73,9 @@ process.stdin.on("data", (chunk) => {
     buffered = buffered.slice(newline + 1);
     const message = JSON.parse(line);
     if (message.method === "initialize") {
-      send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1 } });
+      const result = { jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1 } };
+      if (initDelayMs > 0) setTimeout(() => send(result), initDelayMs);
+      else send(result);
     } else if (message.method === "session/new") {
       const result = {
         jsonrpc: "2.0",
@@ -143,7 +152,10 @@ process.stdin.on("data", (chunk) => {
     }
   }
 });
-process.stdin.on("end", () => process.exit(0));
+process.stdin.on("end", () => {
+  recordClose();
+  process.exit(0);
+});
 `;
 
 const fakeAuthAgent = `
@@ -1141,6 +1153,65 @@ test("keeps persisted ACP history when a restart interrupts a pending permission
 	} finally {
 		await manager.closeAll();
 		await recovered?.closeAll();
+	}
+});
+
+test("reports an ACP start timeout distinctly", async () => {
+	tempDirectory = mkdtempSync(join(tmpdir(), "thinkrail-acp-timeout-"));
+	previousDataDirectory = process.env.THINKRAIL_DATA_DIR;
+	process.env.THINKRAIL_DATA_DIR = join(tempDirectory, "data");
+	const agentPath = join(tempDirectory, "fake-agent.mjs");
+	writeFileSync(agentPath, fakeAgent);
+	const config = {
+		id: "slow-agent",
+		name: "Slow ACP agent",
+		command: process.execPath,
+		args: [agentPath, "--init-delay", "1500"],
+		enabled: true,
+	};
+	const manager = new AcpSessionManager({
+		getClient: (id) => (id === config.id ? config : undefined),
+		getStartTimeout: () => 1_000,
+		resolveWorkspaceCwd: () => tempDirectory,
+		publish: () => {},
+		publishAuthTerminal: () => true,
+		clientVersion: "test",
+	});
+
+	try {
+		expect(await manager.checkClient(config.id)).toEqual({ available: false, issue: "timeout" });
+	} finally {
+		await manager.closeAll();
+	}
+});
+
+test("reuses the first successful ACP connection instead of probing twice", async () => {
+	tempDirectory = mkdtempSync(join(tmpdir(), "thinkrail-acp-single-spawn-"));
+	previousDataDirectory = process.env.THINKRAIL_DATA_DIR;
+	process.env.THINKRAIL_DATA_DIR = join(tempDirectory, "data");
+	const agentPath = join(tempDirectory, "fake-agent.mjs");
+	const auditPath = join(tempDirectory, "starts.txt");
+	writeFileSync(agentPath, fakeAgent);
+	const config = {
+		id: "single-spawn",
+		name: "Single spawn agent",
+		command: process.execPath,
+		args: [agentPath, "--audit-start", auditPath],
+		enabled: true,
+	};
+	const manager = new AcpSessionManager({
+		getClient: (id) => (id === config.id ? config : undefined),
+		resolveWorkspaceCwd: () => tempDirectory,
+		publish: () => {},
+		publishAuthTerminal: () => true,
+		clientVersion: "test",
+	});
+
+	try {
+		expect((await manager.create("workspace", config.id)).summary.state).toBe("idle");
+		expect(readFileSync(auditPath, "utf8").trim().split("\n")).toEqual(["started"]);
+	} finally {
+		await manager.closeAll();
 	}
 });
 

@@ -83,7 +83,9 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
 - **`AppConfig.acpClients`** is a host-wide, user-owned catalog with at most 32 unique stable ids. The
   `isAcpClientConfig` / `isAcpClientCatalog` guards bound names, executable paths, argument counts and
   lengths, reject NUL bytes and unknown fields, and keep launch configuration as argv rather than a shell
-  command string. Defaults name Droid's ACP CLI and the third-party `antigravity-acp` adapter. The separate
+  command string. Defaults name Droid's ACP CLI and the third-party `antigravity-acp` adapter. A host-wide
+  `acpStartTimeoutMs` (default 120 s, bounded 1 s–10 min) bounds adapter process start, initialization,
+  and session setup; `ACP_START_TIMEOUT_PROTOCOL_VERSION` (v104) gates sending or saving it. The separate
   `AcpSession*` contracts, `acp.*` methods and `acp.event` channel never reuse Pi ids or transcript types;
   `ACP_PROTOCOL_VERSION` (v96) gates those operations. The explicit `acp.client.models` Settings request,
   gated at `ACP_MODEL_CATALOG_PROTOCOL_VERSION` (v99), opens a temporary per-client ACP session and

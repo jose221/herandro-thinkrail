@@ -11,8 +11,8 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { type AttachedImage, fileToAttachedImage } from "../components/imageAttachment";
 import { FileChip } from "./FileChip";
-import { type AttachedImage, fileToAttachedImage } from "./imageAttachment";
 import type { ChatAttachment } from "./types";
 
 export interface PromptImage extends AttachedImage {
@@ -80,7 +80,7 @@ export function usePromptImages(): PromptImagesController {
 			const startedGeneration = generation.current;
 			setPending((n) => n + picked.length);
 			const decode = async () => {
-				const settled = await Promise.allSettled(picked.map(fileToAttachedImage));
+				const settled = await Promise.allSettled(picked.map((file) => fileToAttachedImage(file)));
 				if (startedGeneration !== generation.current) return;
 				let used = imagesRef.current.reduce((sum, p) => sum + p.content.data.length, 0);
 				const additions: PromptImage[] = [];

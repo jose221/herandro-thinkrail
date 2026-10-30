@@ -2,15 +2,19 @@ import { describe, expect, test } from "bun:test";
 import {
 	ACCEPTED_IMAGE_TYPES,
 	ACP_CLIENTS_LIMIT,
+	ACP_START_TIMEOUT_MAX_MS,
+	ACP_START_TIMEOUT_MIN_MS,
 	base64EncodedLength,
 	clampToCodePoints,
 	DEFAULT_ACP_CLIENTS,
+	DEFAULT_ACP_START_TIMEOUT_MS,
 	DEFAULT_CONFIG,
 	FIRST_PROMPT_MAX_LENGTH,
 	firstPromptHead,
 	firstPromptOfTexts,
 	IMAGE_MAX_BASE64_BYTES,
 	isAcpClientCatalog,
+	isAcpStartTimeoutMs,
 	isDelegationRunDetails,
 	isJbcentralConnected,
 	isJbcentralQuotaRefreshSeconds,
@@ -27,6 +31,17 @@ describe("ACP client catalog", () => {
 	test("ships Droid and Antigravity as editable defaults", () => {
 		expect(DEFAULT_CONFIG.acpClients).toEqual(DEFAULT_ACP_CLIENTS);
 		expect(DEFAULT_ACP_CLIENTS.map(({ id }) => id)).toEqual(["droid", "antigravity"]);
+	});
+
+	test("bounds the host-wide ACP start timeout", () => {
+		expect(DEFAULT_CONFIG.acpStartTimeoutMs).toBe(DEFAULT_ACP_START_TIMEOUT_MS);
+		expect(isAcpStartTimeoutMs(DEFAULT_ACP_START_TIMEOUT_MS)).toBe(true);
+		expect(isAcpStartTimeoutMs(ACP_START_TIMEOUT_MIN_MS)).toBe(true);
+		expect(isAcpStartTimeoutMs(ACP_START_TIMEOUT_MAX_MS)).toBe(true);
+		expect(isAcpStartTimeoutMs(ACP_START_TIMEOUT_MIN_MS - 1)).toBe(false);
+		expect(isAcpStartTimeoutMs(ACP_START_TIMEOUT_MAX_MS + 1)).toBe(false);
+		expect(isAcpStartTimeoutMs(1_500.5)).toBe(false);
+		expect(isAcpStartTimeoutMs("120000")).toBe(false);
 	});
 
 	test("accepts bounded unique launcher definitions", () => {

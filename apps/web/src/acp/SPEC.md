@@ -34,8 +34,13 @@ typed host transport.
 - ACP text, thoughts, tool activity, usage, permission choices, modes, configuration options, and prompt
   state come from ACP events. Configuration controls are only enabled from protocol v98, where
   `configOptions` is guaranteed; older ACP-capable hosts may omit it. Model options use the agent's live list and
-  `session/set_config_option`; they never use Pi's model catalog. Rendered user-facing chrome is localized;
-  agent/tool output is never translated.
+  `session/set_config_option`; they never use Pi's model catalog. The header shows model, thought-level
+  effort (`category: "thought_level"`), and session mode as first-class controls; other options stay in a
+  secondary row. Rendered user-facing chrome is localized; agent/tool output is never translated.
+- The composer accepts images through the file picker, clipboard paste, and drag/drop. Images are decoded
+  and downscaled through `components/imageAttachment` to fit the ACP prompt budget, shown as removable
+  thumbnails, and sent as ACP image content. An image-only prompt is valid. The empty transcript state
+  introduces the agent and its available commands instead of rendering an unlabelled blank panel.
 - ACP Settings displays a localized warning that ACP v2 is experimental and adapter-owned tools are not
   covered by ThinkRail's filesystem and terminal permission callbacks.
 - Settings lists options per ACP client only after explicit discovery; results remain local to ACP settings

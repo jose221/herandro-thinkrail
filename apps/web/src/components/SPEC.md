@@ -11,8 +11,9 @@ tags: [ui, resilience]
 
 The app's dependency-light shared React primitives: the error boundary that keeps one failed region from
 unmounting the root, project-custom icons, the binary attention dot and working-icon treatment used by
-feature panels (currently the Projects rail), the quiet-scroll frame, and the shared loading-skeleton
-primitive. The shared shadcn primitives live in [[module-ui]] (`@thinkrail/ui/*`), not this module.
+feature panels (currently the Projects rail), the quiet-scroll frame, the shared loading-skeleton
+primitive, and the browser image decode/downscale helper shared by prompt surfaces. The shared shadcn
+primitives live in [[module-ui]] (`@thinkrail/ui/*`), not this module.
 
 ## Boundary
 
@@ -50,6 +51,11 @@ primitive. The shared shadcn primitives live in [[module-ui]] (`@thinkrail/ui/*`
   directions. `QuietScrollFrame` also re-skins xterm's non-native slider to the same thumb (transparent
   underlying slider, a 6px optical thumb, opacity gated on intent and measured vertical overflow).
   Surface colour is an explicit semantic prop (`sidebar` or `terminal`), never inferred from arrangement.
+- **`imageAttachment.ts`** — the browser-side image decode/downscale boundary shared by prompt surfaces.
+  `fileToAttachedImage(file, options)` rejects formats the providers do not accept, fits the long edge
+  (default 1568 px), re-encodes through a canvas when the source is too large, and steps JPEG quality until
+  the base64 payload fits the caller's budget. Prompt surfaces own their own chip rendering; this module
+  owns only the bytes and dimensions.
 - **`AttentionDot.tsx`** — the store-free, static green/accent dot whose sole accessible label is “Needs
   attention.” It carries no reason, count, tooltip, motion, or clearing behavior; callers decide only whether
   it is present. It is the one marker for both needs-input and unread-result attention.

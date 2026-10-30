@@ -488,6 +488,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 
 	acpSessions = new AcpSessionManager({
 		getClient: (id) => getConfig().acpClients.find((client) => client.id === id),
+		getStartTimeout: () => getConfig().acpStartTimeoutMs,
 		resolveWorkspaceCwd: (workspaceId) => getWorkspace(workspaceId).worktreePath,
 		publish: (event: AcpSessionEvent) => {
 			server.publish(

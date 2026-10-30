@@ -1196,6 +1196,8 @@ export interface AppConfig extends ThemePreference {
 	disabledExtensions: string[];
 	/** User-owned ACP launchers; ACP sessions remain separate from Pi sessions. */
 	acpClients: AcpClientConfig[];
+	/** How long an ACP adapter may take to initialize and open a session. */
+	acpStartTimeoutMs: number;
 	/** UI language: `"system"` (follow the browser) or a BCP-47 tag; an unavailable tag renders English. */
 	locale: string;
 	/** The user finished or skipped the cold-start onboarding wizard. */
@@ -1211,6 +1213,20 @@ export interface AcpClientConfig {
 }
 
 export const ACP_CLIENTS_LIMIT = 32;
+
+/** Bounds for the host-wide ACP process/session start budget. */
+export const ACP_START_TIMEOUT_MIN_MS = 1_000;
+export const ACP_START_TIMEOUT_MAX_MS = 10 * 60 * 1000;
+export const DEFAULT_ACP_START_TIMEOUT_MS = 120_000;
+
+export function isAcpStartTimeoutMs(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isInteger(value) &&
+		value >= ACP_START_TIMEOUT_MIN_MS &&
+		value <= ACP_START_TIMEOUT_MAX_MS
+	);
+}
 
 export const DEFAULT_ACP_CLIENTS: AcpClientConfig[] = [
 	{
@@ -1385,7 +1401,7 @@ export type AcpSessionEvent =
 
 export interface AcpClientCheckResult {
 	available: boolean;
-	issue?: "executable" | "handshake" | "protocol";
+	issue?: "executable" | "handshake" | "protocol" | "timeout";
 	authMethods?: AcpAuthMethodSummary[];
 }
 
@@ -1554,6 +1570,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 	settleIdleDays: SETTLE_IDLE_DAYS.default,
 	disabledExtensions: [],
 	acpClients: DEFAULT_ACP_CLIENTS,
+	acpStartTimeoutMs: DEFAULT_ACP_START_TIMEOUT_MS,
 	locale: SYSTEM_LOCALE_PREFERENCE,
 	onboardingDismissed: false,
 };

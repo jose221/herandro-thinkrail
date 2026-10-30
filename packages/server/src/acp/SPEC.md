@@ -37,14 +37,19 @@ browser.
 
 ## Get right
 
-- Start chat processes only after an explicit `acp.session.create`; spawn `[command, ...args]` with the
-  selected workspace cwd and host environment, never through a shell. Start temporary auth processes
+- Start chat processes only after an explicit `acp.session.create`; resolve the configured command on the
+  live host PATH and spawn the resolved executable with `args` in the selected workspace cwd and host
+  environment, never through a shell. Start temporary auth processes
   only after an explicit Settings action. Close streams and terminate children on delete, connection
   close, cancellation, workspace removal, or host shutdown; wait one second after `SIGTERM`, escalate to `SIGKILL`, then
   wait for close with a bounded second grace period. A missing or failing adapter is a visible typed ACP
   failure, not a Pi-session fallback.
-- Negotiate with a fresh v1 probe first and retry v2 only when v1 initialization fails; cache the selected
-  protocol by the configured command and arguments. Preserve ACP-reported text, thoughts, tool-call
+- Negotiate v1 first and retry v2 only when v1 initialization fails; reuse the first successful connection
+  instead of spawning a second process, and cache the selected protocol by the configured command and
+  arguments. The host-wide `acpStartTimeoutMs` bounds process start, initialization, and session setup;
+  it defaults to two minutes, is clamped to one second through ten minutes, and is gated for clients at
+  `ACP_START_TIMEOUT_PROTOCOL_VERSION` (v104). Timeouts are reported as
+  a distinct client-check issue rather than an executable or handshake failure. Preserve ACP-reported text, thoughts, tool-call
   updates, modes, configuration options (including model categories), usage, and session identity as ACP
   data. `session/new` and v1 `session/load` or v2 `session/resume` provide the initial options; option
   updates and config-option responses replace the complete current set. A v2 resume's reported state

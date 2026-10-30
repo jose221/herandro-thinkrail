@@ -13,6 +13,7 @@ import {
 	ACP_CONFIG_OPTIONS_PROTOCOL_VERSION,
 	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
 	ACP_SESSION_TITLE_PROTOCOL_VERSION,
+	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	AGENT_REVIEW_SETTING_PROTOCOL_VERSION,
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
@@ -119,6 +120,11 @@ test("ACP authentication and terminal-start cancellation are versioned at protoc
 test("ACP session title updates are versioned at protocol v103", () => {
 	expect(ACP_SESSION_TITLE_PROTOCOL_VERSION).toBe(103);
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_SESSION_TITLE_PROTOCOL_VERSION);
+});
+
+test("ACP start timeout configuration is versioned at protocol v104", () => {
+	expect(ACP_START_TIMEOUT_PROTOCOL_VERSION).toBe(104);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_START_TIMEOUT_PROTOCOL_VERSION);
 });
 
 test("Android emulator controls are versioned at protocol v100", () => {

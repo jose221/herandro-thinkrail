@@ -17,6 +17,7 @@ import {
 	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
 	ACP_PROTOCOL_VERSION,
+	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	isControlMessage,
@@ -1343,12 +1344,16 @@ const handlers: WsHandlers = {
 	},
 	"settings.update": (params, ctx) => {
 		const config = params.config;
-		if (
-			ctx.protocolVersion !== undefined &&
-			ctx.protocolVersion < ACP_PROTOCOL_VERSION &&
-			Object.hasOwn(config, "acpClients")
-		) {
-			throw new Error("ACP settings require a newer host protocol.");
+		if (ctx.protocolVersion !== undefined) {
+			if (ctx.protocolVersion < ACP_PROTOCOL_VERSION && Object.hasOwn(config, "acpClients")) {
+				throw new Error("ACP settings require a newer host protocol.");
+			}
+			if (
+				ctx.protocolVersion < ACP_START_TIMEOUT_PROTOCOL_VERSION &&
+				Object.hasOwn(config, "acpStartTimeoutMs")
+			) {
+				throw new Error("ACP settings require a newer host protocol.");
+			}
 		}
 		return updateConfig(config);
 	},

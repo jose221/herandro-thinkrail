@@ -788,7 +788,7 @@ both message orders. *Rejected:* keeping the modal for non-MCP extensions — ev
 - **Composer & chrome** — `Composer` (prompt field + send/steer/followUp/abort, `@`-mentions (`mentionLookup` splits the typed
   query into the folder `fs.readDir` lists and the name prefix, reading a typed `\` as a separator), `/`
   commands + template **slot sessions** (Tab-through placeholders — see the Template slots bullet
-  below), image paste/drop — routed through **`imageAttachment.ts`**: `fileToAttachedImage` decodes in
+  below), image paste/drop — routed through the shared **`components/imageAttachment.ts`**: `fileToAttachedImage` decodes in
   the browser and downscales anything over a **1568px long edge** (`fitWithin`; Claude's standard-tier
   edge — an oversized image in history 400s every later turn once the provider's >20-image 2000px cap
   kicks in, and pi's own resizer is deliberately off server-side). An image passes through

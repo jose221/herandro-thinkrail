@@ -15,6 +15,7 @@ import type {
 	WorkspaceWatchReadyResult,
 } from "@thinkrail/contracts";
 import {
+	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
@@ -125,6 +126,16 @@ afterEach(() => {
 test("every contract method has a registered handler", () => {
 	const unregistered = Object.values(WS_METHODS).filter((m) => requestMethodDiagnostic(m) !== m);
 	expect(unregistered).toEqual([]);
+});
+
+test("settings.update gates the ACP start timeout on its protocol version", async () => {
+	await expect(
+		handleRequest(
+			"settings.update",
+			{ config: { acpStartTimeoutMs: 30_000 } },
+			{ ...CTX, protocolVersion: ACP_START_TIMEOUT_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("ACP settings require a newer host protocol.");
 });
 
 test("clone handlers resolve the destination and return an opened local project", async () => {

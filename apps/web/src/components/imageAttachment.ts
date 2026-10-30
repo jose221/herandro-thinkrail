@@ -17,6 +17,13 @@ export interface AttachedImage {
 	height?: number;
 }
 
+export interface ImageAttachmentOptions {
+	/** Maximum base64 length for the encoded image. Defaults to the provider image limit. */
+	maxBase64Bytes?: number;
+	/** Maximum long edge in pixels. Defaults to the chat attachment edge. */
+	maxEdge?: number;
+}
+
 export function fitWithin(
 	width: number,
 	height: number,
@@ -49,7 +56,12 @@ function fileToRawContent(file: File): Promise<ImageContent> {
 	});
 }
 
-export async function fileToAttachedImage(file: File): Promise<AttachedImage | null> {
+export async function fileToAttachedImage(
+	file: File,
+	options: ImageAttachmentOptions = {},
+): Promise<AttachedImage | null> {
+	const maxBase64Bytes = options.maxBase64Bytes ?? IMAGE_MAX_BASE64_BYTES;
+	const maxEdge = options.maxEdge ?? MAX_ATTACHMENT_EDGE;
 	let bitmap: ImageBitmap;
 	try {
 		bitmap = await createImageBitmap(file);
@@ -58,12 +70,12 @@ export async function fileToAttachedImage(file: File): Promise<AttachedImage | n
 		return { content: await fileToRawContent(file) };
 	}
 	try {
-		const { width, height } = fitWithin(bitmap.width, bitmap.height, MAX_ATTACHMENT_EDGE);
+		const { width, height } = fitWithin(bitmap.width, bitmap.height, maxEdge);
 		const withinPixels = width === bitmap.width && height === bitmap.height;
 		if (
 			withinPixels &&
 			PROVIDER_ACCEPTED.has(file.type) &&
-			base64EncodedLength(file.size) <= IMAGE_MAX_BASE64_BYTES
+			base64EncodedLength(file.size) <= maxBase64Bytes
 		) {
 			return { content: await fileToRawContent(file), width, height };
 		}
@@ -77,7 +89,7 @@ export async function fileToAttachedImage(file: File): Promise<AttachedImage | n
 		const mimeType = CANVAS_ENCODABLE.has(file.type) ? file.type : "image/png";
 		let content = dataUrlToContent(canvas.toDataURL(mimeType));
 		for (const quality of JPEG_QUALITY_LADDER) {
-			if (content.data.length <= IMAGE_MAX_BASE64_BYTES) break;
+			if (content.data.length <= maxBase64Bytes) break;
 			content = dataUrlToContent(canvas.toDataURL("image/jpeg", quality));
 		}
 		return { content, width, height };

@@ -7,7 +7,11 @@ import type {
 import {
 	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
+	ACP_START_TIMEOUT_MAX_MS,
+	ACP_START_TIMEOUT_MIN_MS,
+	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	isAcpClientCatalog,
+	isAcpStartTimeoutMs,
 } from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
@@ -39,18 +43,28 @@ function checkFailureKey(client: AcpClientConfig, result: AcpClientCheckResult):
 	}
 	if (result.issue === "executable") return "settings.acp.checkExecutableFailed";
 	if (result.issue === "protocol") return "settings.acp.checkProtocolFailed";
+	if (result.issue === "timeout") return "settings.acp.checkTimeout";
 	return "settings.acp.checkFailed";
 }
 
 export function AcpSettings() {
 	const t = useT();
 	const clients = useAppStore((state) => state.acpClients);
+	const acpStartTimeoutMs = useAppStore((state) => state.acpStartTimeoutMs);
 	const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
 	const protocolVersion = useAppStore((state) => state.protocolVersion);
 	const canListModels =
 		protocolVersion !== null && protocolVersion >= ACP_MODEL_CATALOG_PROTOCOL_VERSION;
 	const canLoginInline = protocolVersion !== null && protocolVersion >= ACP_AUTH_PROTOCOL_VERSION;
+	const canConfigureStartTimeout =
+		protocolVersion !== null && protocolVersion >= ACP_START_TIMEOUT_PROTOCOL_VERSION;
+	const savedStartTimeoutSeconds = Math.round(acpStartTimeoutMs / 1000);
+	const minStartTimeoutSeconds = Math.ceil(ACP_START_TIMEOUT_MIN_MS / 1000);
+	const maxStartTimeoutSeconds = Math.floor(ACP_START_TIMEOUT_MAX_MS / 1000);
 	const [draft, setDraft] = useState(() => catalogJson(clients));
+	const [startTimeoutDraft, setStartTimeoutDraft] = useState(() =>
+		String(savedStartTimeoutSeconds),
+	);
 	const [saving, setSaving] = useState(false);
 	const [checkingId, setCheckingId] = useState<string | null>(null);
 	const [authenticating, setAuthenticating] = useState<{
@@ -73,13 +87,14 @@ export function AcpSettings() {
 
 	useEffect(() => {
 		setDraft(catalogJson(clients));
+		setStartTimeoutDraft(String(savedStartTimeoutSeconds));
 		setCheckResults({});
 		setAuthenticating(null);
 		setAuthTerminal(null);
 		setAuthResults({});
 		setModelCatalogs({});
 		setModelCatalogErrors({});
-	}, [clients]);
+	}, [clients, savedStartTimeoutSeconds]);
 
 	let parsed: unknown;
 	let valid = false;
@@ -89,11 +104,20 @@ export function AcpSettings() {
 	} catch {
 		valid = false;
 	}
-	const dirty = draft !== catalogJson(clients);
+	const parsedStartTimeoutSeconds = /^\d+$/.test(startTimeoutDraft)
+		? Number(startTimeoutDraft)
+		: null;
+	const startTimeoutMs =
+		parsedStartTimeoutSeconds === null ? null : parsedStartTimeoutSeconds * 1000;
+	const startTimeoutInvalid = startTimeoutMs === null || !isAcpStartTimeoutMs(startTimeoutMs);
+	const dirty =
+		draft !== catalogJson(clients) ||
+		(canConfigureStartTimeout && startTimeoutDraft !== String(savedStartTimeoutSeconds));
 
 	const save = () => {
 		if (
 			!valid ||
+			(canConfigureStartTimeout && (startTimeoutInvalid || startTimeoutMs === null)) ||
 			!dirty ||
 			saving ||
 			checkingId ||
@@ -107,7 +131,12 @@ export function AcpSettings() {
 		setSaveFailed(false);
 		void getTransport()
 			.request("settings.update", {
-				config: { acpClients: parsed as typeof clients },
+				config: {
+					acpClients: parsed as typeof clients,
+					...(canConfigureStartTimeout && startTimeoutMs !== null
+						? { acpStartTimeoutMs: startTimeoutMs }
+						: {}),
+				},
 			})
 			.catch(() => {
 				setSaveFailed(true);
@@ -232,6 +261,58 @@ export function AcpSettings() {
 			<SettingsNotice variant="warning" testId="settings-acp-v2-warning">
 				{t("settings.acp.v2Warning")}
 			</SettingsNotice>
+
+			{canConfigureStartTimeout ? (
+				<div className="flex min-w-0 flex-col gap-4">
+					<label htmlFor="acp-start-timeout" className="tr-text-ui text-text-default">
+						{t("settings.acp.startTimeoutLabel")}
+					</label>
+					<p id="acp-start-timeout-hint" className="text-text-muted tr-text-metadata">
+						{t("settings.acp.startTimeoutHint")}
+					</p>
+					<input
+						id="acp-start-timeout"
+						type="number"
+						min={minStartTimeoutSeconds}
+						max={maxStartTimeoutSeconds}
+						step={1}
+						inputMode="numeric"
+						value={startTimeoutDraft}
+						aria-invalid={startTimeoutInvalid}
+						aria-describedby={
+							startTimeoutInvalid
+								? "acp-start-timeout-hint acp-start-timeout-error"
+								: "acp-start-timeout-hint"
+						}
+						disabled={
+							saving ||
+							checkingId !== null ||
+							loadingModelsId !== null ||
+							!!authenticating ||
+							!!authTerminal
+						}
+						onChange={(event) => {
+							setStartTimeoutDraft(event.currentTarget.value);
+							setSaveFailed(false);
+						}}
+						data-testid="acp-start-timeout-input"
+						data-settings-draft-input
+						className="h-32 w-80 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default outline-none focus:border-control-border-active focus-visible:ring-2 focus-visible:ring-primary aria-invalid:border-feedback-error"
+					/>
+					{startTimeoutInvalid ? (
+						<p
+							id="acp-start-timeout-error"
+							role="alert"
+							className="text-feedback-error tr-text-metadata"
+						>
+							{t("settings.acp.startTimeoutInvalid", {
+								min: minStartTimeoutSeconds,
+								max: maxStartTimeoutSeconds,
+							})}
+						</p>
+					) : null}
+				</div>
+			) : null}
 
 			<div className="flex min-w-0 flex-col gap-8">
 				<label htmlFor="acp-clients-json" className="tr-text-ui text-text-default">
@@ -548,6 +629,7 @@ export function AcpSettings() {
 					size="m"
 					disabled={
 						!valid ||
+						startTimeoutInvalid ||
 						!dirty ||
 						saving ||
 						checkingId !== null ||

@@ -11,11 +11,12 @@ tags: [ui]
 
 ## Responsibility
 
-The layout-agnostic, store-driven feature views, including the user-owned ACP client catalog, per-client
-model discovery, and explicit inline ACP login in Settings, plus the optional Android emulator controls.
-ACP model options stay separate from Pi's provider/model catalog (see `submodule-web-acp`). ACP Settings
-also warns that experimental v2 adapter-owned tools are outside ThinkRail's filesystem and terminal
-permission callbacks. A panel fills its container and never knows its arrangement (so the mobile shell is
+The layout-agnostic, store-driven feature views, including the user-owned ACP client catalog, the
+host-wide ACP start timeout, per-client model discovery, and explicit inline ACP login in Settings, plus
+the optional Android emulator controls. ACP model options stay separate from Pi's provider/model catalog
+(see `submodule-web-acp`). ACP Settings also warns that experimental v2 adapter-owned tools are outside
+ThinkRail's filesystem and terminal permission callbacks, and distinguishes a start timeout from a
+missing executable or protocol failure. A panel fills its container and never knows its arrangement (so the mobile shell is
 an additive layer, not a rewrite).
 
 `AndroidEmulatorPane` uses only contracts and transport for Android protocol v100. It waits for a
