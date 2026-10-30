@@ -3,14 +3,16 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveAcpWorktreePath } from "./runtime";
+import { resolveAcpWorktreePath, writeAcpWorktreeFile } from "./runtime";
 
 let tempDirectory = "";
 
@@ -97,4 +99,34 @@ test("accepts a new file under a canonical in-worktree directory", async () => {
 	expect(await resolveAcpWorktreePath(workspace, "nested/new-file.txt", false)).toBe(
 		join(realpathSync(nested), "new-file.txt"),
 	);
+});
+
+test("writes through a checked file handle", async () => {
+	const workspace = join(tempDirectory, "workspace");
+	mkdirSync(workspace);
+	const filePath = await resolveAcpWorktreePath(workspace, "new-file.txt", false);
+
+	await writeAcpWorktreeFile(workspace, filePath, "safe content");
+
+	expect(readFileSync(filePath, "utf8")).toBe("safe content");
+});
+
+test.skipIf(!canSymlink)("refuses a final symlink substituted after write approval", async () => {
+	const workspace = join(tempDirectory, "workspace");
+	const outside = join(tempDirectory, "outside");
+	const approvedTarget = join(workspace, "target.txt");
+	const outsideTarget = join(outside, "target.txt");
+	mkdirSync(workspace);
+	mkdirSync(outside);
+	writeFileSync(approvedTarget, "inside");
+	writeFileSync(outsideTarget, "outside");
+	const approvedPath = await resolveAcpWorktreePath(workspace, "target.txt", false);
+
+	renameSync(approvedTarget, join(workspace, "approved-target.txt"));
+	symlinkSync(outsideTarget, approvedTarget);
+
+	await expect(writeAcpWorktreeFile(workspace, approvedPath, "attacker content")).rejects.toThrow(
+		"outside this workspace",
+	);
+	expect(readFileSync(outsideTarget, "utf8")).toBe("outside");
 });

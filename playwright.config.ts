@@ -28,6 +28,10 @@ import {
 	E2E_PORT,
 } from "./e2e/fixtures/paths";
 
+for (const name of ["GIT_SSH_COMMAND", "GIT_SSH", "GIT_SSH_VARIANT"] as const) {
+	delete process.env[name];
+}
+
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const staticDir = fileURLToPath(new URL("./apps/web/dist", import.meta.url));
 // Per-worktree derived port (e2e/fixtures/paths.ts) — parallel worktrees (this product's own working

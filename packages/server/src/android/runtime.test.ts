@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -25,6 +26,8 @@ function fixture(options: { idleTtlMs?: number } = {}) {
 	directory = mkdtempSync(join(tmpdir(), "thinkrail-android-emulator-"));
 	const callsPath = join(directory, "adb-calls.jsonl");
 	const launchPath = join(directory, "emulator-launches.txt");
+	const installRacePath = join(directory, "install-race.json");
+	const installGatePath = join(directory, "install-gate.json");
 	const adbPath = join(directory, "fake-adb.js");
 	const emulatorPath = join(directory, "fake-emulator.js");
 	const workspaceRoot = join(directory, "workspace");
@@ -59,6 +62,16 @@ if (args[0] === "devices") {
     process.stdout.write(png);
   } else if (command[0] === "logcat") {
     process.stdout.write("sample emulator log\\n");
+  } else if (command[0] === "install" && fs.existsSync(${JSON.stringify(installGatePath)})) {
+    const { started, release } = JSON.parse(fs.readFileSync(${JSON.stringify(installGatePath)}, "utf8"));
+    fs.writeFileSync(started, "started");
+    const waitCell = new Int32Array(new SharedArrayBuffer(4));
+    while (!fs.existsSync(release)) Atomics.wait(waitCell, 0, 0, 10);
+  } else if (command[0] === "install" && fs.existsSync(${JSON.stringify(installRacePath)})) {
+    const { target, replacement, installed } = JSON.parse(fs.readFileSync(${JSON.stringify(installRacePath)}, "utf8"));
+    fs.unlinkSync(target);
+    fs.symlinkSync(replacement, target);
+    fs.writeFileSync(installed, fs.readFileSync(command.at(-1)));
   }
 } else {
   process.exitCode = 2;
@@ -82,7 +95,7 @@ if (args[0] === "-list-avds") {
 	};
 	const manager = new AndroidEmulatorManager({ toolchain, ...options });
 	managers.push(manager);
-	return { manager, callsPath, launchPath, workspaceRoot };
+	return { manager, callsPath, installRacePath, installGatePath, launchPath, workspaceRoot };
 }
 
 test("reports missing SDK tools without starting an emulator", async () => {
@@ -191,6 +204,66 @@ test("starts and controls only the emulator serial with bounded inspection", asy
 	expect(targeted.some((args) => args.includes("3b413722"))).toBe(false);
 	expect(targeted.some((args) => args[1] === "-d")).toBe(false);
 	expect(typed.map((args) => args.at(-1))).toEqual(["'hello%sworld'", "'hello;%sexit'"]);
+});
+
+test("installs the validated APK snapshot when its workspace path changes", async () => {
+	const { manager, installRacePath, workspaceRoot } = fixture();
+	const apkPath = join(workspaceRoot, "debug.apk");
+	const replacementPath = join(directory, "outside.apk");
+	const installedPath = join(directory, "installed.apk");
+	writeFileSync(apkPath, "workspace apk");
+	writeFileSync(replacementPath, "outside apk");
+	writeFileSync(
+		installRacePath,
+		JSON.stringify({ target: apkPath, replacement: replacementPath, installed: installedPath }),
+	);
+	await manager.start("Pixel_8_API_35");
+
+	await manager.installApk(workspaceRoot, "debug.apk");
+
+	expect(readFileSync(installedPath, "utf8")).toBe("workspace apk");
+	await manager.stop();
+});
+
+test("rejects concurrent APK installs before taking another workspace snapshot", async () => {
+	const { manager, callsPath, installGatePath, workspaceRoot } = fixture();
+	const apkPath = join(workspaceRoot, "debug.apk");
+	const startedPath = join(directory, "install-started");
+	const releasePath = join(directory, "install-release");
+	writeFileSync(apkPath, "workspace apk");
+	writeFileSync(installGatePath, JSON.stringify({ started: startedPath, release: releasePath }));
+	await manager.start("Pixel_8_API_35");
+
+	const firstInstall = manager.installApk(workspaceRoot, "debug.apk");
+	for (let attempt = 0; attempt < 100 && !existsSync(startedPath); attempt += 1) {
+		await Bun.sleep(10);
+	}
+	expect(existsSync(startedPath)).toBe(true);
+	await expect(manager.installApk(workspaceRoot, "debug.apk")).rejects.toThrow(
+		"already in progress",
+	);
+	const installCalls = readFileSync(callsPath, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as string[])
+		.filter((args) => args[0] === "-s" && args[2] === "install");
+	expect(installCalls).toHaveLength(1);
+
+	writeFileSync(releasePath, "release");
+	await firstInstall;
+	await manager.stop();
+});
+
+test("rejects an APK FIFO without waiting for a writer", async () => {
+	if (process.platform === "win32") return;
+	const { manager, workspaceRoot } = fixture();
+	await manager.start("Pixel_8_API_35");
+	execFileSync("mkfifo", [join(workspaceRoot, "pipe.apk")], { timeout: 2000 });
+
+	await expect(manager.installApk(workspaceRoot, "pipe.apk")).rejects.toThrow(
+		"APK must be a regular file",
+	);
+	await manager.stop();
 });
 
 test("stops the owned emulator after its idle TTL", async () => {

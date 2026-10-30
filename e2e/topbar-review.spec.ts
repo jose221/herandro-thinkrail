@@ -26,7 +26,7 @@ async function publishedWorkspace(page: Page, repository?: string) {
 	commitFile(workspace.worktreePath, "ship.ts", "export const ship = 1;\n", "feat: ship segment");
 	const origin = githubOrigin(workspace.worktreePath, repository);
 	const branch = gitAs(workspace.worktreePath, "rev-parse", "--abbrev-ref", "HEAD");
-	gitAs(workspace.worktreePath, "push", "-q", "--set-upstream", "origin", branch);
+	origin.push(branch);
 	return { workspace, branch, origin };
 }
 

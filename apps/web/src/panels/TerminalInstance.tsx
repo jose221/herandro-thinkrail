@@ -8,7 +8,7 @@ import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebFontsAddon } from "@xterm/addon-web-fonts";
-import { type ITheme, Terminal as XTerm } from "@xterm/xterm";
+import { Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
@@ -16,12 +16,17 @@ import { i18n, useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import { onThemeSwap } from "@thinkrail/ui/theme";
 import { type QuietScrollEdges, QuietScrollFrame } from "@/components/QuietScrollArea";
-import { cssColorToHex } from "@/lib";
 import { SettingsSection, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { createPtySizeSync, runAfterTerminalRelayout } from "./ptySizeSync";
-import { stripAnsiDim, terminalContrastFloor } from "./terminalContrast";
+import { stripAnsiDim } from "./terminalContrast";
 import { createTerminalPrebindBuffer } from "./terminalPrebindBuffer";
+import {
+	readTerminalTheme,
+	terminalFontSettings,
+	terminalHighContrastEnabled,
+	terminalMinimumContrastRatio,
+} from "./terminalPresentation";
 
 const RESIZE_DEBOUNCE_MS = 60;
 
@@ -40,60 +45,6 @@ function imeControlBytes(event: KeyboardEvent): string | null {
 	if (!event.ctrlKey) return null;
 	const letter = /^Key([A-Z])$/.exec(event.code)?.[1];
 	return letter ? String.fromCharCode(letter.charCodeAt(0) - 64) : null;
-}
-
-function cssVar(name: string): string | undefined {
-	return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || undefined;
-}
-
-function cssColorVar(name: string): string | undefined {
-	return cssColorToHex(cssVar(name) ?? "") || undefined;
-}
-
-const ANSI_TOKENS = [
-	["black", "--ansi-black"],
-	["red", "--ansi-red"],
-	["green", "--ansi-green"],
-	["yellow", "--ansi-yellow"],
-	["blue", "--ansi-blue"],
-	["magenta", "--ansi-magenta"],
-	["cyan", "--ansi-cyan"],
-	["white", "--ansi-white"],
-	["brightBlack", "--ansi-bright-black"],
-	["brightRed", "--ansi-bright-red"],
-	["brightGreen", "--ansi-bright-green"],
-	["brightYellow", "--ansi-bright-yellow"],
-	["brightBlue", "--ansi-bright-blue"],
-	["brightMagenta", "--ansi-bright-magenta"],
-	["brightCyan", "--ansi-bright-cyan"],
-	["brightWhite", "--ansi-bright-white"],
-] as const;
-
-function isHighContrast(): boolean {
-	return document.documentElement.dataset.themeContrast === "high";
-}
-
-function contrastFloor(): number {
-	return terminalContrastFloor(isHighContrast());
-}
-
-function readTheme(): ITheme {
-	const theme: ITheme = {};
-	const bg = cssColorVar("--container-terminal-bg");
-	if (bg) theme.background = bg;
-	const fg = cssColorVar("--text-default");
-	if (fg) theme.foreground = fg;
-	const cursor = cssColorVar("--primary");
-	if (cursor) theme.cursor = cursor;
-	const sel = cssColorVar("--editor-selection-bg");
-	if (sel) theme.selectionBackground = sel;
-	const selFg = cssColorVar("--editor-selection-text");
-	if (selFg) theme.selectionForeground = selFg;
-	for (const [slot, name] of ANSI_TOKENS) {
-		const color = cssColorVar(name);
-		if (color) theme[slot] = color;
-	}
-	return theme;
 }
 
 function tryLoad(fn: () => void): void {
@@ -140,10 +91,9 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 		const term = new XTerm({
 			allowProposedApi: true,
 			cursorBlink: true,
-			fontSize: Number.parseFloat(cssVar("--tr-font-size-s13") ?? "") || 13,
-			fontFamily: cssVar("--tr-font-family-code") ?? "monospace",
-			theme: readTheme(),
-			minimumContrastRatio: contrastFloor(),
+			...terminalFontSettings(),
+			theme: readTerminalTheme(),
+			minimumContrastRatio: terminalMinimumContrastRatio(),
 			scrollback: 5000,
 		});
 		const fit = new FitAddon();
@@ -208,7 +158,7 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 
 		let prebind = createTerminalPrebindBuffer();
 		const writeOutput = (data: string, cb?: () => void): void =>
-			term.write(isHighContrast() ? stripAnsiDim(data) : data, cb);
+			term.write(terminalHighContrastEnabled() ? stripAnsiDim(data) : data, cb);
 		const writeTruncation = (): void =>
 			term.write(`\r\n${i18n.t("panels.terminalInstance.outputTruncated")}\r\n`);
 		const writeFrame = (ev: TerminalDataPush): void => {
@@ -346,8 +296,8 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 		resizeObserver.observe(host);
 
 		const stopThemeWatch = onThemeSwap(() => {
-			term.options.theme = readTheme();
-			term.options.minimumContrastRatio = contrastFloor();
+			term.options.theme = readTerminalTheme();
+			term.options.minimumContrastRatio = terminalMinimumContrastRatio();
 		});
 
 		return () => {

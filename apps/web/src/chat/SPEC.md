@@ -933,7 +933,7 @@ both message orders. *Rejected:* keeping the modal for non-MCP extensions — ev
   boundary; transient read failure keeps the last good snapshot rather than replacing it with guessed state.
 - **Adaptive composer geometry** (`Composer`) — an idle draft that fits one visual line renders as a
   shared two-tier shell: a full-width, one-visual-line message row above a stable action footer. The
-  model · effort pill is the footer's one left-hand trigger; History and Send remain explicit on the right. A wrap, explicit
+  model · effort pill is the footer's left-hand trigger; History and Send remain explicit on the right, alongside any shell-injected feature action. A wrap, explicit
   newline, or width change that makes the draft exceed one visual line grows the message row without moving
   the footer; fitting one line again shrinks only the message row. This is one persistent textarea, never
   conditional twins — the transition cannot lose focus, caret/selection, recall, draft, or a template-slot

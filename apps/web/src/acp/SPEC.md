@@ -32,13 +32,19 @@ typed host transport.
   neither may hydrate through `session.list` or `session.getMessages`. All new ACP controls are hidden until
   `ACP_PROTOCOL_VERSION` arrives in the current welcome.
 - ACP text, thoughts, tool activity, usage, permission choices, modes, configuration options, and prompt
-  state come from ACP events. Options with category `model` appear as a model selector beside the mode
-  control, using the agent's live option list and `session/set_config_option`; they do not use Pi's model
-  catalog. Rendered user-facing chrome is localized; agent/tool output is never translated.
-  catalog. Settings lists those options per ACP client only after an explicit discovery action; results
-  remain local to ACP settings and never enter Pi provider/model state. Rendered user-facing chrome is
-  localized; agent/tool output is never translated.
-  only `acp.session.get`, never Pi session methods.
+  state come from ACP events. Configuration controls are only enabled from protocol v98, where
+  `configOptions` is guaranteed; older ACP-capable hosts may omit it. Model options use the agent's live list and
+  `session/set_config_option`; they never use Pi's model catalog. Rendered user-facing chrome is localized;
+  agent/tool output is never translated.
+- ACP Settings displays a localized warning that ACP v2 is experimental and adapter-owned tools are not
+  covered by ThinkRail's filesystem and terminal permission callbacks.
+- Settings lists options per ACP client only after explicit discovery; results remain local to ACP settings
+  and never enter Pi provider/model state.
+- The shell injects a distinct ACP model picker into the Pi composer's right-hand action group. Opening it
+  discovers enabled clients' models one at a time and retains the results until the workspace, client
+  catalog, or connection generation changes; closing it stops undispatched discoveries. Choosing a value
+  creates a separate ACP session and applies that model before opening the chat. It never changes the active
+  Pi model. An already-open ACP chat is restored through `acp.session.get`, never Pi session methods.
 - A reconnect rehydrates the host's ACP snapshot before applying live updates for the new generation.
   Events received during hydration are buffered with a bound, replayed onto the snapshot, and discarded
   when the request or connection generation becomes stale.

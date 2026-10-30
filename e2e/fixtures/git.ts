@@ -22,6 +22,14 @@ export function gitAs(cwd: string, ...args: string[]): string {
 	).trim();
 }
 
+export function gitAsWithEnv(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]): string {
+	return execFileSync(
+		"git",
+		["-C", cwd, "-c", "user.email=e2e@thinkrail.test", "-c", "user.name=e2e", ...args],
+		{ encoding: "utf8", env: { ...process.env, ...env } },
+	).trim();
+}
+
 export function commitFile(
 	worktree: string,
 	path: string,

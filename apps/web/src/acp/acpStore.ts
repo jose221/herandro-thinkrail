@@ -9,6 +9,7 @@ export interface AcpStreamingDraft {
 }
 
 const ACP_EVENT_BUFFER_LIMIT = 1024;
+type AcpMessageDeltaEvent = Extract<AcpSessionEvent, { type: "messageDelta" }>;
 
 interface AcpStoreState {
 	connectionGeneration: number;
@@ -24,11 +25,21 @@ interface AcpStoreState {
 	installSessions: (workspaceId: string, sessions: AcpSessionSummary[], generation: number) => void;
 	installSnapshot: (snapshot: AcpSessionSnapshot, generation: number) => void;
 	applyEvent: (event: AcpSessionEvent, generation: number) => void;
+	applyMessageDeltas: (events: AcpMessageDeltaEvent[], generation: number) => void;
 	invalidateSnapshot: (sessionId: string) => void;
 	removeSession: (workspaceId: string, sessionId: string) => void;
 	removeWorkspace: (workspaceId: string) => void;
 	clear: () => void;
 }
+
+type SessionStateSlices = Pick<
+	AcpStoreState,
+	| "snapshotsBySession"
+	| "snapshotGenerationBySession"
+	| "hydratingGenerationBySession"
+	| "pendingEventsBySession"
+	| "draftsBySession"
+>;
 
 const emptyDraft = (): AcpStreamingDraft => ({
 	assistantText: "",
@@ -50,6 +61,21 @@ function appendDelta(current: string, delta: string): string {
 	return `${current}${delta}`.slice(-100_000);
 }
 
+function withoutSessionState(
+	state: SessionStateSlices,
+	sessionIds: Set<string>,
+): SessionStateSlices {
+	const retain = <T>(records: Record<string, T>): Record<string, T> =>
+		Object.fromEntries(Object.entries(records).filter(([id]) => !sessionIds.has(id)));
+	return {
+		snapshotsBySession: retain(state.snapshotsBySession),
+		snapshotGenerationBySession: retain(state.snapshotGenerationBySession),
+		hydratingGenerationBySession: retain(state.hydratingGenerationBySession),
+		pendingEventsBySession: retain(state.pendingEventsBySession),
+		draftsBySession: retain(state.draftsBySession),
+	};
+}
+
 export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	connectionGeneration: 0,
 	sessionsByWorkspace: {},
@@ -61,7 +87,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	setConnectionGeneration: (generation) =>
 		set((state) =>
 			state.connectionGeneration === generation
-				? {}
+				? state
 				: {
 						connectionGeneration: generation,
 						hydratingGenerationBySession: {},
@@ -71,7 +97,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	beginSnapshotHydration: (sessionId, generation) =>
 		set((state) =>
 			state.connectionGeneration !== generation
-				? {}
+				? state
 				: {
 						hydratingGenerationBySession: {
 							...state.hydratingGenerationBySession,
@@ -87,7 +113,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 		let pendingEvents: AcpSessionEvent[] = [];
 		let replay = false;
 		set((state) => {
-			if (state.hydratingGenerationBySession[sessionId] !== generation) return {};
+			if (state.hydratingGenerationBySession[sessionId] !== generation) return state;
 			replay = state.snapshotGenerationBySession[sessionId] === generation;
 			pendingEvents = replay ? (state.pendingEventsBySession[sessionId] ?? []) : [];
 			return {
@@ -105,7 +131,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	},
 	installSessions: (workspaceId, sessions, generation) =>
 		set((state) => {
-			if (state.connectionGeneration !== generation) return {};
+			if (state.connectionGeneration !== generation) return state;
 			return {
 				sessionsByWorkspace: {
 					...state.sessionsByWorkspace,
@@ -116,7 +142,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	installSnapshot: (snapshot, generation) => {
 		let pendingEvents: AcpSessionEvent[] = [];
 		set((state) => {
-			if (state.connectionGeneration !== generation) return {};
+			if (state.connectionGeneration !== generation) return state;
 			pendingEvents = state.pendingEventsBySession[snapshot.summary.id] ?? [];
 			const workspaceSessions = state.sessionsByWorkspace[snapshot.summary.workspaceId] ?? [];
 			return {
@@ -150,7 +176,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 	},
 	applyEvent: (event, generation) =>
 		set((state) => {
-			if (state.connectionGeneration !== generation) return {};
+			if (state.connectionGeneration !== generation) return state;
 			if (event.type === "created") {
 				const workspaceSessions = state.sessionsByWorkspace[event.session.workspaceId] ?? [];
 				return {
@@ -165,25 +191,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 					.flat()
 					.find((session) => session.id === event.sessionId);
 				return {
-					snapshotsBySession: Object.fromEntries(
-						Object.entries(state.snapshotsBySession).filter(([id]) => id !== event.sessionId),
-					),
-					snapshotGenerationBySession: Object.fromEntries(
-						Object.entries(state.snapshotGenerationBySession).filter(
-							([id]) => id !== event.sessionId,
-						),
-					),
-					hydratingGenerationBySession: Object.fromEntries(
-						Object.entries(state.hydratingGenerationBySession).filter(
-							([id]) => id !== event.sessionId,
-						),
-					),
-					pendingEventsBySession: Object.fromEntries(
-						Object.entries(state.pendingEventsBySession).filter(([id]) => id !== event.sessionId),
-					),
-					draftsBySession: Object.fromEntries(
-						Object.entries(state.draftsBySession).filter(([id]) => id !== event.sessionId),
-					),
+					...withoutSessionState(state, new Set([event.sessionId])),
 					sessionsByWorkspace: summary
 						? {
 								...state.sessionsByWorkspace,
@@ -205,7 +213,7 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 			}
 			const snapshot = state.snapshotsBySession[event.sessionId];
 			if (!snapshot || state.snapshotGenerationBySession[event.sessionId] !== generation) {
-				return {};
+				return state;
 			}
 			const snapshotsBySession = { ...state.snapshotsBySession };
 			const draftsBySession = { ...state.draftsBySession };
@@ -285,6 +293,12 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 						summary: { ...snapshot.summary, state: event.state, updatedAt: Date.now() },
 					};
 					break;
+				case "title":
+					next = {
+						...snapshot,
+						summary: { ...snapshot.summary, title: event.title, updatedAt: Date.now() },
+					};
+					break;
 				case "error":
 					next = {
 						...snapshot,
@@ -316,6 +330,63 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 							},
 			};
 		}),
+	applyMessageDeltas: (events, generation) =>
+		set((state) => {
+			if (state.connectionGeneration !== generation) return state;
+			let draftsBySession = state.draftsBySession;
+			let pendingEventsBySession = state.pendingEventsBySession;
+			let draftsChanged = false;
+			let pendingEventsChanged = false;
+			const grouped = new Map<string, { assistant: string[]; thought: string[] }>();
+
+			for (const event of events) {
+				if (state.hydratingGenerationBySession[event.sessionId] === generation) {
+					if (!pendingEventsChanged) {
+						pendingEventsBySession = { ...state.pendingEventsBySession };
+						pendingEventsChanged = true;
+					}
+					const pending = pendingEventsBySession[event.sessionId] ?? [];
+					pendingEventsBySession[event.sessionId] = [...pending, event].slice(
+						-ACP_EVENT_BUFFER_LIMIT,
+					);
+					continue;
+				}
+				if (
+					!state.snapshotsBySession[event.sessionId] ||
+					state.snapshotGenerationBySession[event.sessionId] !== generation
+				) {
+					continue;
+				}
+				let deltas = grouped.get(event.sessionId);
+				if (!deltas) {
+					deltas = { assistant: [], thought: [] };
+					grouped.set(event.sessionId, deltas);
+				}
+				deltas[event.role].push(event.delta);
+			}
+
+			for (const [sessionId, deltas] of grouped) {
+				const current = draftsBySession[sessionId] ?? emptyDraft();
+				const draft = { ...current };
+				if (deltas.assistant.length > 0) {
+					draft.assistantText = appendDelta(current.assistantText, deltas.assistant.join(""));
+				}
+				if (deltas.thought.length > 0) {
+					draft.thoughtText = appendDelta(current.thoughtText, deltas.thought.join(""));
+				}
+				if (!draftsChanged) {
+					draftsBySession = { ...state.draftsBySession };
+					draftsChanged = true;
+				}
+				draftsBySession[sessionId] = draft;
+			}
+
+			if (!draftsChanged && !pendingEventsChanged) return state;
+			return {
+				...(draftsChanged ? { draftsBySession } : {}),
+				...(pendingEventsChanged ? { pendingEventsBySession } : {}),
+			};
+		}),
 	invalidateSnapshot: (sessionId) =>
 		set((state) => ({
 			snapshotGenerationBySession: {
@@ -325,27 +396,13 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 		})),
 	removeSession: (workspaceId, sessionId) =>
 		set((state) => ({
+			...withoutSessionState(state, new Set([sessionId])),
 			sessionsByWorkspace: {
 				...state.sessionsByWorkspace,
 				[workspaceId]: (state.sessionsByWorkspace[workspaceId] ?? []).filter(
 					(session) => session.id !== sessionId,
 				),
 			},
-			snapshotsBySession: Object.fromEntries(
-				Object.entries(state.snapshotsBySession).filter(([id]) => id !== sessionId),
-			),
-			snapshotGenerationBySession: Object.fromEntries(
-				Object.entries(state.snapshotGenerationBySession).filter(([id]) => id !== sessionId),
-			),
-			hydratingGenerationBySession: Object.fromEntries(
-				Object.entries(state.hydratingGenerationBySession).filter(([id]) => id !== sessionId),
-			),
-			pendingEventsBySession: Object.fromEntries(
-				Object.entries(state.pendingEventsBySession).filter(([id]) => id !== sessionId),
-			),
-			draftsBySession: Object.fromEntries(
-				Object.entries(state.draftsBySession).filter(([id]) => id !== sessionId),
-			),
 		})),
 	removeWorkspace: (workspaceId) =>
 		set((state) => {
@@ -353,23 +410,9 @@ export const useAcpStore = create<AcpStoreState>((set, get) => ({
 				(state.sessionsByWorkspace[workspaceId] ?? []).map((session) => session.id),
 			);
 			return {
+				...withoutSessionState(state, sessionIds),
 				sessionsByWorkspace: Object.fromEntries(
 					Object.entries(state.sessionsByWorkspace).filter(([id]) => id !== workspaceId),
-				),
-				snapshotsBySession: Object.fromEntries(
-					Object.entries(state.snapshotsBySession).filter(([id]) => !sessionIds.has(id)),
-				),
-				snapshotGenerationBySession: Object.fromEntries(
-					Object.entries(state.snapshotGenerationBySession).filter(([id]) => !sessionIds.has(id)),
-				),
-				hydratingGenerationBySession: Object.fromEntries(
-					Object.entries(state.hydratingGenerationBySession).filter(([id]) => !sessionIds.has(id)),
-				),
-				pendingEventsBySession: Object.fromEntries(
-					Object.entries(state.pendingEventsBySession).filter(([id]) => !sessionIds.has(id)),
-				),
-				draftsBySession: Object.fromEntries(
-					Object.entries(state.draftsBySession).filter(([id]) => !sessionIds.has(id)),
 				),
 			};
 		}),

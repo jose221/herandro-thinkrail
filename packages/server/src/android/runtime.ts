@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
-import { homedir } from "node:os";
+import { constants, existsSync } from "node:fs";
+import { mkdtemp, open, realpath, rm, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
 	AndroidEmulatorDetails,
@@ -80,6 +80,87 @@ function isWithin(root: string, candidate: string): boolean {
 	return path === "" || (!isAbsolute(path) && path !== ".." && !path.startsWith(`..${sep}`));
 }
 
+async function createApkSnapshot(
+	workspaceRoot: string,
+	workspacePath: string,
+): Promise<{ path: string; directory: string }> {
+	if (
+		typeof workspacePath !== "string" ||
+		workspacePath.length === 0 ||
+		workspacePath.length > 1000 ||
+		workspacePath.includes("\0") ||
+		isAbsolute(workspacePath)
+	) {
+		throw new Error("Choose an APK using a relative path inside the active workspace.");
+	}
+	let source: Awaited<ReturnType<typeof open>> | undefined;
+	let directory: string | undefined;
+	try {
+		const root = await realpath(workspaceRoot);
+		const candidate = resolve(root, workspacePath);
+		if (!isWithin(root, candidate)) throw new Error("outside");
+		const resolved = await realpath(candidate);
+		if (!isWithin(root, resolved)) throw new Error("outside");
+		source = await open(
+			resolved,
+			process.platform === "win32"
+				? "r"
+				: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+		);
+		const info = await source.stat();
+		const currentPath = await realpath(resolved);
+		const currentPathInfo = await stat(resolved);
+		if (
+			!isWithin(root, currentPath) ||
+			currentPathInfo.dev !== info.dev ||
+			currentPathInfo.ino !== info.ino ||
+			!info.isFile() ||
+			extname(resolved).toLowerCase() !== ".apk" ||
+			info.size > MAX_APK_BYTES
+		) {
+			throw new Error("invalid");
+		}
+		directory = await mkdtemp(join(tmpdir(), "thinkrail-android-apk-"));
+		const path = join(directory, "install.apk");
+		const snapshot = await open(path, "wx", 0o600);
+		try {
+			const buffer = Buffer.allocUnsafe(64 * 1024);
+			let position = 0;
+			while (position < info.size) {
+				const { bytesRead } = await source.read(
+					buffer,
+					0,
+					Math.min(buffer.byteLength, info.size - position),
+					position,
+				);
+				if (bytesRead === 0) throw new Error("invalid");
+				let written = 0;
+				while (written < bytesRead) {
+					const result = await snapshot.write(
+						buffer,
+						written,
+						bytesRead - written,
+						position + written,
+					);
+					if (result.bytesWritten === 0) throw new Error("invalid");
+					written += result.bytesWritten;
+				}
+				position += bytesRead;
+			}
+			if ((await snapshot.stat()).size !== info.size) throw new Error("invalid");
+		} finally {
+			await snapshot.close();
+		}
+		await source.close();
+		source = undefined;
+		return { path, directory };
+	} catch {
+		await source?.close().catch(() => {});
+		if (directory) await rm(directory, { recursive: true, force: true }).catch(() => {});
+		throw new Error("APK must be a regular file up to 256 MiB inside the active workspace.");
+	}
+}
+
 function parseEmulatorPorts(output: string): Set<number> {
 	const ports = new Set<number>();
 	for (const line of output.split(/\r?\n/)) {
@@ -129,6 +210,7 @@ export class AndroidEmulatorManager {
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 	private pendingStart: PendingStart | undefined;
 	private stopPromise: Promise<AndroidEmulatorStatus> | undefined;
+	private apkInstallInProgress = false;
 
 	constructor(options: { toolchain?: AndroidToolchain; idleTtlMs?: number } = {}) {
 		this.toolchain = options.toolchain ?? resolveAndroidToolchain();
@@ -421,43 +503,29 @@ export class AndroidEmulatorManager {
 	}
 
 	async installApk(workspaceRoot: string, workspacePath: string): Promise<void> {
-		if (
-			typeof workspacePath !== "string" ||
-			workspacePath.length === 0 ||
-			workspacePath.length > 1000 ||
-			workspacePath.includes("\0") ||
-			isAbsolute(workspacePath)
-		) {
-			throw new Error("Choose an APK using a relative path inside the active workspace.");
+		if (this.apkInstallInProgress) {
+			throw new Error("An APK installation is already in progress.");
 		}
-		let apkPath: string;
+		this.apkInstallInProgress = true;
 		try {
-			const root = await realpath(workspaceRoot);
-			const candidate = resolve(root, workspacePath);
-			if (!isWithin(root, candidate)) {
-				throw new Error("outside");
+			const active = await this.requireRunning();
+			const snapshot = await createApkSnapshot(workspaceRoot, workspacePath);
+			try {
+				this.touch(active);
+				const result = await runBounded(
+					[...this.requireAdb(), "-s", active.serial, "install", "-r", snapshot.path],
+					{ timeoutMs: 120_000, maxOutputBytes: 16 * 1024 },
+				);
+				if (!result.ok || result.truncated) {
+					throw new Error(
+						"Android rejected the APK. Check its compatibility and installation state.",
+					);
+				}
+			} finally {
+				await rm(snapshot.directory, { recursive: true, force: true });
 			}
-			apkPath = await realpath(candidate);
-			if (!isWithin(root, apkPath)) throw new Error("outside");
-			const info = await stat(apkPath);
-			if (
-				!info.isFile() ||
-				extname(apkPath).toLowerCase() !== ".apk" ||
-				info.size > MAX_APK_BYTES
-			) {
-				throw new Error("invalid");
-			}
-		} catch {
-			throw new Error("APK must be a regular file up to 256 MiB inside the active workspace.");
-		}
-		const active = await this.requireRunning();
-		this.touch(active);
-		const result = await runBounded(
-			[...this.requireAdb(), "-s", active.serial, "install", "-r", apkPath],
-			{ timeoutMs: 120_000, maxOutputBytes: 16 * 1024 },
-		);
-		if (!result.ok || result.truncated) {
-			throw new Error("Android rejected the APK. Check its compatibility and installation state.");
+		} finally {
+			this.apkInstallInProgress = false;
 		}
 	}
 

@@ -1,10 +1,19 @@
 import { afterAll, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	loadSessionLifecycle,
 	loadSessionReceipts,
+	saveAcpSessionData,
 	saveSessionLifecycle,
 	saveSessionReceipts,
 } from "./persistence";
@@ -67,6 +76,20 @@ test("session lifecycle and receipts round-trip exact ids", () => {
 			handledCompletionBySession: { s1: "completion-1" },
 		},
 	});
+});
+
+test("oversized ACP snapshots leave the previous atomic file intact", async () => {
+	await saveAcpSessionData({ version: 1, sessions: [] });
+	const path = join(dataRoot(), "acp-sessions.json");
+	const previous = readFileSync(path, "utf8");
+
+	await expect(
+		saveAcpSessionData({ version: 1, sessions: [{ transcript: "x".repeat(128) }] }, 64),
+	).rejects.toThrow("persisted size limit");
+
+	expect(readFileSync(path, "utf8")).toBe(previous);
+	expect(statSync(path).mode & 0o777).toBe(0o600);
+	expect(readdirSync(dataRoot()).filter((name) => name.endsWith(".tmp"))).toEqual([]);
 });
 
 test("absent session metadata loads as missing", () => {

@@ -383,7 +383,9 @@ the same test under `--repeat-each`, inherit it.
 **GitHub review states** (`topbar-review.spec.ts`) need a real-looking PR without a network. Origin is
 `git@github.com:<repo>.git` — what both the host's configured-URL read and `git remote get-url` see — with
 `core.sshCommand` pointing at the fake-bin `github-ssh` (`ssh.variant simple`), which serves upload-pack /
-receive-pack from a local bare repo, so pushes, fetches, and remote-branch deletion run for real. An
+receive-pack from a local bare repo, so pushes, fetches, and remote-branch deletion run for real. The
+Playwright config strips ambient `GIT_SSH*` overrides so fixture and host Git operations cannot bypass
+that local transport. An
 `insteadOf` rewrite cannot stand in: `get-url` expands it, and the host's review lookup would then see a
 local path and never find a PR. The lane's fake **`gh`** (`fixtures/fakeGh.ts`, launched by a generated
 fake-bin shim under the runner's bun, since the host PATH has none) answers `pr list|view` and `repo view`

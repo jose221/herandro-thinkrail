@@ -14,6 +14,7 @@ import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import { getTransport } from "../transport";
+import { AndroidApkPicker } from "./AndroidApkPicker";
 
 const STATE_KEYS: Record<AndroidEmulatorState, MessageKey> = {
 	starting: "androidEmulator.state.starting",
@@ -66,7 +67,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const [screen, setScreen] = useState<AndroidEmulatorScreenshot | null>(null);
 	const [logs, setLogs] = useState<AndroidEmulatorLogs | null>(null);
 	const [initialLoading, setInitialLoading] = useState(true);
-	const [busyAction, setBusyAction] = useState<string | null>(null);
+	const [isBusy, setIsBusy] = useState(false);
 	const [requestFailed, setRequestFailed] = useState(false);
 	const [tapX, setTapX] = useState("");
 	const [tapY, setTapY] = useState("");
@@ -109,7 +110,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 						? (statusResult.value.avdName ?? avdsResult.value[0] ?? "")
 						: (avdsResult.value[0] ?? ""),
 				);
-			} else failed = true;
+			} else if (statusResult.status !== "fulfilled" || statusResult.value.available) failed = true;
 			setRequestFailed(failed);
 			setInitialLoading(false);
 		});
@@ -142,30 +143,44 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	useEffect(() => {
 		if (!supported || (state !== "starting" && state !== "running")) return;
 		const intervalMs = state === "starting" ? 2000 : 10_000;
+		let requestPending = false;
+		let mounted = true;
 		const timer = window.setInterval(() => {
+			if (requestPending) return;
+			requestPending = true;
 			void getTransport()
 				.request("android.emulator.status", {})
-				.then(setStatus)
-				.catch(() => {});
+				.then(
+					(nextStatus) => {
+						requestPending = false;
+						if (mounted) setStatus(nextStatus);
+					},
+					() => {
+						requestPending = false;
+					},
+				);
 		}, intervalMs);
-		return () => window.clearInterval(timer);
+		return () => {
+			mounted = false;
+			window.clearInterval(timer);
+		};
 	}, [state, supported]);
 
-	const runAction = async (name: string, action: () => Promise<void>) => {
+	const runAction = async (action: () => Promise<void>) => {
 		if (!supported) return;
-		setBusyAction(name);
+		setIsBusy(true);
 		setRequestFailed(false);
 		try {
 			await action();
 		} catch {
 			setRequestFailed(true);
 		} finally {
-			setBusyAction(null);
+			setIsBusy(false);
 		}
 	};
 
 	const refresh = () =>
-		runAction("refresh", async () => {
+		runAction(async () => {
 			const [statusResult, avdsResult] = await Promise.allSettled([
 				getTransport().request("android.emulator.status", {}),
 				getTransport().request("android.avds.list", {}),
@@ -181,23 +196,27 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 						(avdsResult.value.includes(current) ? current : (avdsResult.value[0] ?? "")),
 				);
 			}
-			if (statusResult.status === "rejected" || avdsResult.status === "rejected") {
+			if (
+				statusResult.status === "rejected" ||
+				(avdsResult.status === "rejected" &&
+					(statusResult.status !== "fulfilled" || statusResult.value.available))
+			) {
 				throw new Error("Android emulator refresh failed");
 			}
 		});
 
 	const refreshScreen = () =>
-		runAction("screen", async () => {
+		runAction(async () => {
 			setScreen(await getTransport().request("android.emulator.screen", {}));
 		});
 
 	const start = () =>
-		runAction("start", async () => {
+		runAction(async () => {
 			setStatus(await getTransport().request("android.emulator.start", { avdName: selectedAvd }));
 		});
 
 	const stop = () =>
-		runAction("stop", async () => {
+		runAction(async () => {
 			setStatus(await getTransport().request("android.emulator.stop", {}));
 			setDetails(null);
 			setScreen(null);
@@ -205,7 +224,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 		});
 
 	const tap = (x: number, y: number) =>
-		runAction("input", async () => {
+		runAction(async () => {
 			await getTransport().request("android.emulator.tap", { x, y });
 			setScreen(await getTransport().request("android.emulator.screen", {}));
 		});
@@ -219,7 +238,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const submitText = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (!text.trim()) return;
-		void runAction("input", async () => {
+		void runAction(async () => {
 			await getTransport().request("android.emulator.type", { text });
 			setText("");
 			setScreen(await getTransport().request("android.emulator.screen", {}));
@@ -229,7 +248,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const submitSwipe = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if ([fromX, fromY, toX, toY].some((value) => value === "")) return;
-		void runAction("input", async () => {
+		void runAction(async () => {
 			await getTransport().request("android.emulator.swipe", {
 				x1: Number(fromX),
 				y1: Number(fromY),
@@ -243,11 +262,15 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const submitInstall = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		if (!apkPath.trim()) return;
-		void runAction("install", async () => {
-			await getTransport().request("android.emulator.installApk", {
-				workspaceId,
-				path: apkPath.trim(),
-			});
+		void runAction(async () => {
+			await getTransport().request(
+				"android.emulator.installApk",
+				{
+					workspaceId,
+					path: apkPath.trim(),
+				},
+				{ timeoutMs: 180_000 },
+			);
 		});
 	};
 
@@ -285,7 +308,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 					variant="ghost"
 					size="m"
 					iconLeft={RiRefreshLine}
-					disabled={!supported || busyAction !== null}
+					disabled={!supported || isBusy}
 					onClick={() => void refresh()}
 					data-testid="android-emulator-refresh"
 				>
@@ -346,6 +369,15 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 										</option>
 									))}
 								</select>
+								{supported &&
+								status?.available &&
+								!initialLoading &&
+								!requestFailed &&
+								avds.length === 0 ? (
+									<p role="status" className="text-text-muted tr-text-metadata">
+										{t("androidEmulator.noAvdsInstalled")}
+									</p>
+								) : null}
 							</label>
 							<div className="flex flex-wrap gap-8">
 								<Button
@@ -358,7 +390,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 										!status?.available ||
 										running ||
 										!selectedAvd ||
-										busyAction !== null ||
+										isBusy ||
 										state === "starting" ||
 										state === "stopping"
 									}
@@ -372,7 +404,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 									variant="outline"
 									size="m"
 									iconLeft={RiStopLine}
-									disabled={!supported || !status || state === "stopped" || busyAction !== null}
+									disabled={!supported || !status || state === "stopped" || isBusy}
 									onClick={() => void stop()}
 									data-testid="android-emulator-stop"
 								>
@@ -398,7 +430,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								variant="ghost"
 								size="s"
 								iconLeft={RiRefreshLine}
-								disabled={!running || busyAction !== null}
+								disabled={!running || isBusy}
 								onClick={() => void refreshScreen()}
 								data-testid="android-emulator-screen-refresh"
 							>
@@ -410,7 +442,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 							{screen && running ? (
 								<button
 									type="button"
-									disabled={busyAction !== null}
+									disabled={isBusy}
 									aria-label={t("androidEmulator.screenAlt", {
 										width: screen.width,
 										height: screen.height,
@@ -420,21 +452,21 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 										void tap(Math.floor(screen.width / 2), Math.floor(screen.height / 2));
 									}}
 									onPointerDown={(event) => {
-										if (!running || busyAction !== null) return;
+										if (!running || isBusy) return;
 										pointerStart.current = readScreenPoint(event, screen);
 										event.currentTarget.setPointerCapture(event.pointerId);
 									}}
 									onPointerUp={(event) => {
 										const startPoint = pointerStart.current;
 										pointerStart.current = null;
-										if (!startPoint || !running || busyAction !== null) return;
+										if (!startPoint || !running || isBusy) return;
 										const endPoint = readScreenPoint(event, screen);
 										const distance = Math.hypot(
 											endPoint.x - startPoint.x,
 											endPoint.y - startPoint.y,
 										);
 										if (distance > 8) {
-											void runAction("input", async () => {
+											void runAction(async () => {
 												await getTransport().request("android.emulator.swipe", {
 													x1: startPoint.x,
 													y1: startPoint.y,
@@ -480,7 +512,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 									max="100000"
 									value={tapX}
 									onChange={(event) => setTapX(event.currentTarget.value)}
-									disabled={!running || busyAction !== null}
+									disabled={!running || isBusy}
 									className={INPUT_CLASS}
 								/>
 							</label>
@@ -494,7 +526,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 									max="100000"
 									value={tapY}
 									onChange={(event) => setTapY(event.currentTarget.value)}
-									disabled={!running || busyAction !== null}
+									disabled={!running || isBusy}
 									className={INPUT_CLASS}
 								/>
 							</label>
@@ -502,7 +534,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								type="submit"
 								variant="outline"
 								size="m"
-								disabled={!running || busyAction !== null || tapX === "" || tapY === ""}
+								disabled={!running || isBusy || tapX === "" || tapY === ""}
 								className="col-span-2 sm:col-span-1"
 								data-testid="android-emulator-tap"
 							>
@@ -524,14 +556,14 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								value={text}
 								placeholder={t("androidEmulator.textPlaceholder")}
 								onChange={(event) => setText(event.currentTarget.value)}
-								disabled={!running || busyAction !== null}
+								disabled={!running || isBusy}
 								className={`${INPUT_CLASS} flex-1`}
 							/>
 							<Button
 								type="submit"
 								variant="outline"
 								size="m"
-								disabled={!running || busyAction !== null || !text.trim()}
+								disabled={!running || isBusy || !text.trim()}
 								data-testid="android-emulator-type"
 							>
 								{t("androidEmulator.type")}
@@ -551,7 +583,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 										max="100000"
 										value={value}
 										onChange={(event) => onChange(event.currentTarget.value)}
-										disabled={!running || busyAction !== null}
+										disabled={!running || isBusy}
 										className={INPUT_CLASS}
 									/>
 								</label>
@@ -562,9 +594,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 							variant="outline"
 							size="m"
 							disabled={
-								!running ||
-								busyAction !== null ||
-								[fromX, fromY, toX, toY].some((value) => value === "")
+								!running || isBusy || [fromX, fromY, toX, toY].some((value) => value === "")
 							}
 							className="self-start"
 							data-testid="android-emulator-swipe"
@@ -577,25 +607,19 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 						<h3 className="tr-title-compact text-text-default">
 							{t("androidEmulator.installTitle")}
 						</h3>
-						<label htmlFor="android-emulator-apk" className="text-text-muted tr-text-metadata">
-							{t("androidEmulator.apkPath")}
-						</label>
+						<span className="text-text-muted tr-text-metadata">{t("androidEmulator.apkPath")}</span>
 						<div className="flex min-w-0 flex-col gap-8 sm:flex-row">
-							<input
-								id="android-emulator-apk"
-								type="text"
-								autoComplete="off"
+							<AndroidApkPicker
+								workspaceId={workspaceId}
 								value={apkPath}
-								placeholder={t("androidEmulator.apkPlaceholder")}
-								onChange={(event) => setApkPath(event.currentTarget.value)}
-								disabled={!running || busyAction !== null}
-								className={`${INPUT_CLASS} flex-1`}
+								disabled={!supported || isBusy}
+								onSelect={setApkPath}
 							/>
 							<Button
 								type="submit"
 								variant="outline"
 								size="m"
-								disabled={!running || busyAction !== null || !apkPath.trim()}
+								disabled={!running || isBusy || !apkPath.trim()}
 								data-testid="android-emulator-install"
 							>
 								{t("androidEmulator.install")}
@@ -634,8 +658,8 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								variant="ghost"
 								size="s"
 								iconLeft={RiRefreshLine}
-								disabled={!running || busyAction !== null}
-								onClick={() => void runAction("inspect", refreshInspection)}
+								disabled={!running || isBusy}
+								onClick={() => void runAction(refreshInspection)}
 								data-testid="android-emulator-inspect"
 							>
 								{t("androidEmulator.refresh")}

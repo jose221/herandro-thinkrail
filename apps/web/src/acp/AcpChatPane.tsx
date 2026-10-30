@@ -2,10 +2,9 @@ import { RiDeleteBinLine, RiLoader4Line, RiPlayLine, RiStopLine } from "@remixic
 import type {
 	AcpConfigOption,
 	AcpPermissionOption,
-	AcpSessionSnapshot,
 	AcpTranscriptEntry,
 } from "@thinkrail/contracts";
-import { ACP_PROTOCOL_VERSION } from "@thinkrail/contracts";
+import { ACP_CONFIG_OPTIONS_PROTOCOL_VERSION, ACP_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import {
@@ -17,11 +16,12 @@ import {
 	DialogTitle,
 } from "@thinkrail/ui/dialog";
 import { Textarea } from "@thinkrail/ui/textarea";
-import { type KeyboardEvent, useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { QuietScrollArea } from "../components/QuietScrollArea";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { useAcpStore } from "./acpStore";
+import { acpSessionStateKey as statusKey } from "./sessionState";
 
 const SAFE_IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
@@ -35,21 +35,6 @@ function roleKey(role: AcpTranscriptEntry["role"]) {
 			return "acp.chat.role.thought";
 		case "notice":
 			return "acp.chat.role.notice";
-	}
-}
-
-function statusKey(status: AcpSessionSnapshot["summary"]["state"]) {
-	switch (status) {
-		case "idle":
-			return "acp.chat.state.idle";
-		case "running":
-			return "acp.chat.state.running";
-		case "needs-input":
-			return "acp.chat.state.needsInput";
-		case "failed":
-			return "acp.chat.state.failed";
-		case "interrupted":
-			return "acp.chat.state.interrupted";
 	}
 }
 
@@ -199,6 +184,25 @@ export function AcpChatPane({
 	const snapshot = useAcpStore((state) => state.snapshotsBySession[sessionId]);
 	const snapshotGeneration = useAcpStore((state) => state.snapshotGenerationBySession[sessionId]);
 	const draft = useAcpStore((state) => state.draftsBySession[sessionId]);
+	const messageRows = useMemo(
+		() => snapshot?.messages.map((entry) => <MessageRow key={entry.id} entry={entry} />),
+		[snapshot?.messages],
+	);
+	const toolCallRows = useMemo(
+		() =>
+			snapshot?.toolCalls.map((toolCall) => (
+				<li
+					key={toolCall.id}
+					className="min-w-0 break-words rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
+				>
+					<span className="tr-text-ui text-text-default">{toolCall.title}</span>
+					<span className="ml-8 text-text-muted tr-text-metadata">
+						{t(toolStateKey(toolCall.status))}
+					</span>
+				</li>
+			)),
+		[snapshot?.toolCalls, t],
+	);
 	const [text, setText] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [loadFailed, setLoadFailed] = useState(false);
@@ -207,6 +211,10 @@ export function AcpChatPane({
 	const [deleting, setDeleting] = useState(false);
 	const supported =
 		status === "connected" && protocolVersion !== null && protocolVersion >= ACP_PROTOCOL_VERSION;
+	const configOptions =
+		protocolVersion !== null && protocolVersion >= ACP_CONFIG_OPTIONS_PROTOCOL_VERSION
+			? (snapshot?.configOptions ?? [])
+			: [];
 
 	useEffect(() => {
 		if (!supported || connectionGeneration === 0 || snapshotGeneration === connectionGeneration)
@@ -292,10 +300,6 @@ export function AcpChatPane({
 		setDeleting(true);
 		void getTransport()
 			.request("acp.session.delete", { workspaceId, sessionId })
-			.then(() => {
-				useAcpStore.getState().removeSession(workspaceId, sessionId);
-				useAppStore.getState().closeTab(tabId, true, true, workspaceId);
-			})
 			.catch(actionFailed)
 			.finally(() => {
 				setDeleting(false);
@@ -349,7 +353,7 @@ export function AcpChatPane({
 					</p>
 				</div>
 				<div className="flex min-w-0 flex-wrap items-center gap-4">
-					{snapshot?.configOptions
+					{configOptions
 						.filter((option) => option.category === "model" && option.options.length > 0)
 						.map((option) => (
 							<ConfigControl
@@ -446,9 +450,7 @@ export function AcpChatPane({
 				<>
 					<QuietScrollArea className="min-h-0 flex-1" viewportClassName="px-12 py-12">
 						<div className="mx-auto flex w-full max-w-768 min-w-0 flex-col gap-12">
-							{snapshot.messages.map((entry) => (
-								<MessageRow key={entry.id} entry={entry} />
-							))}
+							{messageRows}
 							{draft?.thoughtText || draft?.thoughtImages.length ? (
 								<article
 									data-testid="acp-thought-draft"
@@ -481,19 +483,7 @@ export function AcpChatPane({
 							{snapshot.toolCalls.length > 0 ? (
 								<section className="flex min-w-0 flex-col gap-8">
 									<h3 className="tr-title-compact text-text-default">{t("acp.chat.tools")}</h3>
-									<ul className="flex min-w-0 flex-col gap-4">
-										{snapshot.toolCalls.map((toolCall) => (
-											<li
-												key={toolCall.id}
-												className="min-w-0 break-words rounded-sm border border-border-default bg-container-sidebar-bg px-12 py-8"
-											>
-												<span className="tr-text-ui text-text-default">{toolCall.title}</span>
-												<span className="ml-8 text-text-muted tr-text-metadata">
-													{t(toolStateKey(toolCall.status))}
-												</span>
-											</li>
-										))}
-									</ul>
+									<ul className="flex min-w-0 flex-col gap-4">{toolCallRows}</ul>
 								</section>
 							) : null}
 							{snapshot.plan.length > 0 ? (
@@ -577,9 +567,9 @@ export function AcpChatPane({
 						</section>
 					) : null}
 
-					{snapshot.configOptions.some((option) => option.category !== "model") ? (
+					{configOptions.some((option) => option.category !== "model") ? (
 						<div className="flex min-w-0 flex-wrap gap-8 border-t border-border-default px-12 py-8">
-							{snapshot.configOptions
+							{configOptions
 								.filter((option) => option.category !== "model")
 								.map((option) => (
 									<ConfigControl

@@ -1349,6 +1349,17 @@ export interface AcpSessionSnapshot {
 	permission: AcpPermissionRequest | null;
 }
 
+export interface AcpAuthMethodSummary {
+	id: string;
+	name: string;
+	description?: string;
+	type: "agent" | "terminal";
+}
+
+export type AcpAuthTerminalEvent =
+	| { type: "data"; id: string; data: string }
+	| { type: "exit"; id: string; success: boolean };
+
 export type AcpSessionEvent =
 	| { type: "created"; session: AcpSessionSummary }
 	| { type: "deleted"; sessionId: string }
@@ -1369,11 +1380,13 @@ export type AcpSessionEvent =
 	| { type: "availableCommands"; sessionId: string; commands: AcpAvailableCommand[] }
 	| { type: "usage"; sessionId: string; usage: AcpUsage }
 	| { type: "state"; sessionId: string; state: AcpSessionState }
+	| { type: "title"; sessionId: string; title: string }
 	| { type: "error"; sessionId: string; message: string };
 
 export interface AcpClientCheckResult {
 	available: boolean;
 	issue?: "executable" | "handshake" | "protocol";
+	authMethods?: AcpAuthMethodSummary[];
 }
 
 export interface ExtensionCatalogEntry {

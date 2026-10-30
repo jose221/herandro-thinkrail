@@ -133,11 +133,13 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 100;
+export const PROTOCOL_VERSION = 103;
 export const ACP_PROTOCOL_VERSION = 96;
 export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
 export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
 export const ANDROID_EMULATOR_PROTOCOL_VERSION = 100;
+export const ACP_AUTH_PROTOCOL_VERSION = 102;
+export const ACP_SESSION_TITLE_PROTOCOL_VERSION = 103;
 export const PROVIDER_MODELS_PROTOCOL_VERSION = 97;
 export const PROJECT_CLONE_PROTOCOL_VERSION = 95;
 export const ONBOARDING_PROTOCOL_VERSION = 94;
@@ -392,6 +394,13 @@ export const WS_METHODS = {
 	mcpReadLog: "mcp.readLog",
 	acpClientCheck: "acp.client.check",
 	acpClientModels: "acp.client.models",
+	acpClientAuthenticate: "acp.client.authenticate",
+	acpClientAuthenticateCancel: "acp.client.authenticate.cancel",
+	acpAuthTerminalStart: "acp.client.authTerminal.start",
+	acpAuthTerminalCancelStart: "acp.client.authTerminal.cancelStart",
+	acpAuthTerminalWrite: "acp.client.authTerminal.write",
+	acpAuthTerminalResize: "acp.client.authTerminal.resize",
+	acpAuthTerminalStop: "acp.client.authTerminal.stop",
 	androidAvdsList: "android.avds.list",
 	androidEmulatorStatus: "android.emulator.status",
 	androidEmulatorStart: "android.emulator.start",
@@ -444,6 +453,8 @@ export const WS_CHANNELS = {
 	localesChanged: "locales.changed",
 	themesChanged: "themes.changed",
 	acpEvent: "acp.event",
+	acpAuthTerminalData: "acp.authTerminal.data",
+	acpAuthTerminalExit: "acp.authTerminal.exit",
 } as const;
 
 type SameUnion<A extends B, B extends C, C = A> = A;
@@ -1140,6 +1151,28 @@ export interface WsMethodMap {
 		params: { workspaceId: string; clientId: string };
 		result: AcpConfigOption[];
 	};
+	"acp.client.authenticate": {
+		params: { clientId: string; methodId: string };
+		result: Ack;
+	};
+	"acp.client.authenticate.cancel": { params: { clientId: string }; result: Ack };
+	"acp.client.authTerminal.start": {
+		params: {
+			workspaceId?: string;
+			clientId: string;
+			methodId: string;
+			cols: number;
+			rows: number;
+		};
+		result: { id: string };
+	};
+	"acp.client.authTerminal.cancelStart": { params: { clientId: string }; result: Ack };
+	"acp.client.authTerminal.write": { params: { id: string; data: string }; result: Ack };
+	"acp.client.authTerminal.resize": {
+		params: { id: string; cols: number; rows: number };
+		result: Ack;
+	};
+	"acp.client.authTerminal.stop": { params: { id: string }; result: Ack };
 	"android.avds.list": { params: Record<string, never>; result: string[] };
 	"android.emulator.status": { params: Record<string, never>; result: AndroidEmulatorStatus };
 	"android.emulator.start": { params: { avdName: string }; result: AndroidEmulatorStatus };

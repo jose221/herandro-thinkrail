@@ -14,6 +14,7 @@ import type {
 	WsResult,
 } from "@thinkrail/contracts";
 import {
+	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
 	ACP_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
@@ -303,8 +304,9 @@ type WsHandler<M extends WsMethodName> = (
 
 type WsHandlers = { [M in WsMethodName]: WsHandler<M> };
 
-async function archiveTeardown(ws: Workspace): Promise<void> {
+async function archiveTeardown(ws: Workspace, acp?: AcpSessionManager): Promise<void> {
 	try {
+		await acp?.removeWorkspace(ws.id);
 		await removeWorkspaceSessions(ws.id, ws.worktreePath);
 		await settleChangeArtifacts(ws.id);
 		reclaimWorktree(ws);
@@ -652,7 +654,7 @@ const handlers: WsHandlers = {
 	"workspace.markRead": async (params) => ({
 		records: await markWorkspaceRead(sessionStateWorkspace(getWorkspace(params.id))),
 	}),
-	"workspace.remove": (params) => {
+	"workspace.remove": (params, ctx) => {
 		const id = params.id;
 		const ws = forgetWorkspace(id);
 		if (ws) {
@@ -662,7 +664,7 @@ const handlers: WsHandlers = {
 			forgetWorkspaceTurns(ws.id);
 			stopWatch(ws.id);
 			closeWorkspaceTerminals(ws.id);
-			void archiveTeardown(ws);
+			void archiveTeardown(ws, ctx.acp);
 		}
 		return { ok: true } as const;
 	},
@@ -1168,6 +1170,20 @@ const handlers: WsHandlers = {
 	"acp.client.check": (params, ctx) => acpManager(ctx).checkClient(params.clientId),
 	"acp.client.models": (params, ctx) =>
 		acpManager(ctx).listClientModels(params.workspaceId, params.clientId),
+	"acp.client.authenticate": (params, ctx) =>
+		acpManager(ctx).authenticateClient(params.clientId, params.methodId, ctx.clientKey),
+	"acp.client.authenticate.cancel": (params, ctx) =>
+		acpManager(ctx).cancelClientAuthentication(params.clientId, ctx.clientKey),
+	"acp.client.authTerminal.start": (params, ctx) =>
+		acpManager(ctx).startAuthTerminal(params, ctx.clientKey),
+	"acp.client.authTerminal.cancelStart": (params, ctx) =>
+		acpManager(ctx).cancelAuthTerminalStart(params.clientId, ctx.clientKey),
+	"acp.client.authTerminal.write": (params, ctx) =>
+		acpManager(ctx).writeAuthTerminal(params.id, params.data, ctx.clientKey),
+	"acp.client.authTerminal.resize": (params, ctx) =>
+		acpManager(ctx).resizeAuthTerminal(params.id, params.cols, params.rows, ctx.clientKey),
+	"acp.client.authTerminal.stop": (params, ctx) =>
+		acpManager(ctx).stopAuthTerminal(params.id, ctx.clientKey),
 	"acp.session.list": (params, ctx) => acpManager(ctx).list(params.workspaceId),
 	"acp.session.get": (params, ctx) => acpManager(ctx).get(params.workspaceId, params.sessionId),
 	"acp.session.create": (params, ctx) =>
@@ -1519,6 +1535,13 @@ export async function handleRequest(
 		ctx.protocolVersion < ACP_MODEL_CATALOG_PROTOCOL_VERSION
 	) {
 		throw new Error("ACP model discovery requires a newer host protocol.");
+	}
+	if (
+		method.startsWith("acp.client.auth") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < ACP_AUTH_PROTOCOL_VERSION
+	) {
+		throw new Error("ACP authentication requires a newer host protocol.");
 	}
 	if (
 		method.startsWith("provider.models.") &&

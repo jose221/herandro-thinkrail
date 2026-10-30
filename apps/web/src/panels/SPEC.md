@@ -11,14 +11,17 @@ tags: [ui]
 
 ## Responsibility
 
-The layout-agnostic, store-driven feature views, including the user-owned ACP client catalog and its
-explicit per-client model discovery in Settings, plus the optional Android emulator controls. ACP model
-options stay separate from Pi's provider/model catalog (see `submodule-web-acp`). A panel fills its
-container and never knows its arrangement (so the mobile shell is an additive layer, not a rewrite).
+The layout-agnostic, store-driven feature views, including the user-owned ACP client catalog, per-client
+model discovery, and explicit inline ACP login in Settings, plus the optional Android emulator controls.
+ACP model options stay separate from Pi's provider/model catalog (see `submodule-web-acp`). ACP Settings
+also warns that experimental v2 adapter-owned tools are outside ThinkRail's filesystem and terminal
+permission callbacks. A panel fills its container and never knows its arrangement (so the mobile shell is
+an additive layer, not a rewrite).
 
 `AndroidEmulatorPane` uses only contracts and transport for Android protocol v100. It waits for a
 compatible host before making requests, never starts an emulator on mount or status polling, and exposes
-start/stop and bounded inspection/input/install actions explicitly. APK paths are workspace-relative.
+start/stop and bounded inspection/input/install actions explicitly. APK selection browses `fs.readDir`
+from the workspace root and yields only workspace-relative `.apk` paths; it never uploads a host-local file.
 
 Files (both modes) and Review keep their fixed toolbars outside a panel-owned `components/QuietScrollArea`
 (Files through `RememberedScrollArea`); Projects and Specs expose content for the shell-owned scroll wrapper
@@ -26,6 +29,8 @@ described in `shell/SPEC.md`.
 `TerminalInstance` wraps xterm with `QuietScrollFrame`, which skins xterm's descendant custom scroll control
 without shrinking its hit target; top/bottom state comes from xterm's public `buffer.active.viewportY/baseY`
 and `onScroll`/`onWriteParsed` API rather than pretending its non-native viewport has DOM scroll metrics.
+Persistent and inline ACP terminals share the semantic font, ANSI palette, selection, and contrast
+presentation in `terminalPresentation.ts`.
 Those edges also authoritatively signal whether vertical scrollback exists, allowing the frame to expose
 xterm's otherwise-invisible controller for local intent and accessibility modes without inventing a second
 scroll model. The same neutral intent-revealed thumb + directional curtains therefore follow the terminal

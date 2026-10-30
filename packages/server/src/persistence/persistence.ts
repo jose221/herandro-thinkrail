@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir as mkdirAsync, open, rename as renameAsync, rm as rmAsync } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import {
@@ -425,8 +426,54 @@ export function loadAcpSessionData(): unknown {
 	return readJson<unknown>("acp-sessions.json", null);
 }
 
-export function saveAcpSessionData(value: unknown): void {
-	writeJsonAtomic("acp-sessions.json", value, 0o600);
+const ACP_SESSION_DATA_MAX_BYTES = 256 * 1024 * 1024;
+
+export async function saveAcpSessionData(
+	value: unknown,
+	maxBytes = ACP_SESSION_DATA_MAX_BYTES,
+): Promise<void> {
+	if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.sessions)) {
+		throw new Error("Invalid ACP session data.");
+	}
+	if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+		throw new Error("Invalid ACP session data size limit.");
+	}
+	await mkdirAsync(dataDir(), { recursive: true });
+	const target = join(dataDir(), "acp-sessions.json");
+	const temporary = `${target}.${randomUUID()}.tmp`;
+	let file: Awaited<ReturnType<typeof open>> | undefined;
+	try {
+		file = await open(temporary, "wx", 0o600);
+		const header = '{"version":1,"sessions":[';
+		const trailer = "]}\n";
+		let bytes = Buffer.byteLength(header) + Buffer.byteLength(trailer);
+		if (bytes > maxBytes) {
+			throw new Error("ACP session data exceeds the persisted size limit.");
+		}
+		await file.writeFile(header);
+		for (const [index, session] of value.sessions.entries()) {
+			const serialized = JSON.stringify(session);
+			if (typeof serialized !== "string") {
+				throw new Error("Invalid ACP session record.");
+			}
+			const separator = index > 0 ? "," : "";
+			bytes += Buffer.byteLength(separator) + Buffer.byteLength(serialized);
+			if (bytes > maxBytes) {
+				throw new Error("ACP session data exceeds the persisted size limit.");
+			}
+			await file.writeFile(separator + serialized);
+			if ((index + 1) % 16 === 0) {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+		}
+		await file.writeFile(trailer);
+		await file.close();
+		file = undefined;
+		await renameAsync(temporary, target);
+	} finally {
+		await file?.close().catch(() => {});
+		await rmAsync(temporary, { force: true }).catch(() => {});
+	}
 }
 
 export function loadHostEnvironment(): HostEnvironment {

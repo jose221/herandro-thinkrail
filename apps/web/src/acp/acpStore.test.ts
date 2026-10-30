@@ -41,6 +41,31 @@ beforeEach(() => {
 	});
 });
 
+test("ignored ACP state updates do not notify store subscribers", () => {
+	useAcpStore.getState().setConnectionGeneration(1);
+	let notifications = 0;
+	const unsubscribe = useAcpStore.subscribe(() => {
+		notifications += 1;
+	});
+	const store = useAcpStore.getState();
+	store.setConnectionGeneration(1);
+	store.beginSnapshotHydration(summary.id, 0);
+	store.cancelSnapshotHydration(summary.id, 0);
+	store.installSessions(summary.workspaceId, [], 0);
+	store.installSnapshot(snapshot(), 0);
+	store.applyEvent(
+		{ type: "messageDelta", sessionId: summary.id, role: "assistant", delta: "ignored" },
+		0,
+	);
+	store.applyEvent(
+		{ type: "messageDelta", sessionId: summary.id, role: "assistant", delta: "ignored" },
+		1,
+	);
+	unsubscribe();
+
+	expect(notifications).toBe(0);
+});
+
 test("replays ACP events buffered during snapshot hydration", () => {
 	const store = useAcpStore.getState();
 	store.setConnectionGeneration(4);
@@ -65,6 +90,32 @@ test("replays ACP events buffered during snapshot hydration", () => {
 		{ id: "tool-1", title: "Read file", kind: "read", status: "in-progress" },
 	]);
 	expect(useAcpStore.getState().pendingEventsBySession[summary.id]).toBeUndefined();
+});
+
+test("batches ACP text deltas into one store update", () => {
+	const store = useAcpStore.getState();
+	store.setConnectionGeneration(4);
+	store.installSnapshot(snapshot(), 4);
+	let notifications = 0;
+	const unsubscribe = useAcpStore.subscribe(() => {
+		notifications += 1;
+	});
+
+	store.applyMessageDeltas(
+		[
+			{ type: "messageDelta", sessionId: summary.id, role: "assistant", delta: "hel" },
+			{ type: "messageDelta", sessionId: summary.id, role: "assistant", delta: "lo" },
+			{ type: "messageDelta", sessionId: summary.id, role: "thought", delta: "thinking" },
+		],
+		4,
+	);
+	unsubscribe();
+
+	expect(notifications).toBe(1);
+	expect(useAcpStore.getState().draftsBySession[summary.id]).toMatchObject({
+		assistantText: "hello",
+		thoughtText: "thinking",
+	});
 });
 
 test("stale generations cannot overwrite the current ACP snapshot or transcript", () => {
@@ -144,6 +195,23 @@ test("ACP config option snapshots replace removed and changed options", () => {
 			options: [{ value: "model-b", name: "Model B" }],
 		},
 	]);
+});
+
+test("ACP title updates replace the snapshot and workspace summaries", () => {
+	const store = useAcpStore.getState();
+	store.setConnectionGeneration(4);
+	store.installSnapshot(snapshot(), 4);
+	store.applyEvent(
+		{ type: "title", sessionId: summary.id, title: "Renamed by agent" } satisfies AcpSessionEvent,
+		4,
+	);
+
+	expect(useAcpStore.getState().snapshotsBySession[summary.id]?.summary.title).toBe(
+		"Renamed by agent",
+	);
+	expect(useAcpStore.getState().sessionsByWorkspace[summary.workspaceId]?.[0]?.title).toBe(
+		"Renamed by agent",
+	);
 });
 
 test("ACP deletion clears only its separate workspace projection", () => {

@@ -20,7 +20,7 @@ import {
 	useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AcpChatPane, AcpNewChatDialog } from "../acp";
+import { AcpChatPane, AcpModelPicker, AcpNewChatDialog } from "../acp";
 import { prepareChatTitle } from "../chat/chatTitle";
 import { useAutoPlanSummary } from "../chat/useChatTodos";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -215,7 +215,12 @@ function ChatResourceBody({
 				resetKeys={[workspaceId, tab.id]}
 			>
 				<Suspense fallback={<MissingResource kind="chat" />}>
-					<ChatView sessionId={tab.sessionId} workspaceId={workspaceId} onOpenFile={onOpenFile} />
+					<ChatView
+						sessionId={tab.sessionId}
+						workspaceId={workspaceId}
+						onOpenFile={onOpenFile}
+						composerRightAction={<AcpModelPicker workspaceId={workspaceId} />}
+					/>
 				</Suspense>
 			</ErrorBoundary>
 		);

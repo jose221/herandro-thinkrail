@@ -88,9 +88,17 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
   `ACP_PROTOCOL_VERSION` (v96) gates those operations. The explicit `acp.client.models` Settings request,
   gated at `ACP_MODEL_CATALOG_PROTOCOL_VERSION` (v99), opens a temporary per-client ACP session and
   returns only that client's bounded model options; it never contributes to Pi's provider catalog.
-  `AcpClientCheckResult` distinguishes an unavailable executable from a failed handshake. From
-  `ACP_CONFIG_OPTIONS_PROTOCOL_VERSION` (v98),
-  the `configOptions` event carries a complete replacement set and `AcpConfigOption.category` preserves
+  `ACP_AUTH_PROTOCOL_VERSION` (v102) adds user-triggered ACP auth methods, agent-managed authenticate,
+  and an ephemeral client-addressed terminal-auth flow. Auth descriptors sent to the browser are limited
+  to id/name/description/type; auth-launch arguments and environment stay host-side. A start-cancel request
+  stops an in-progress or newly-started PTY when its client request is abandoned. ACP v1 terminal-create
+  permission titles separately show the command, cwd, and environment overrides before execution.
+  PTY input/output is addressed to the initiating client and is never persisted or broadcast. ACP session
+  title updates are introduced at `ACP_SESSION_TITLE_PROTOCOL_VERSION` (v103) so snapshot and workspace-list
+  projections stay synchronized.
+  `AcpClientCheckResult` reports bounded advertised auth-method summaries and distinguishes an unavailable
+  executable from a failed handshake. The `configOptions` event carries a complete replacement set and
+  `AcpConfigOption.category` preserves
   agent-declared model options for the UI; this remains session-scoped, not part of Pi's model catalog.
 - Android emulator methods (`android.avds.list`, `android.emulator.status/start/stop/details/screen/tap/type/swipe/installApk/logs`)
   and the bounded `AndroidEmulator*` DTOs are introduced at `ANDROID_EMULATOR_PROTOCOL_VERSION` (v100).

@@ -9,8 +9,10 @@ import {
 	SUBAGENT_MAX_CONCURRENT,
 } from "./domain";
 import {
+	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_CONFIG_OPTIONS_PROTOCOL_VERSION,
 	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
+	ACP_SESSION_TITLE_PROTOCOL_VERSION,
 	AGENT_REVIEW_SETTING_PROTOCOL_VERSION,
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
@@ -102,6 +104,21 @@ test("ACP model discovery is explicit and separate at protocol v99", () => {
 	expect(ACP_MODEL_CATALOG_PROTOCOL_VERSION).toBe(99);
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_MODEL_CATALOG_PROTOCOL_VERSION);
 	expect(WS_METHODS.acpClientModels).toBe("acp.client.models");
+});
+
+test("ACP authentication and terminal-start cancellation are versioned at protocol v102", () => {
+	expect(ACP_AUTH_PROTOCOL_VERSION).toBe(102);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_AUTH_PROTOCOL_VERSION);
+	expect(WS_METHODS.acpClientAuthenticate).toBe("acp.client.authenticate");
+	expect(WS_METHODS.acpAuthTerminalStart).toBe("acp.client.authTerminal.start");
+	expect(WS_METHODS.acpAuthTerminalCancelStart).toBe("acp.client.authTerminal.cancelStart");
+	expect(WS_CHANNELS.acpAuthTerminalData).toBe("acp.authTerminal.data");
+	expect(WS_CHANNELS.acpAuthTerminalExit).toBe("acp.authTerminal.exit");
+});
+
+test("ACP session title updates are versioned at protocol v103", () => {
+	expect(ACP_SESSION_TITLE_PROTOCOL_VERSION).toBe(103);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ACP_SESSION_TITLE_PROTOCOL_VERSION);
 });
 
 test("Android emulator controls are versioned at protocol v100", () => {

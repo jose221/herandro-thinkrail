@@ -35,6 +35,7 @@ input and install a workspace-contained APK, and stop the emulator after five mi
   refresh the inactivity clock; status polling does not. Expiry and host shutdown stop the owned process.
 - Screenshot and log capture have byte limits while the child pipes continue draining. A truncated
   screenshot is rejected; log output reports truncation. Device input is range-checked, APKs must resolve
-  to regular `.apk` files inside the active workspace, and every process uses argv with `shell: false`.
+  to regular `.apk` files inside the active workspace and are installed from a private snapshot, and every
+  process uses argv with `shell: false`.
 - Absence of Android SDK tools is a normal unavailable state. ThinkRail does not install the SDK, create
   AVDs, or start an emulator at host boot.

@@ -18,6 +18,7 @@ import { cn } from "@thinkrail/ui/utils";
 import {
 	forwardRef,
 	type KeyboardEvent,
+	type ReactNode,
 	useCallback,
 	useEffect,
 	useImperativeHandle,
@@ -165,6 +166,7 @@ interface ComposerProps {
 	onSlashActive: (active: boolean) => void;
 	onSelectModel: (selection: ModelSelection) => void;
 	onSelectThinking: (level: ThinkingLevel) => void;
+	rightAction?: ReactNode;
 	onSubmit: (
 		text: string,
 		attachments: ChatAttachment[],
@@ -206,6 +208,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		onSlashActive,
 		onSelectModel,
 		onSelectThinking,
+		rightAction,
 		onSubmit,
 		onAbort,
 		onHistoryOpen,
@@ -666,6 +669,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 							label={t("chat.composer.searchHistory")}
 							onClick={openHistory}
 						/>
+						{rightAction}
 						{isStreaming ? (
 							<Button
 								variant="ghost"

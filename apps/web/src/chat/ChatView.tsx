@@ -16,7 +16,15 @@ import {
 	DialogFooter,
 	DialogTitle,
 } from "@thinkrail/ui/dialog";
-import { useCallback, useEffect, useInsertionEffect, useMemo, useRef, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useInsertionEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNow } from "@/components/useNow";
 import { type ParsedTemplate, templateToSlashCommand, useTemplateCommandPicker } from "@/prompt";
@@ -86,10 +94,12 @@ export default function ChatView({
 	sessionId,
 	workspaceId,
 	onOpenFile,
+	composerRightAction,
 }: {
 	sessionId: string;
 	workspaceId: string;
 	onOpenFile?: ((path: string) => void) | undefined;
+	composerRightAction?: ReactNode;
 }) {
 	const t = useT();
 	const sessionExists = useAppStore((s) => s.sessions[sessionId] !== undefined);
@@ -870,6 +880,7 @@ export default function ChatView({
 					onSlashActive={setSlashActive}
 					onSelectModel={onSelectModel}
 					onSelectThinking={onSelectThinking}
+					rightAction={composerRightAction}
 					onSubmit={onSubmit}
 					onAbort={onAbort}
 					onHistoryOpen={onHistoryOpen}

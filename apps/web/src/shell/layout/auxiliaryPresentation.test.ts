@@ -112,7 +112,7 @@ test("rail clusters mirror the panes in order and park unplaced tools in a trail
 		["tools", ["files", "review"]],
 		["shells", ["terminals"]],
 		["other", ["terminals"]],
-		[null, ["specs", "plan"]],
+		[null, ["specs", "plan", "emulator"]],
 	]);
 	const closed = closeLayoutTab(doc, "custom-files").document;
 	closed.toolRestoreTargets.files = { region: "right", index: 0 };
@@ -120,7 +120,7 @@ test("rail clusters mirror the panes in order and park unplaced tools in a trail
 	expect(clusters.map((cluster) => cluster.groupId)).toEqual(["tools", "shells", "other", null]);
 	const unplaced = clusters.at(-1)?.entries ?? [];
 	expect(unplaced.map((entry) => (entry.kind === "tool" ? entry.tool : entry.kind)).sort()).toEqual(
-		["files", "plan", "specs"],
+		["emulator", "files", "plan", "specs"],
 	);
 	expect(unplaced.every(isUnplacedRailEntry)).toBe(true);
 	expect(

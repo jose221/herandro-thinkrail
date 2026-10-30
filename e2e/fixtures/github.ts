@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FakeGhScenario } from "./fakeGh";
-import { gitAs } from "./git";
+import { gitAs, gitAsWithEnv } from "./git";
 import { E2E_FAKE_BIN_DIR, E2E_GH_LOG, E2E_GH_SCENARIO } from "./paths";
 
 export type { FakeGhScenario, FakePr } from "./fakeGh";
@@ -14,18 +14,30 @@ function shellQuote(value: string): string {
 export function githubOrigin(
 	worktree: string,
 	repository = "acme/sample",
-): { bare: string; dispose: () => void } {
+): { bare: string; push: (branch: string) => string; dispose: () => void } {
 	const bare = mkdtempSync(join(tmpdir(), "thinkrail-gh-origin-"));
 	gitAs(bare, "init", "-q", "--bare");
 	gitAs(worktree, "remote", "add", "origin", `git@github.com:${repository}.git`);
-	gitAs(
-		worktree,
-		"config",
-		"core.sshCommand",
-		`${shellQuote(join(E2E_FAKE_BIN_DIR, "github-ssh"))} ${shellQuote(bare)}`,
-	);
+	const sshCommand = `${shellQuote(join(E2E_FAKE_BIN_DIR, "github-ssh"))} ${shellQuote(bare)}`;
+	gitAs(worktree, "config", "core.sshCommand", sshCommand);
 	gitAs(worktree, "config", "ssh.variant", "simple");
-	return { bare, dispose: () => rmSync(bare, { recursive: true, force: true }) };
+	return {
+		bare,
+		push: (branch: string) =>
+			gitAsWithEnv(
+				worktree,
+				{
+					GIT_SSH_COMMAND: sshCommand,
+					GIT_SSH_VARIANT: "simple",
+				},
+				"push",
+				"-q",
+				"--set-upstream",
+				"origin",
+				branch,
+			),
+		dispose: () => rmSync(bare, { recursive: true, force: true }),
+	};
 }
 
 export function writeGhScenario(scenario: FakeGhScenario): void {

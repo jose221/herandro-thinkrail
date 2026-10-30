@@ -1,4 +1,4 @@
-import type { AcpSessionState, AcpSessionSummary } from "@thinkrail/contracts";
+import type { AcpSessionSummary } from "@thinkrail/contracts";
 import { ACP_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
@@ -14,23 +14,9 @@ import { useAppStore } from "../store";
 import { getTransport } from "../transport";
 import { useAcpStore } from "./acpStore";
 import { createAcpChatInTab, openAcpChatInTab } from "./openAcpChat";
+import { acpSessionStateKey as sessionStateKey } from "./sessionState";
 
 const EMPTY_SESSIONS: readonly AcpSessionSummary[] = [];
-
-function sessionStateKey(state: AcpSessionState) {
-	switch (state) {
-		case "idle":
-			return "acp.chat.state.idle";
-		case "running":
-			return "acp.chat.state.running";
-		case "needs-input":
-			return "acp.chat.state.needsInput";
-		case "failed":
-			return "acp.chat.state.failed";
-		case "interrupted":
-			return "acp.chat.state.interrupted";
-	}
-}
 
 export function AcpNewChatDialog({
 	open,

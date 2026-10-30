@@ -80,19 +80,63 @@ export async function createAcpChatInTab(
 	workspaceId: string,
 	clientId: string,
 	targetGroupId?: string,
+	initialModel?: { configId: string; value: string },
 ): Promise<boolean> {
 	if (!canOpenAcpChat()) return false;
 	const state = useAppStore.getState();
 	const generation = state.connectionGeneration;
 	const navigation = state.beginCenterNavigation(workspaceId, targetGroupId);
+	let createdSessionId: string | null = null;
 	try {
-		const snapshot = await getTransport().request("acp.session.create", {
+		let snapshot = await getTransport().request("acp.session.create", {
 			workspaceId,
 			clientId,
 		});
-		if (snapshot.summary.workspaceId !== workspaceId) return false;
-		return placeAcpChat(workspaceId, snapshot, generation, navigation);
+		createdSessionId = snapshot.summary.id;
+		if (snapshot.summary.workspaceId !== workspaceId) {
+			await discardCreatedAcpChat(workspaceId, createdSessionId);
+			return false;
+		}
+		if (initialModel) {
+			const option = snapshot.configOptions.find(
+				(candidate) =>
+					candidate.id === initialModel.configId &&
+					candidate.category === "model" &&
+					candidate.options.some((choice) => choice.value === initialModel.value),
+			);
+			if (!option) {
+				await discardCreatedAcpChat(workspaceId, createdSessionId);
+				return false;
+			}
+			await getTransport().request("acp.session.setConfigOption", {
+				workspaceId,
+				sessionId: createdSessionId,
+				configId: initialModel.configId,
+				value: initialModel.value,
+			});
+			snapshot = await getTransport().request("acp.session.get", {
+				workspaceId,
+				sessionId: createdSessionId,
+			});
+			if (
+				snapshot.summary.id !== createdSessionId ||
+				snapshot.summary.workspaceId !== workspaceId
+			) {
+				await discardCreatedAcpChat(workspaceId, createdSessionId);
+				return false;
+			}
+		}
+		const placed = await placeAcpChat(workspaceId, snapshot, generation, navigation);
+		if (!placed) await discardCreatedAcpChat(workspaceId, createdSessionId);
+		return placed;
 	} catch {
+		if (createdSessionId) await discardCreatedAcpChat(workspaceId, createdSessionId);
 		return false;
 	}
+}
+
+async function discardCreatedAcpChat(workspaceId: string, sessionId: string): Promise<void> {
+	await getTransport()
+		.request("acp.session.delete", { workspaceId, sessionId })
+		.catch(() => {});
 }

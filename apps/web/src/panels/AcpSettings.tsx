@@ -1,14 +1,45 @@
-import type { AcpClientCheckResult, AcpConfigOption } from "@thinkrail/contracts";
-import { ACP_MODEL_CATALOG_PROTOCOL_VERSION, isAcpClientCatalog } from "@thinkrail/contracts";
+import type {
+	AcpAuthMethodSummary,
+	AcpClientCheckResult,
+	AcpClientConfig,
+	AcpConfigOption,
+} from "@thinkrail/contracts";
+import {
+	ACP_AUTH_PROTOCOL_VERSION,
+	ACP_MODEL_CATALOG_PROTOCOL_VERSION,
+	isAcpClientCatalog,
+} from "@thinkrail/contracts";
+import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import { Textarea } from "@thinkrail/ui/textarea";
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import { toast, useAppStore } from "@/store";
 import { getTransport } from "@/transport";
+import { fileName } from "../lib/utils";
+import { SettingsNotice } from "./SettingsNotice";
+
+const AcpAuthTerminal = lazy(() => import("./AcpAuthTerminal"));
 
 function catalogJson(value: unknown): string {
 	return JSON.stringify(value, null, 2);
+}
+
+function checkFailureKey(client: AcpClientConfig, result: AcpClientCheckResult): MessageKey {
+	const executable = fileName(client.command);
+	if (executable === "agy" && result.issue !== "executable") {
+		return "settings.acp.antigravityCliNotAcp";
+	}
+	if (
+		client.id === "antigravity" &&
+		executable === "antigravity-acp" &&
+		result.issue === "executable"
+	) {
+		return "settings.acp.antigravityAdapterMissing";
+	}
+	if (result.issue === "executable") return "settings.acp.checkExecutableFailed";
+	if (result.issue === "protocol") return "settings.acp.checkProtocolFailed";
+	return "settings.acp.checkFailed";
 }
 
 export function AcpSettings() {
@@ -18,9 +49,20 @@ export function AcpSettings() {
 	const protocolVersion = useAppStore((state) => state.protocolVersion);
 	const canListModels =
 		protocolVersion !== null && protocolVersion >= ACP_MODEL_CATALOG_PROTOCOL_VERSION;
+	const canLoginInline = protocolVersion !== null && protocolVersion >= ACP_AUTH_PROTOCOL_VERSION;
 	const [draft, setDraft] = useState(() => catalogJson(clients));
 	const [saving, setSaving] = useState(false);
 	const [checkingId, setCheckingId] = useState<string | null>(null);
+	const [authenticating, setAuthenticating] = useState<{
+		clientId: string;
+		methodId: string;
+	} | null>(null);
+	const [authTerminal, setAuthTerminal] = useState<{
+		clientId: string;
+		methodId: string;
+		workspaceId?: string;
+	} | null>(null);
+	const [authResults, setAuthResults] = useState<Record<string, "success" | "failed">>({});
 	const [checkResults, setCheckResults] = useState<Record<string, AcpClientCheckResult>>({});
 	const [loadingModelsId, setLoadingModelsId] = useState<string | null>(null);
 	const [modelCatalogs, setModelCatalogs] = useState<
@@ -32,6 +74,9 @@ export function AcpSettings() {
 	useEffect(() => {
 		setDraft(catalogJson(clients));
 		setCheckResults({});
+		setAuthenticating(null);
+		setAuthTerminal(null);
+		setAuthResults({});
 		setModelCatalogs({});
 		setModelCatalogErrors({});
 	}, [clients]);
@@ -47,7 +92,17 @@ export function AcpSettings() {
 	const dirty = draft !== catalogJson(clients);
 
 	const save = () => {
-		if (!valid || !dirty || saving || checkingId || loadingModelsId) return;
+		if (
+			!valid ||
+			!dirty ||
+			saving ||
+			checkingId ||
+			loadingModelsId ||
+			authenticating ||
+			authTerminal
+		) {
+			return;
+		}
 		setSaving(true);
 		setSaveFailed(false);
 		void getTransport()
@@ -62,8 +117,13 @@ export function AcpSettings() {
 	};
 
 	const check = (clientId: string) => {
-		if (dirty || checkingId || loadingModelsId) return;
+		if (dirty || checkingId || loadingModelsId || authenticating || authTerminal) return;
 		setCheckingId(clientId);
+		setAuthResults((current) => {
+			const next = { ...current };
+			delete next[clientId];
+			return next;
+		});
 		void getTransport()
 			.request("acp.client.check", { clientId })
 			.then((result) => setCheckResults((current) => ({ ...current, [clientId]: result })))
@@ -76,27 +136,90 @@ export function AcpSettings() {
 			.finally(() => setCheckingId(null));
 	};
 
-	const listModels = (clientId: string) => {
-		if (dirty || checkingId || loadingModelsId || !activeWorkspaceId || !canListModels) return;
-		const workspaceId = activeWorkspaceId;
-		setLoadingModelsId(clientId);
-		setModelCatalogErrors((current) => ({ ...current, [clientId]: "" }));
+	const listModels = useCallback(
+		(clientId: string) => {
+			const workspaceId = useAppStore.getState().activeWorkspaceId;
+			if (dirty || checkingId || loadingModelsId || !workspaceId || !canListModels) {
+				return;
+			}
+			setLoadingModelsId(clientId);
+			setModelCatalogErrors((current) => ({ ...current, [clientId]: "" }));
+			void getTransport()
+				.request("acp.client.models", { workspaceId, clientId })
+				.then((options) =>
+					setModelCatalogs((current) => ({
+						...current,
+						[clientId]: { workspaceId, options },
+					})),
+				)
+				.catch(() =>
+					setModelCatalogErrors((current) => ({
+						...current,
+						[clientId]: workspaceId,
+					})),
+				)
+				.finally(() => setLoadingModelsId(null));
+		},
+		[canListModels, checkingId, dirty, loadingModelsId],
+	);
+
+	const loginWithAgent = (clientId: string, methodId: string) => {
+		if (dirty || authenticating || authTerminal || checkingId || loadingModelsId) return;
+		setAuthenticating({ clientId, methodId });
+		setAuthResults((current) => {
+			const next = { ...current };
+			delete next[clientId];
+			return next;
+		});
+		let succeeded = false;
 		void getTransport()
-			.request("acp.client.models", { workspaceId, clientId })
-			.then((options) =>
-				setModelCatalogs((current) => ({
-					...current,
-					[clientId]: { workspaceId, options },
-				})),
-			)
-			.catch(() =>
-				setModelCatalogErrors((current) => ({
-					...current,
-					[clientId]: workspaceId,
-				})),
-			)
-			.finally(() => setLoadingModelsId(null));
+			.request("acp.client.authenticate", { clientId, methodId }, { timeoutMs: 11 * 60 * 1000 })
+			.then(() => {
+				succeeded = true;
+				setAuthResults((current) => ({ ...current, [clientId]: "success" }));
+			})
+			.catch(() => setAuthResults((current) => ({ ...current, [clientId]: "failed" })))
+			.finally(() => {
+				setAuthenticating(null);
+				if (succeeded) listModels(clientId);
+			});
 	};
+
+	const cancelAgentLogin = () => {
+		if (!authenticating) return;
+		const clientId = authenticating.clientId;
+		void getTransport()
+			.request("acp.client.authenticate.cancel", { clientId })
+			.catch(() => {});
+	};
+
+	const showTerminalLogin = (clientId: string, methodId: string) => {
+		if (dirty || authenticating || authTerminal || checkingId || loadingModelsId) return;
+		setAuthResults((current) => {
+			const next = { ...current };
+			delete next[clientId];
+			return next;
+		});
+		setAuthTerminal({
+			clientId,
+			methodId,
+			...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
+		});
+	};
+
+	const completeTerminalLogin = useCallback(
+		(success: boolean) => {
+			if (!authTerminal) return;
+			const { clientId } = authTerminal;
+			setAuthTerminal(null);
+			setAuthResults((current) => ({
+				...current,
+				[clientId]: success ? "success" : "failed",
+			}));
+			if (success) listModels(clientId);
+		},
+		[authTerminal, listModels],
+	);
 
 	return (
 		<section data-testid="settings-acp" className="flex min-w-0 flex-col gap-16">
@@ -106,6 +229,10 @@ export function AcpSettings() {
 				<p className="text-text-muted tr-text-metadata">{t("settings.acp.installHint")}</p>
 			</div>
 
+			<SettingsNotice variant="warning" testId="settings-acp-v2-warning">
+				{t("settings.acp.v2Warning")}
+			</SettingsNotice>
+
 			<div className="flex min-w-0 flex-col gap-8">
 				<label htmlFor="acp-clients-json" className="tr-text-ui text-text-default">
 					{t("settings.acp.jsonLabel")}
@@ -113,20 +240,30 @@ export function AcpSettings() {
 				<p id="acp-clients-json-hint" className="text-text-muted tr-text-metadata">
 					{t("settings.acp.jsonHint")}
 				</p>
+				<SettingsNotice variant="warning" testId="settings-acp-args-security">
+					{t("settings.acp.argsSecurityHint")}
+				</SettingsNotice>
 				<Textarea
 					id="acp-clients-json"
 					data-testid="acp-clients-json"
 					data-settings-draft-input
 					aria-describedby="acp-clients-json-hint"
 					aria-invalid={!valid}
-					rows={16}
+					rows={8}
 					value={draft}
 					spellCheck={false}
+					disabled={
+						saving ||
+						checkingId !== null ||
+						loadingModelsId !== null ||
+						!!authenticating ||
+						!!authTerminal
+					}
 					onChange={(event) => {
 						setDraft(event.currentTarget.value);
 						setSaveFailed(false);
 					}}
-					className="min-h-192 w-full min-w-0 resize-y px-8 py-8 tr-code-text"
+					className="min-h-128 w-full min-w-0 resize-y px-8 py-8 tr-code-text"
 				/>
 				{!valid ? (
 					<p role="alert" className="text-feedback-error tr-text-metadata">
@@ -140,18 +277,21 @@ export function AcpSettings() {
 				) : null}
 			</div>
 
-			<ul className="flex min-w-0 flex-col divide-y divide-border-default rounded-sm border border-border-default bg-control-bg">
+			<ul className="flex min-w-0 flex-col gap-8">
 				{clients.map((client) => {
 					const result = checkResults[client.id];
+					const authMethods: AcpAuthMethodSummary[] = result?.authMethods ?? [];
 					const clientModelCatalog = modelCatalogs[client.id];
 					return (
 						<li
 							key={client.id}
 							data-testid={`acp-client-${client.id}`}
-							className="flex min-w-0 flex-col gap-8 px-12 py-8 sm:flex-row sm:items-center sm:justify-between"
+							className="grid min-w-0 grid-cols-1 gap-12 rounded-sm border border-border-default bg-control-bg px-12 py-12 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
 						>
 							<div className="flex min-w-0 flex-col gap-2">
-								<span className="truncate tr-title-compact text-text-default">{client.name}</span>
+								<span className="break-words tr-title-compact text-text-default">
+									{client.name}
+								</span>
 								<code className="break-all tr-code-text text-text-muted">
 									{[client.command, ...client.args].join(" ")}
 								</code>
@@ -166,14 +306,127 @@ export function AcpSettings() {
 									>
 										{result.available
 											? t("settings.acp.checkSuccess")
-											: t(
-													result.issue === "executable"
-														? "settings.acp.checkExecutableFailed"
-														: result.issue === "protocol"
-															? "settings.acp.checkProtocolFailed"
-															: "settings.acp.checkFailed",
-												)}
+											: t(checkFailureKey(client, result))}
 									</span>
+								) : null}
+								{canLoginInline && result?.available && result.authMethods ? (
+									<div
+										data-testid={`acp-client-auth-${client.id}`}
+										className="flex min-w-0 flex-col gap-8 rounded-sm border border-border-default p-8"
+									>
+										<span className="tr-text-label-pill text-text-muted">
+											{t("settings.acp.authMethodsTitle")}
+										</span>
+										{authMethods.length === 0 ? (
+											<p className="break-words tr-text-metadata text-text-muted">
+												{t("settings.acp.noAuthMethods")}
+											</p>
+										) : (
+											<ul className="flex min-w-0 flex-col gap-8">
+												{authMethods.map((method) => (
+													<li
+														key={method.id}
+														className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+													>
+														<div className="flex min-w-0 flex-col gap-2">
+															<span className="break-words tr-text-ui text-text-default">
+																{method.name}
+															</span>
+															{method.description ? (
+																<span className="break-words tr-text-metadata text-text-muted">
+																	{method.description}
+																</span>
+															) : null}
+														</div>
+														<Button
+															type="button"
+															variant="outline"
+															size="m"
+															disabled={
+																dirty ||
+																!client.enabled ||
+																checkingId !== null ||
+																loadingModelsId !== null ||
+																authenticating !== null ||
+																authTerminal !== null
+															}
+															onClick={() =>
+																method.type === "terminal"
+																	? showTerminalLogin(client.id, method.id)
+																	: loginWithAgent(client.id, method.id)
+															}
+															data-testid={`acp-client-auth-method-${client.id}-${method.id}`}
+														>
+															{method.type === "terminal"
+																? t("settings.acp.loginInTerminal")
+																: t("settings.acp.loginWithAgent")}
+														</Button>
+													</li>
+												))}
+											</ul>
+										)}
+										{authenticating?.clientId === client.id ? (
+											<div className="flex flex-wrap items-center justify-between gap-4">
+												<p role="status" className="tr-text-metadata text-text-muted">
+													{t("settings.acp.loginWorking")}
+												</p>
+												<Button
+													type="button"
+													variant="outline"
+													size="s"
+													onClick={cancelAgentLogin}
+													data-testid={`acp-client-auth-cancel-${client.id}`}
+												>
+													{t("settings.acp.cancelLogin")}
+												</Button>
+											</div>
+										) : null}
+										{authTerminal?.clientId === client.id ? (
+											<div className="flex min-w-0 flex-col gap-4">
+												<Suspense
+													fallback={
+														<p role="status" className="tr-text-metadata text-text-muted">
+															{t("settings.acp.terminalLoading")}
+														</p>
+													}
+												>
+													<AcpAuthTerminal
+														clientId={client.id}
+														methodId={authTerminal.methodId}
+														{...(authTerminal.workspaceId
+															? { workspaceId: authTerminal.workspaceId }
+															: {})}
+														onExit={completeTerminalLogin}
+													/>
+												</Suspense>
+												<Button
+													type="button"
+													variant="outline"
+													size="s"
+													className="self-start"
+													onClick={() => setAuthTerminal(null)}
+													data-testid={`acp-client-auth-terminal-cancel-${client.id}`}
+												>
+													{t("settings.acp.cancelLogin")}
+												</Button>
+											</div>
+										) : null}
+										{authResults[client.id] ? (
+											<p
+												role={authResults[client.id] === "failed" ? "alert" : "status"}
+												data-testid={`acp-client-auth-result-${client.id}`}
+												className={
+													authResults[client.id] === "success"
+														? "text-feedback-success tr-text-metadata"
+														: "text-feedback-error tr-text-metadata"
+												}
+											>
+												{authResults[client.id] === "success"
+													? t("settings.acp.loginSucceeded")
+													: t("settings.acp.loginFailed")}
+											</p>
+										) : null}
+									</div>
 								) : null}
 								{modelCatalogErrors[client.id] === activeWorkspaceId ? (
 									<span
@@ -187,7 +440,7 @@ export function AcpSettings() {
 								{clientModelCatalog?.workspaceId === activeWorkspaceId ? (
 									<div
 										data-testid={`acp-client-models-${client.id}`}
-										className="flex min-w-0 flex-col gap-4 rounded-sm border border-border-default p-8"
+										className="flex min-w-0 flex-col gap-8 rounded-sm border border-border-default p-8"
 									>
 										<span className="tr-text-label-pill text-text-muted">
 											{t("settings.acp.modelsTitle")}
@@ -197,13 +450,25 @@ export function AcpSettings() {
 												{t("settings.acp.modelsEmpty")}
 											</p>
 										) : (
-											<ul className="flex min-w-0 flex-col gap-4">
+											<ul className="grid min-w-0 grid-cols-1 gap-8 sm:grid-cols-2">
 												{clientModelCatalog.options.map((option) => (
-													<li key={option.id} className="min-w-0 break-words tr-text-metadata">
-														<span className="text-text-default">{option.name}: </span>
-														<span className="text-text-muted">
-															{option.options.map(({ value, name }) => name || value).join(", ")}
+													<li
+														key={option.id}
+														className="flex min-w-0 flex-col gap-4 rounded-sm bg-container-content-bg p-8"
+													>
+														<span className="break-words text-text-default tr-text-metadata">
+															{option.name}
 														</span>
+														<div className="flex min-w-0 flex-wrap gap-4">
+															{option.options.map(({ value, name }) => (
+																<span
+																	key={value}
+																	className="max-w-full break-words rounded-sm border border-border-default px-8 py-4 text-text-muted tr-text-metadata"
+																>
+																	{name || value}
+																</span>
+															))}
+														</div>
 													</li>
 												))}
 											</ul>
@@ -216,12 +481,37 @@ export function AcpSettings() {
 									type="button"
 									variant="outline"
 									size="m"
-									disabled={dirty || checkingId !== null || loadingModelsId !== null}
+									disabled={
+										dirty ||
+										checkingId !== null ||
+										loadingModelsId !== null ||
+										authenticating !== null ||
+										authTerminal !== null
+									}
 									onClick={() => void check(client.id)}
 									data-testid={`acp-client-check-${client.id}`}
 								>
 									{checkingId === client.id ? t("settings.acp.checking") : t("settings.acp.check")}
 								</Button>
+								{canLoginInline ? (
+									<Button
+										type="button"
+										variant="outline"
+										size="m"
+										disabled={
+											dirty ||
+											!client.enabled ||
+											checkingId !== null ||
+											loadingModelsId !== null ||
+											authenticating !== null ||
+											authTerminal !== null
+										}
+										onClick={() => void check(client.id)}
+										data-testid={`acp-client-login-${client.id}`}
+									>
+										{t("settings.acp.login")}
+									</Button>
+								) : null}
 								{canListModels ? (
 									<Button
 										type="button"
@@ -231,6 +521,8 @@ export function AcpSettings() {
 											dirty ||
 											checkingId !== null ||
 											loadingModelsId !== null ||
+											authenticating !== null ||
+											authTerminal !== null ||
 											!activeWorkspaceId ||
 											!client.enabled
 										}
@@ -254,7 +546,15 @@ export function AcpSettings() {
 					type="button"
 					variant="primary"
 					size="m"
-					disabled={!valid || !dirty || saving || checkingId !== null || loadingModelsId !== null}
+					disabled={
+						!valid ||
+						!dirty ||
+						saving ||
+						checkingId !== null ||
+						loadingModelsId !== null ||
+						authenticating !== null ||
+						authTerminal !== null
+					}
 					onClick={() => void save()}
 					data-testid="acp-clients-save"
 				>

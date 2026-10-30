@@ -45,7 +45,8 @@ channel fan-out, and the process-boot wrapper both launchers share.
   `index.html` fallback, the `server.welcome` push, the **`?client=` page identity** read off the socket URL at
   upgrade (threaded to every handler as `RequestContext`; it addresses terminal output but no longer *owns*
   PTYs — see [[submodule-server-terminal]]) plus the `clientKey → socket` registry and the **replay-namespace
-  retention timer** that outlives a reconnect (terminals are deliberately untouched by it); the
+  retention timer** that outlives a reconnect (persistent shell PTYs are deliberately untouched by it;
+  when retention expires, ACP cancels that client's pending login and ephemeral auth PTYs); the
   **request replay cache** keyed by `(clientKey, requestId)` (the first frame
   owns one handler promise + its
   serialized response, a reconnect replay awaits/returns that same result, a mismatched duplicate is rejected,
@@ -449,6 +450,7 @@ channel fan-out, and the process-boot wrapper both launchers share.
     it does the fast part synchronously — `forgetWorkspace` (drop the record → gone from `workspace.list`
     immediately) → `evictSpecIndex` (drop the spec cache) → `closeWorkspaceTerminals` (kill its PTYs) —
     **acks**, then runs the slow reclamation in the **background** (`archiveTeardown`, fire-and-forget):
+    `acp.removeWorkspace` (close ACP children and delete their persisted records) →
     `removeWorkspaceSessions` (abort a streaming turn, dispose the live sessions, **and** purge pi's
     on-disk transcripts for the cwd) → `reclaimWorktree` (`git worktree remove`; a hard no-op for an
     external one). So the user never waits

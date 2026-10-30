@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { join, normalize } from "node:path";
 import type {
+	AcpAuthTerminalEvent,
 	AcpSessionEvent,
 	HostPlatform,
 	HostUpdateNotice,
@@ -12,6 +13,7 @@ import type {
 	WorkspaceFsChangedPayload,
 } from "@thinkrail/contracts";
 import {
+	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_PROTOCOL_VERSION,
 	FEEDBACK_INTERVIEW_PROTOCOL_VERSION,
 	LOCALES_PROTOCOL_VERSION,
@@ -283,6 +285,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 			setTimeout(() => {
 				reapTimers.delete(clientKey);
 				if (sockets.has(clientKey)) return;
+				acpSessions?.cleanupClient(clientKey);
 				if (!requestReplays.clearClient(clientKey)) {
 					armClientReap(clientKey);
 					return;
@@ -357,6 +360,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 				if (ws.data.protocolVersion >= USER_THEMES_PROTOCOL_VERSION)
 					ws.subscribe(WS_CHANNELS.themesChanged);
 				if (ws.data.protocolVersion >= ACP_PROTOCOL_VERSION) ws.subscribe(WS_CHANNELS.acpEvent);
+				if (ws.data.protocolVersion >= ACP_AUTH_PROTOCOL_VERSION) {
+					ws.subscribe(WS_CHANNELS.acpAuthTerminalData);
+					ws.subscribe(WS_CHANNELS.acpAuthTerminalExit);
+				}
 				const hostPlatform: HostPlatform =
 					process.platform === "darwin" || process.platform === "win32"
 						? process.platform
@@ -487,6 +494,33 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 				WS_CHANNELS.acpEvent,
 				JSON.stringify({ channel: WS_CHANNELS.acpEvent, data: event }),
 			);
+		},
+		publishAuthTerminal: (clientKey: string, event: AcpAuthTerminalEvent) => {
+			const ws = sockets.get(clientKey);
+			if (
+				!ws ||
+				ws.data.protocolVersion < ACP_AUTH_PROTOCOL_VERSION ||
+				terminalBackpressured.has(clientKey)
+			) {
+				return false;
+			}
+			const channel =
+				event.type === "data" ? WS_CHANNELS.acpAuthTerminalData : WS_CHANNELS.acpAuthTerminalExit;
+			try {
+				const delivery = terminalDeliveryForSendStatus(
+					ws.send(JSON.stringify({ channel, data: event })),
+				);
+				if (delivery !== "delivered") {
+					terminalBackpressured.add(clientKey);
+					ws.close();
+					return false;
+				}
+				return true;
+			} catch {
+				terminalBackpressured.add(clientKey);
+				ws.close();
+				return false;
+			}
 		},
 		clientVersion: appVersion ?? "unknown",
 	});

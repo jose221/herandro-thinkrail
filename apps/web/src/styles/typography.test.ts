@@ -437,7 +437,7 @@ describe("generated CSS", () => {
 		const monaco = read(
 			join(SRC, "../../../packages/resource-renderers/src/support/monacoSetup.ts"),
 		);
-		const xterm = read(join(SRC, "panels/TerminalInstance.tsx"));
+		const xterm = read(join(SRC, "panels/terminalPresentation.ts"));
 		expect(monaco).toContain('cssVar("--tr-font-size-s11")');
 		expect(xterm).toContain('cssVar("--tr-font-size-s13")');
 		for (const file of [monaco, xterm]) {
