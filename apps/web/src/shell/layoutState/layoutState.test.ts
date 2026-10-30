@@ -230,8 +230,12 @@ describe("frontend-local layout state", () => {
 			toolTab("specs"),
 			toolTab("files"),
 			toolTab("emulator"),
+			toolTab("browser"),
+			toolTab("git"),
 			toolTab("plan"),
 			toolTab("review"),
+			toolTab("requests"),
+			toolTab("memory"),
 		]);
 		expect(first.bottom).toMatchObject({ visible: true, groups: [{ tabs: [] }] });
 		expect(second).toBe(first);

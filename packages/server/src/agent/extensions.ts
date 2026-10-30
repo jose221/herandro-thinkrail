@@ -28,8 +28,12 @@ import {
 } from "../extensions";
 import { type BundledTrashHelpers, setBundledTrashHelpers } from "../trash";
 import { androidEmulatorToolsExtension } from "./androidTools";
+import { browserToolsExtension } from "./browserTools";
+import { gitControlToolsExtension } from "./gitControlTools";
 import { headlessSearchPolicy } from "./headlessSearch";
+import { httpRequestToolsExtension } from "./httpRequestTools";
 import { oversizedImageGuard } from "./imageGuard";
+import { memoryToolsExtension } from "./memoryTools";
 import { requestReviewExtension } from "./requestReviewTool";
 import { reviewToolExtension } from "./reviewTool";
 import { decideSkill, type SkillAdmissionContext } from "./skillAdmission";
@@ -260,6 +264,10 @@ export async function buildResourceLoader(
 		reviewToolExtension,
 		requestReviewExtension,
 		androidEmulatorToolsExtension,
+		browserToolsExtension,
+		httpRequestToolsExtension,
+		memoryToolsExtension,
+		gitControlToolsExtension,
 		setTitleExtension,
 		oversizedImageGuard,
 		skillCarryover,

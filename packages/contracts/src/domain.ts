@@ -1075,7 +1075,17 @@ export function isSystemThemePair(value: unknown): value is SystemThemePair {
 	);
 }
 
-export type LayoutToolId = "projects" | "specs" | "files" | "review" | "plan" | "emulator";
+export type LayoutToolId =
+	| "projects"
+	| "specs"
+	| "files"
+	| "review"
+	| "plan"
+	| "emulator"
+	| "browser"
+	| "requests"
+	| "memory"
+	| "git";
 
 export type AndroidEmulatorState = "stopped" | "starting" | "running" | "stopping";
 
@@ -1897,3 +1907,256 @@ export function isPlanReviewResult(value: unknown): value is PlanReviewResult {
 	if (r.verdict === "request_changes" && r.findings.length === 0) return false;
 	return true;
 }
+
+/** Tab declared by the host for the workspace browser. The host owns the list so the agent can drive it. */
+export interface BrowserTab {
+	id: string;
+	url: string;
+	title?: string;
+}
+
+/** Host-owned browser session for one workspace. Only URLs and tab identity cross the wire. */
+export interface BrowserSession {
+	workspaceId: string;
+	tabs: BrowserTab[];
+	activeTabId: string;
+	revision: number;
+}
+
+export type DevServerFramework =
+	| "vite"
+	| "next"
+	| "angular"
+	| "storybook"
+	| "fastapi"
+	| "flask"
+	| "django"
+	| "node"
+	| "go"
+	| "rust"
+	| "other";
+
+/** One local listening port the browser can open. */
+export interface DevServerPort {
+	port: number;
+	url: string;
+	process: string;
+	pid?: number;
+	framework?: DevServerFramework;
+}
+
+/** Host-side read of a page, used when the agent needs text without a browser engine. */
+export interface BrowserPageSnapshot {
+	url: string;
+	finalUrl: string;
+	status: number;
+	contentType: string;
+	title: string;
+	text: string;
+	links: string[];
+	truncated: boolean;
+	elapsedMs: number;
+}
+
+export const BROWSER_LIMITS = {
+	urlLength: 4_096,
+	tabs: 8,
+	pageTextChars: 20_000,
+	pageLinks: 100,
+	pageBytes: 2 * 1024 * 1024,
+} as const;
+
+export type HttpBodyType = "none" | "json" | "text" | "urlencoded";
+
+export interface HttpRequestInput {
+	method: string;
+	url: string;
+	headers?: Record<string, string>;
+	query?: Record<string, string>;
+	body?: string;
+	bodyType?: HttpBodyType;
+	timeoutMs?: number;
+}
+
+export interface HttpCookie {
+	name: string;
+	value: string;
+	path?: string;
+	domain?: string;
+	secure?: boolean;
+	httpOnly?: boolean;
+}
+
+export interface HttpResponseResult {
+	id: string;
+	status: number;
+	statusText: string;
+	headers: Record<string, string>;
+	cookies: HttpCookie[];
+	body: string;
+	bodyTruncated: boolean;
+	sizeBytes: number;
+	durationMs: number;
+	contentType: string;
+	at: number;
+}
+
+export interface HttpHistoryEntry {
+	id: string;
+	workspaceId: string;
+	method: string;
+	url: string;
+	status: number;
+	statusText: string;
+	durationMs: number;
+	sizeBytes: number;
+	at: number;
+	source: "user" | "agent";
+}
+
+export interface HttpHistoryDetail extends HttpHistoryEntry {
+	requestHeaders: Record<string, string>;
+	requestBody: string;
+	responseHeaders: Record<string, string>;
+	responseBody: string;
+	bodyTruncated: boolean;
+}
+
+export interface SavedHttpRequest {
+	id: string;
+	workspaceId: string;
+	collection: string;
+	name: string;
+	request: HttpRequestInput;
+	updatedAt: number;
+}
+
+export const HTTP_REQUEST_LIMITS = {
+	urlLength: 8_192,
+	headers: 64,
+	headerNameLength: 256,
+	headerValueLength: 8_192,
+	bodyChars: 256 * 1024,
+	responseChars: 1024 * 1024,
+	historyPerWorkspace: 50,
+	savedRequests: 200,
+	timeoutMs: 120_000,
+} as const;
+
+export type MonitoredProcessKind = "host" | "terminal" | "dev-server" | "android" | "other";
+
+export interface MonitoredProcess {
+	pid: number;
+	ppid: number;
+	name: string;
+	command: string;
+	rssBytes: number;
+	cpuPercent: number;
+	elapsedSeconds: number;
+	kind: MonitoredProcessKind;
+	workspaceId?: string;
+}
+
+export interface SystemResourceSnapshot {
+	at: number;
+	supported: boolean;
+	note?: string;
+	host: {
+		totalBytes: number;
+		freeBytes: number;
+		usedBytes: number;
+		cpuCount: number;
+		loadAverage: number[];
+		rssBytes: number;
+	};
+	processes: MonitoredProcess[];
+}
+
+export interface MemoryCheckpointProcess {
+	key: string;
+	pid: number;
+	name: string;
+	rssBytes: number;
+}
+
+export interface MemoryCheckpoint {
+	id: string;
+	at: number;
+	tag: string;
+	description?: string;
+	workspaceId?: string;
+	totalRssBytes: number;
+	processes: MemoryCheckpointProcess[];
+}
+
+export type MemoryVerdict = "HEALTHY" | "WARNING" | "LEAK_DETECTED";
+
+export interface MemoryLeakSuspect {
+	pid: number;
+	name: string;
+	deltaBytes: number;
+	growthPercent: number;
+	checkpoints: number;
+}
+
+export interface MemoryAnalysis {
+	verdict: MemoryVerdict;
+	summary: string;
+	recommendations: string[];
+	suspects: MemoryLeakSuspect[];
+	checkedAt: number;
+}
+
+export const SYSTEM_MONITOR_LIMITS = {
+	processes: 400,
+	commandChars: 500,
+	checkpoints: 100,
+	suspectGrowthBytes: 15 * 1024 * 1024,
+	suspectGrowthPercent: 20,
+} as const;
+
+export interface GitControlBranches {
+	current: string;
+	local: string[];
+	remote: string[];
+}
+
+export interface GitControlFile {
+	path: string;
+	status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+	staged: boolean;
+	unstaged: boolean;
+}
+
+export interface GitControlStatus {
+	branch: string;
+	files: GitControlFile[];
+}
+
+export interface GitControlLogEntry {
+	sha: string;
+	shortSha: string;
+	subject: string;
+	author: string;
+	committedAt: string;
+}
+
+export interface GitControlDiff {
+	path: string;
+	staged: boolean;
+	diff: string;
+	truncated: boolean;
+}
+
+export interface GitControlCommitResult {
+	sha: string;
+	subject: string;
+}
+
+export const GIT_CONTROL_LIMITS = {
+	paths: 200,
+	pathLength: 1_000,
+	messageLength: 4_000,
+	diffChars: 512 * 1024,
+	logEntries: 50,
+} as const;

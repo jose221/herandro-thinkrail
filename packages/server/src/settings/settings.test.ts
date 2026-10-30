@@ -839,7 +839,7 @@ test("a custom preset may place every layout tool, including TODO List and Andro
 					id: "custom-right",
 					weight: 1,
 					folded: false,
-					tools: ["specs", "plan", "review", "emulator"],
+					tools: ["specs", "plan", "review", "emulator", "browser", "requests", "memory", "git"],
 				},
 			],
 		},

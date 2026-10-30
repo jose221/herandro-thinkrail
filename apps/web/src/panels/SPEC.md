@@ -27,6 +27,24 @@ state clears details, screen, and logs, and the running header shows the owned p
 idle TTL. APK selection browses `fs.readDir` from the workspace root and yields only workspace-relative
 `.apk` paths; it never uploads a host-local file.
 
+The workspace tool panels share the same rules and protocol v107:
+
+- **`BrowserPane`** renders the host-owned session in an iframe and drives `browser.state/navigate/
+  openTab/closeTab/selectTab`; it subscribes to `browser.changed` so an agent navigation moves the same
+  panel. Ports come from `browser.ports` and never probe. **Page info** calls `browser.snapshot` for a
+  bounded text-only read; there is no console, screenshot, or script stream. The iframe unmounts after
+  90 s hidden and is resumed explicitly, so a background tab costs no renderer.
+- **`RequestsPane`** keeps a bounded per-workspace history and saved-request list; every send goes through
+  `http.request.send`, so headers, cookies and bodies reach only the host. Responses are bounded and
+  truncated responses are labelled. Auth helpers only build headers; no credential is stored by the panel.
+- **`MemoryPane`** samples `system.resources` only while visible, keeps a local 120-point chart, and
+  persists checkpoints/analysis host-side. Termination is confirmed and never targets the host.
+- **`GitPane`** uses `git.control.status/branches/log/diff/stage/unstage/commit/fetch/pull/push` and
+  branch switching. It commits only the staged index and shows bounded diffs; destructive history
+  operations are absent.
+
+All four wait for a compatible host before making requests and show no controls on an older client.
+
 Files (both modes) and Review keep their fixed toolbars outside a panel-owned `components/QuietScrollArea`
 (Files through `RememberedScrollArea`); Projects and Specs expose content for the shell-owned scroll wrapper
 described in `shell/SPEC.md`.

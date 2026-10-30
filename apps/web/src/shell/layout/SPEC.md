@@ -237,9 +237,10 @@ preview, the four splits) and auxiliary terminals carry no splits.
 
 Balanced, Focus, and Review are web-owned resource-free frame definitions with a below-center bottom slot:
 Balanced and Review show it; Focus hides it. Balanced and Focus start with one center group; Review provides
-its deliberate vertical pair. Balanced puts Android Emulator in the upper right group with Specs and Files,
-and opens the lower right group on the TODO List with Review beside it: on a fresh workspace the plan is
-what there is to look at, while review comments only exist once there is a diff. Custom presets use the same grammar and capture geometry,
+its deliberate vertical pair. Balanced puts Android Emulator, Browser, and Git in the upper right group
+with Specs and Files, and opens the lower right group on the TODO List with Review, Requests, and Memory
+beside it: on a fresh workspace the plan is what there is to look at, while review comments only exist
+once there is a diff. Focus lists every tool in one right stack. Custom presets use the same grammar and capture geometry,
 topology, tools, folds, and empty structural slots, never workspace resources or terminal count. Preset node
 ids are template-local labels: instantiation mints frontend-local frame ids and returns the old→new group map
 used to rehome every workspace view. Only custom definitions cross the wire through settings; a set that

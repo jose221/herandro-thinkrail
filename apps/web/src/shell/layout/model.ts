@@ -82,6 +82,10 @@ export const LAYOUT_TOOLS: readonly LayoutToolId[] = [
 	"review",
 	"plan",
 	"emulator",
+	"browser",
+	"requests",
+	"memory",
+	"git",
 ];
 
 export const LAYOUT_TOOL_DEFAULT_SIDES: Record<LayoutToolId, LayoutSide> = {
@@ -91,6 +95,10 @@ export const LAYOUT_TOOL_DEFAULT_SIDES: Record<LayoutToolId, LayoutSide> = {
 	review: "right",
 	plan: "right",
 	emulator: "right",
+	browser: "right",
+	requests: "right",
+	memory: "right",
+	git: "right",
 };
 
 const LAYOUT_TOOL_NAMES: Record<LayoutToolId, string> = {
@@ -100,6 +108,10 @@ const LAYOUT_TOOL_NAMES: Record<LayoutToolId, string> = {
 	review: "Review",
 	plan: "TODO List",
 	emulator: "Android Emulator",
+	browser: "Browser",
+	requests: "HTTP Requests",
+	memory: "Memory",
+	git: "Git",
 };
 
 const LAYOUT_TOOL_NAME_KEYS = {
@@ -109,6 +121,10 @@ const LAYOUT_TOOL_NAME_KEYS = {
 	review: "workbench.tool.review",
 	plan: "workbench.tool.plan",
 	emulator: "workbench.tool.emulator",
+	browser: "workbench.tool.browser",
+	requests: "workbench.tool.requests",
+	memory: "workbench.tool.memory",
+	git: "workbench.tool.git",
 } as const satisfies Record<LayoutToolId, MessageKey>;
 
 export type ChatFirstPrompts = Readonly<Record<string, string>>;

@@ -28,12 +28,16 @@ import { preloadedLazy } from "../components/preloadedLazy";
 import { QuietScrollArea } from "../components/QuietScrollArea";
 import { type LayoutAttention, layoutResourceIdentity } from "../lib";
 import { AndroidEmulatorPane } from "../panels/AndroidEmulatorPane";
+import { BrowserPane } from "../panels/BrowserPane";
 import { DiffPane } from "../panels/DiffPane";
 import { FilePane } from "../panels/FilePane";
 import { FilesPanel } from "../panels/FilesPanel";
+import { GitPane } from "../panels/GitPane";
+import { MemoryPane } from "../panels/MemoryPane";
 import { startChatInTab } from "../panels/openChat";
 import { fileComparisonTab, openFileInTab } from "../panels/openTabs";
 import { ProjectTree } from "../panels/ProjectTree";
+import { RequestsPane } from "../panels/RequestsPane";
 import { ReviewPanel, selectActiveReviewedPath } from "../panels/ReviewPanel";
 import { reviewFlagForPaths, reviewFlags, tabReviewPaths } from "../panels/reviewModel";
 import { SpecsPanel } from "../panels/SpecsPanel";
@@ -688,6 +692,10 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 				</div>
 			),
 			emulator: <AndroidEmulatorPane key={workspaceId} workspaceId={workspaceId} />,
+			browser: <BrowserPane key={workspaceId} workspaceId={workspaceId} />,
+			requests: <RequestsPane key={workspaceId} workspaceId={workspaceId} />,
+			memory: <MemoryPane key={workspaceId} workspaceId={workspaceId} />,
+			git: <GitPane key={workspaceId} workspaceId={workspaceId} />,
 		};
 		for (const tool of Object.keys(bodies) as LayoutToolId[]) {
 			bodies[tool] = (

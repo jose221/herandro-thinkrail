@@ -20,11 +20,13 @@ import {
 	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
+	HTTP_REQUEST_LIMITS,
 	isControlMessage,
 	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
+	WORKSPACE_TOOLS_PROTOCOL_VERSION,
 } from "@thinkrail/contracts";
 import { CodedError } from "@thinkrail/shared/codedError";
 import type { AcpSessionManager } from "../acp";
@@ -113,6 +115,17 @@ import {
 	updateJbcentral,
 } from "../auth";
 import { findBranchReviewOutcome, providerFromRemoteUrl } from "../branch-review";
+import {
+	activeBrowserUrl,
+	browserSession,
+	closeBrowserTab,
+	fetchPageSnapshot,
+	forgetBrowserSession,
+	listDevServerPorts,
+	navigateBrowser,
+	openBrowserTab,
+	selectBrowserTab,
+} from "../browser";
 import { forgetWorkspaceChanges, revertChange, undoChange } from "../changes";
 import { selectDirectory } from "../dialog";
 import { listAvailableEditors, openEditor, revealInFileManager } from "../editors";
@@ -124,6 +137,19 @@ import {
 	commitsAheadOf,
 	countPushDivergence,
 	countPushTargetDivergence,
+	gitControlBranches,
+	gitControlCommit,
+	gitControlCreateBranch,
+	gitControlDiff,
+	gitControlFetch,
+	gitControlLog,
+	gitControlPull,
+	gitControlPush,
+	gitControlShowCommit,
+	gitControlStage,
+	gitControlStatus,
+	gitControlSwitchBranch,
+	gitControlUnstage,
 	gitDiffFile,
 	gitStatus,
 	ignoredPaths,
@@ -136,6 +162,15 @@ import {
 } from "../git";
 import { githubAuthStatus, githubRefresh } from "../github";
 import { clampLimit, getHistoryIndex } from "../history";
+import {
+	clearHttpHistory,
+	deleteSavedHttpRequest,
+	executeHttpRequest,
+	getHttpHistory,
+	listHttpHistory,
+	listSavedHttpRequests,
+	saveHttpRequest,
+} from "../httpRequests";
 import { localesDir, readLocalLocales } from "../locales";
 import { logger } from "../log";
 import {
@@ -184,6 +219,13 @@ import {
 } from "../reviews";
 import { getConfig, noteRecentModel, updateConfig } from "../settings";
 import { evictSpecIndex, projectHasSpecs, specGraph } from "../spec";
+import {
+	analyzeMemory,
+	captureMemoryCheckpoint,
+	killMonitoredProcess,
+	listMemoryCheckpoints,
+	systemResourceSnapshot,
+} from "../system";
 import {
 	deleteTemplate,
 	getTemplate,
@@ -668,6 +710,7 @@ const handlers: WsHandlers = {
 			removeWorkspaceReviews(ws.id);
 			forgetWorkspaceChanges(ws.id);
 			forgetWorkspaceTurns(ws.id);
+			forgetBrowserSession(ws.id);
 			stopWatch(ws.id);
 			closeWorkspaceTerminals(ws.id);
 			void archiveTeardown(ws, ctx.acp);
@@ -1173,6 +1216,103 @@ const handlers: WsHandlers = {
 		return { ok: true };
 	},
 	"android.emulator.logs": (params) => getAndroidEmulatorManager().logs(params.lines),
+	"browser.state": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserSession(params.workspaceId);
+	},
+	"browser.navigate": (params) => {
+		getWorkspace(params.workspaceId);
+		return navigateBrowser(params.workspaceId, params.url);
+	},
+	"browser.openTab": (params) => {
+		getWorkspace(params.workspaceId);
+		return openBrowserTab(params.workspaceId, params.url);
+	},
+	"browser.closeTab": (params) => {
+		getWorkspace(params.workspaceId);
+		return closeBrowserTab(params.workspaceId, params.tabId);
+	},
+	"browser.selectTab": (params) => {
+		getWorkspace(params.workspaceId);
+		return selectBrowserTab(params.workspaceId, params.tabId);
+	},
+	"browser.ports": () => listDevServerPorts(),
+	"browser.snapshot": async (params) => {
+		getWorkspace(params.workspaceId);
+		const url = params.url ?? activeBrowserUrl(params.workspaceId);
+		if (url === "about:blank") throw new Error("Open a page in the browser first");
+		return fetchPageSnapshot(url);
+	},
+	"http.request.send": async (params) => {
+		getWorkspace(params.workspaceId);
+		return executeHttpRequest({
+			workspaceId: params.workspaceId,
+			request: params.request,
+			source: params.source ?? "user",
+		});
+	},
+	"http.request.history": (params) => {
+		getWorkspace(params.workspaceId);
+		return listHttpHistory(
+			params.workspaceId,
+			params.limit ?? HTTP_REQUEST_LIMITS.historyPerWorkspace,
+		);
+	},
+	"http.request.historyDetail": (params) => {
+		getWorkspace(params.workspaceId);
+		return getHttpHistory(params.workspaceId, params.id);
+	},
+	"http.request.historyClear": (params) => {
+		getWorkspace(params.workspaceId);
+		clearHttpHistory(params.workspaceId, params.id);
+		return { ok: true } as const;
+	},
+	"http.request.saved.list": (params) => {
+		getWorkspace(params.workspaceId);
+		return listSavedHttpRequests(params.workspaceId);
+	},
+	"http.request.saved.save": (params) => {
+		getWorkspace(params.workspaceId);
+		return saveHttpRequest(params);
+	},
+	"http.request.saved.delete": (params) => {
+		getWorkspace(params.workspaceId);
+		deleteSavedHttpRequest(params.workspaceId, params.id);
+		return { ok: true } as const;
+	},
+	"system.resources": (params) => {
+		if (params.workspaceId) getWorkspace(params.workspaceId);
+		return systemResourceSnapshot(params.workspaceId);
+	},
+	"system.resources.checkpoint": (params) => {
+		if (params.workspaceId) getWorkspace(params.workspaceId);
+		return captureMemoryCheckpoint(params);
+	},
+	"system.resources.checkpoints": (params) => {
+		if (params.workspaceId) getWorkspace(params.workspaceId);
+		return listMemoryCheckpoints(params.workspaceId);
+	},
+	"system.resources.analyze": (params) => {
+		if (params.workspaceId) getWorkspace(params.workspaceId);
+		return analyzeMemory(params.workspaceId);
+	},
+	"system.process.kill": async (params) => {
+		await killMonitoredProcess(params.pid, params.signal);
+		return { ok: true } as const;
+	},
+	"git.control.branches": (params) => gitControlBranches(params.workspaceId),
+	"git.control.status": (params) => gitControlStatus(params.workspaceId),
+	"git.control.log": (params) => gitControlLog(params.workspaceId, params.limit),
+	"git.control.diff": (params) => gitControlDiff(params.workspaceId, params.path, params.staged),
+	"git.control.stage": (params) => gitControlStage(params.workspaceId, params.paths),
+	"git.control.unstage": (params) => gitControlUnstage(params.workspaceId, params.paths),
+	"git.control.commit": (params) => gitControlCommit(params.workspaceId, params.message),
+	"git.control.fetch": (params) => gitControlFetch(params.workspaceId),
+	"git.control.pull": (params) => gitControlPull(params.workspaceId),
+	"git.control.push": (params) => gitControlPush(params.workspaceId),
+	"git.control.createBranch": (params) => gitControlCreateBranch(params.workspaceId, params.name),
+	"git.control.switchBranch": (params) => gitControlSwitchBranch(params.workspaceId, params.name),
+	"git.control.showCommit": (params) => gitControlShowCommit(params.workspaceId, params.sha),
 	"acp.client.check": (params, ctx) => acpManager(ctx).checkClient(params.clientId),
 	"acp.client.models": (params, ctx) =>
 		acpManager(ctx).listClientModels(params.workspaceId, params.clientId),
@@ -1569,6 +1709,17 @@ export async function handleRequest(
 		ctx.protocolVersion < PROVIDER_CONFIG_PROTOCOL_VERSION
 	) {
 		throw new Error("Provider configuration editing requires a newer host protocol.");
+	}
+	if (
+		(method.startsWith("browser.") ||
+			method.startsWith("http.request.") ||
+			method.startsWith("system.resources") ||
+			method === "system.process.kill" ||
+			method.startsWith("git.control.")) &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < WORKSPACE_TOOLS_PROTOCOL_VERSION
+	) {
+		throw new Error("Workspace tools require a newer host protocol.");
 	}
 	if (
 		method.startsWith("provider.models.") &&

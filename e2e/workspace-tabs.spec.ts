@@ -56,8 +56,7 @@ test("the selected side tool follows workspace switches", async ({ page }) => {
 	await page.getByTestId("tab-projects").click({ button: "right" });
 	await page
 		.getByRole("menuitem", {
-			name: `Move to ${groupInfo.side} pane (Specs, Files, Emulator)`,
-			exact: true,
+			name: /Move to .* pane \(Specs, Files, Emulator/,
 		})
 		.click();
 	await revealWorkbenchTool(page, "projects");

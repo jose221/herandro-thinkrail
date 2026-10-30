@@ -89,6 +89,10 @@ create the tools it needs based on how you actually work.
   connect any provider through `pi`'s own auth. For providers stored in `pi`'s `models.json`, edit the
   API kind, base URL, API key, and model definitions from Settings → Providers without displaying stored
   credentials or headers. ThinkRail has no accounts of its own.
+- **Workspace tools without a second app.** Open local pages in an embedded Browser, send and replay
+  HTTP requests with bounded history, watch workspace memory with checkpoints and leak analysis, and
+  stage, commit, and sync Git from their own panels. The agent can drive the same surfaces through
+  dedicated tools; there is no Chrome dependency and no background browser engine.
 - **Your pi setup.** ThinkRail reads your existing `pi` configuration (`~/.pi/agent`). To use another one
   — say a personal `~/.pi/agent-personal` — or to pass extra environment variables to the agent, terminals
   and MCP servers, set them in Settings → Environment; they apply on the next start. A variable you set

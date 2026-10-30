@@ -1,4 +1,19 @@
 export {
+	gitControlBranches,
+	gitControlCommit,
+	gitControlCreateBranch,
+	gitControlDiff,
+	gitControlFetch,
+	gitControlLog,
+	gitControlPull,
+	gitControlPush,
+	gitControlShowCommit,
+	gitControlStage,
+	gitControlStatus,
+	gitControlSwitchBranch,
+	gitControlUnstage,
+} from "./control";
+export {
 	changedFileArgs,
 	type DiffRange,
 	diffBaseRef,

@@ -17,7 +17,8 @@ runtime generation they were created with), Pi resource/skill loading (including
 cross-agent skill discovery + a pre-session skill catalog), the **extension-UI bridge** that turns pi's
 in-process `uiContext` dialog calls into WS frames, the **`ask_user_question`** answer mailbox and
 answer-injection path behind the ask-user-question extension, explicit Android emulator tools backed by
-the host-local Android service, and the **restart repair** that keeps re-opened transcripts provider-valid.
+the host-local Android service, workspace tools (browser tabs/page reads, HTTP requests, system memory,
+Git control), and the **restart repair** that keeps re-opened transcripts provider-valid.
 
 ACP chats are a separate host feature ([[submodule-server-acp]]); this module never creates, observes, or
 projects ACP sessions into Pi state.

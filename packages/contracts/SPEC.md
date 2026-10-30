@@ -119,6 +119,13 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
   (api, baseUrl, hasApiKey, modelCount) and a `ProviderConfigUpdate` (api, baseUrl, optional write-only
   apiKey) for one configured provider. The key is never returned; a blank or absent replacement
   preserves the stored one. File contents, including API keys and headers, never cross the wire.
+- **Workspace tools** are introduced at `WORKSPACE_TOOLS_PROTOCOL_VERSION` (v107): `browser.*` (host-owned
+  tab session, dev-port discovery, text-only page snapshots), `http.request.*` (bounded host-side request
+  execution, per-workspace history and saved requests), `system.resources*` (on-demand process snapshots,
+  checkpoints, leak analysis, guarded termination), and `git.control.*` (status, branches, log, bounded
+  diffs, staging, commit, fetch/pull/push and branch switches). `browser.changed` pushes one complete
+  workspace session. Request bodies, page text and diffs are bounded by their `*_LIMITS` constants; no
+  method accepts an arbitrary host path or returns a credential. A pre-v107 client is refused before validation.
 - **Allowed deps:** none at runtime. **Type-only** devDeps on `@earendil-works/pi-ai` +
   `@earendil-works/pi-agent-core`, imported **from their package roots** (type-only → erased at build).
 - **Deployment obligation:** wire contracts describe host behavior and compatibility, never the launcher

@@ -9,11 +9,18 @@ import {
 	RiFileLine,
 	RiFolder2Fill,
 	RiFolder2Line,
+	RiGitBranchLine,
 	RiGitPullRequestFill,
 	RiGitPullRequestLine,
+	RiGlobalFill,
+	RiGlobalLine,
 	RiLayout2Fill,
 	RiLayout2Line,
+	RiLineChartFill,
+	RiLineChartLine,
 	RiListCheck3,
+	RiSendPlaneFill,
+	RiSendPlaneLine,
 	RiSmartphoneFill,
 	RiSmartphoneLine,
 	RiTaskFill,
@@ -62,6 +69,14 @@ export function tabIcon(tab: LayoutTab, active = false, cls = "size-14 shrink-0"
 					) : (
 						<RiSmartphoneLine className={cls} />
 					);
+				case "browser":
+					return active ? <RiGlobalFill className={cls} /> : <RiGlobalLine className={cls} />;
+				case "requests":
+					return active ? <RiSendPlaneFill className={cls} /> : <RiSendPlaneLine className={cls} />;
+				case "memory":
+					return active ? <RiLineChartFill className={cls} /> : <RiLineChartLine className={cls} />;
+				case "git":
+					return <RiGitBranchLine className={cls} />;
 				default:
 					return active ? <RiLayout2Fill className={cls} /> : <RiLayout2Line className={cls} />;
 			}

@@ -21,6 +21,7 @@ import {
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
+	WORKSPACE_TOOLS_PROTOCOL_VERSION,
 	WS_METHODS,
 } from "@thinkrail/contracts";
 import { TodoStore } from "pi-todos/core";
@@ -418,6 +419,23 @@ test("provider configuration editing is unavailable to pre-v106 clients", async 
 			{ ...CTX, protocolVersion: PROVIDER_CONFIG_PROTOCOL_VERSION - 1 },
 		),
 	).rejects.toThrow("Provider configuration editing requires a newer host protocol.");
+});
+
+test("workspace tools are unavailable to pre-v107 clients", async () => {
+	await expect(
+		handleRequest(
+			"browser.state",
+			{ workspaceId: "workspace" },
+			{ ...CTX, protocolVersion: WORKSPACE_TOOLS_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("Workspace tools require a newer host protocol.");
+	await expect(
+		handleRequest(
+			"git.control.status",
+			{ workspaceId: "workspace" },
+			{ ...CTX, protocolVersion: WORKSPACE_TOOLS_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("Workspace tools require a newer host protocol.");
 });
 
 test("host.update invokes only the context-injected parameterless operation", async () => {

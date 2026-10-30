@@ -237,8 +237,14 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await addTerminal(page, page.getByTestId("bottom-group"));
 	await expect(page.getByTestId("terminal-tab")).toHaveCount(2);
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-files", "tool-rail-emulator"],
-		["tool-rail-plan", "tool-rail-review"],
+		[
+			"tool-rail-specs",
+			"tool-rail-files",
+			"tool-rail-emulator",
+			"tool-rail-browser",
+			"tool-rail-git",
+		],
+		["tool-rail-plan", "tool-rail-review", "tool-rail-requests", "tool-rail-memory"],
 	]);
 
 	await startDrag(page, page.getByTestId("tool-rail-files"));
@@ -249,18 +255,24 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await finishDrag(page, page.locator('[data-drop-label="New right pane here"]').nth(1));
 	await expect(page.locator('[data-side="right"][data-group-id]')).toHaveCount(3);
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator"],
+		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
 		["tool-rail-files"],
-		["tool-rail-plan", "tool-rail-review"],
+		["tool-rail-plan", "tool-rail-review", "tool-rail-requests", "tool-rail-memory"],
 	]);
 
 	await startDrag(page, page.getByTestId("tool-rail-files"));
 	await expect(page.locator('[data-drop-label="New right pane here"]')).toHaveCount(2);
 	await finishDrag(page, page.locator('[data-drop-label="Insert after Review"]'));
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator"],
+		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
 		["empty-rail-group"],
-		["tool-rail-plan", "tool-rail-review", "tool-rail-files"],
+		[
+			"tool-rail-plan",
+			"tool-rail-review",
+			"tool-rail-files",
+			"tool-rail-requests",
+			"tool-rail-memory",
+		],
 	]);
 	await expect(page.locator('[data-side="right"][data-group-id]')).toHaveCount(3);
 
@@ -276,9 +288,9 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await page.getByTestId("tab-review").click({ button: "right" });
 	await page.getByRole("menuitem", { name: "Remove tool from group", exact: true }).click();
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator"],
+		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
 		["empty-rail-group"],
-		["tool-rail-plan"],
+		["tool-rail-plan", "tool-rail-requests", "tool-rail-memory"],
 		["tool-rail-review"],
 	]);
 	await expect(page.getByTestId("tool-rail-review")).toHaveClass(/text-text-subtle/);

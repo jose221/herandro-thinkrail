@@ -14,16 +14,24 @@ import type {
 	BackgroundCommandOutputResult,
 	BranchList,
 	BranchStatus,
+	BrowserPageSnapshot,
+	BrowserSession,
 	ChangeReceipt,
 	CompletionDelivery,
 	DelegationRunStatus,
 	DetectedAccount,
+	DevServerPort,
 	DiffStats,
 	EditorInfo,
 	ExistingWorktreeCandidate,
 	ExtensionCatalogEntry,
 	FileNode,
 	GitCommit,
+	GitControlBranches,
+	GitControlCommitResult,
+	GitControlDiff,
+	GitControlLogEntry,
+	GitControlStatus,
 	GitDiffScope,
 	GithubAuthStatus,
 	GitStatus,
@@ -32,6 +40,10 @@ import type {
 	HostEnvironment,
 	HostEnvironmentStatus,
 	HostEnvironmentUpdateResult,
+	HttpHistoryDetail,
+	HttpHistoryEntry,
+	HttpRequestInput,
+	HttpResponseResult,
 	InterviewResponse,
 	JbcentralActionResult,
 	JbcentralConnectResult,
@@ -46,6 +58,8 @@ import type {
 	McpServerLog,
 	McpServerScope,
 	McpStatusSnapshot,
+	MemoryAnalysis,
+	MemoryCheckpoint,
 	MergeMethod,
 	MergePrResult,
 	OpenBranchReview,
@@ -67,11 +81,13 @@ import type {
 	ReviewCommentStatus,
 	ReviewFixDetails,
 	ReviewSnapshot,
+	SavedHttpRequest,
 	SessionResources,
 	SessionStateRecord,
 	SpecGraphSnapshot,
 	SubagentCompletionDetails,
 	SubagentOverride,
+	SystemResourceSnapshot,
 	Template,
 	TemplateInfo,
 	TemplateScope,
@@ -135,7 +151,7 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 106;
+export const PROTOCOL_VERSION = 107;
 export const ACP_PROTOCOL_VERSION = 96;
 export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
 export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
@@ -145,6 +161,7 @@ export const ACP_SESSION_TITLE_PROTOCOL_VERSION = 103;
 export const ACP_START_TIMEOUT_PROTOCOL_VERSION = 104;
 export const PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION = 105;
 export const PROVIDER_CONFIG_PROTOCOL_VERSION = 106;
+export const WORKSPACE_TOOLS_PROTOCOL_VERSION = 107;
 export const PROVIDER_MODELS_PROTOCOL_VERSION = 97;
 export const PROJECT_CLONE_PROTOCOL_VERSION = 95;
 export const ONBOARDING_PROTOCOL_VERSION = 94;
@@ -420,6 +437,38 @@ export const WS_METHODS = {
 	androidEmulatorSwipe: "android.emulator.swipe",
 	androidEmulatorInstallApk: "android.emulator.installApk",
 	androidEmulatorLogs: "android.emulator.logs",
+	browserState: "browser.state",
+	browserNavigate: "browser.navigate",
+	browserOpenTab: "browser.openTab",
+	browserCloseTab: "browser.closeTab",
+	browserSelectTab: "browser.selectTab",
+	browserPorts: "browser.ports",
+	browserSnapshot: "browser.snapshot",
+	httpRequestSend: "http.request.send",
+	httpRequestHistory: "http.request.history",
+	httpRequestHistoryDetail: "http.request.historyDetail",
+	httpRequestHistoryClear: "http.request.historyClear",
+	httpRequestSavedList: "http.request.saved.list",
+	httpRequestSavedSave: "http.request.saved.save",
+	httpRequestSavedDelete: "http.request.saved.delete",
+	systemResources: "system.resources",
+	systemResourcesCheckpoint: "system.resources.checkpoint",
+	systemResourcesCheckpoints: "system.resources.checkpoints",
+	systemResourcesAnalyze: "system.resources.analyze",
+	systemProcessKill: "system.process.kill",
+	gitControlBranches: "git.control.branches",
+	gitControlStatus: "git.control.status",
+	gitControlLog: "git.control.log",
+	gitControlDiff: "git.control.diff",
+	gitControlStage: "git.control.stage",
+	gitControlUnstage: "git.control.unstage",
+	gitControlCommit: "git.control.commit",
+	gitControlFetch: "git.control.fetch",
+	gitControlPull: "git.control.pull",
+	gitControlPush: "git.control.push",
+	gitControlCreateBranch: "git.control.createBranch",
+	gitControlSwitchBranch: "git.control.switchBranch",
+	gitControlShowCommit: "git.control.showCommit",
 	acpSessionList: "acp.session.list",
 	acpSessionGet: "acp.session.get",
 	acpSessionCreate: "acp.session.create",
@@ -435,6 +484,7 @@ export const WS_METHODS = {
 export const WS_CHANNELS = {
 	serverWelcome: "server.welcome",
 	projectUpdated: "project.updated",
+	browserChanged: "browser.changed",
 	piEvent: "pi.event",
 	piExtensionUi: "pi.extensionUi",
 	sessionCreated: "session.created",
@@ -1218,6 +1268,134 @@ export interface WsMethodMap {
 	"android.emulator.logs": {
 		params: { lines?: number };
 		result: AndroidEmulatorLogs;
+	};
+	"browser.state": { params: { workspaceId: string }; result: BrowserSession };
+	"browser.navigate": {
+		params: { workspaceId: string; url: string };
+		result: BrowserSession;
+	};
+	"browser.openTab": {
+		params: { workspaceId: string; url?: string };
+		result: BrowserSession;
+	};
+	"browser.closeTab": {
+		params: { workspaceId: string; tabId: string };
+		result: BrowserSession;
+	};
+	"browser.selectTab": {
+		params: { workspaceId: string; tabId: string };
+		result: BrowserSession;
+	};
+	"browser.ports": { params: Record<string, never>; result: DevServerPort[] };
+	"browser.snapshot": {
+		params: { workspaceId: string; url?: string };
+		result: BrowserPageSnapshot;
+	};
+	"http.request.send": {
+		params: { workspaceId: string; request: HttpRequestInput; source?: "user" | "agent" };
+		result: HttpResponseResult;
+	};
+	"http.request.history": {
+		params: { workspaceId: string; limit?: number };
+		result: HttpHistoryEntry[];
+	};
+	"http.request.historyDetail": {
+		params: { workspaceId: string; id: string };
+		result: HttpHistoryDetail;
+	};
+	"http.request.historyClear": {
+		params: { workspaceId: string; id?: string };
+		result: Ack;
+	};
+	"http.request.saved.list": {
+		params: { workspaceId: string };
+		result: SavedHttpRequest[];
+	};
+	"http.request.saved.save": {
+		params: {
+			workspaceId: string;
+			id?: string;
+			collection: string;
+			name: string;
+			request: HttpRequestInput;
+		};
+		result: SavedHttpRequest;
+	};
+	"http.request.saved.delete": {
+		params: { workspaceId: string; id: string };
+		result: Ack;
+	};
+	"system.resources": {
+		params: { workspaceId?: string };
+		result: SystemResourceSnapshot;
+	};
+	"system.resources.checkpoint": {
+		params: { workspaceId?: string; tag: string; description?: string };
+		result: MemoryCheckpoint;
+	};
+	"system.resources.checkpoints": {
+		params: { workspaceId?: string };
+		result: MemoryCheckpoint[];
+	};
+	"system.resources.analyze": {
+		params: { workspaceId?: string };
+		result: MemoryAnalysis;
+	};
+	"system.process.kill": {
+		params: { pid: number; signal?: "SIGTERM" | "SIGKILL" };
+		result: Ack;
+	};
+	"git.control.branches": {
+		params: { workspaceId: string };
+		result: GitControlBranches;
+	};
+	"git.control.status": {
+		params: { workspaceId: string };
+		result: GitControlStatus;
+	};
+	"git.control.log": {
+		params: { workspaceId: string; limit?: number };
+		result: GitControlLogEntry[];
+	};
+	"git.control.diff": {
+		params: { workspaceId: string; path: string; staged?: boolean };
+		result: GitControlDiff;
+	};
+	"git.control.stage": {
+		params: { workspaceId: string; paths: string[] };
+		result: GitControlStatus;
+	};
+	"git.control.unstage": {
+		params: { workspaceId: string; paths: string[] };
+		result: GitControlStatus;
+	};
+	"git.control.commit": {
+		params: { workspaceId: string; message: string };
+		result: GitControlCommitResult;
+	};
+	"git.control.fetch": {
+		params: { workspaceId: string };
+		result: { output: string };
+	};
+	"git.control.pull": {
+		params: { workspaceId: string };
+		result: { output: string };
+	};
+	"git.control.push": {
+		params: { workspaceId: string };
+		result: { output: string };
+	};
+	"git.control.createBranch": {
+		params: { workspaceId: string; name: string };
+		result: { output: string };
+	};
+	"git.control.switchBranch": {
+		params: { workspaceId: string; name: string };
+		result: { output: string };
+	};
+	"git.control.showCommit": {
+		params: { workspaceId: string; sha: string };
+		result: { output: string; truncated: boolean };
 	};
 	"acp.session.list": { params: { workspaceId: string }; result: AcpSessionSummary[] };
 	"acp.session.get": {

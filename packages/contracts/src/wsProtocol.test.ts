@@ -65,6 +65,7 @@ import {
 	WINDOWS_SHELL_SETTINGS_PROTOCOL_VERSION,
 	WORKSPACE_READ_STATE_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
+	WORKSPACE_TOOLS_PROTOCOL_VERSION,
 	WS_CHANNELS,
 	WS_METHODS,
 } from "./wsProtocol";
@@ -109,6 +110,15 @@ test("provider configuration editing is versioned at protocol v106", () => {
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(PROVIDER_CONFIG_PROTOCOL_VERSION);
 	expect(WS_METHODS.providerConfigGet).toBe("provider.config.get");
 	expect(WS_METHODS.providerConfigSave).toBe("provider.config.save");
+});
+
+test("workspace tools are versioned at protocol v107", () => {
+	expect(WORKSPACE_TOOLS_PROTOCOL_VERSION).toBe(107);
+	expect(PROTOCOL_VERSION).toBe(107);
+	expect(WS_METHODS.browserNavigate).toBe("browser.navigate");
+	expect(WS_METHODS.httpRequestSend).toBe("http.request.send");
+	expect(WS_METHODS.systemResources).toBe("system.resources");
+	expect(WS_METHODS.gitControlStatus).toBe("git.control.status");
 });
 
 test("ACP config option snapshots are available from protocol v98", () => {

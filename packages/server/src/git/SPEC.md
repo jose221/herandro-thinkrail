@@ -308,7 +308,16 @@ ref off the workspace-create critical path.
   `gitignored`, so the Files tree can dim them. It never throws: a non-repository, a failure or a timeout
   reports nothing. Names git must C-quote (a `"`, `\` or control character) are never reported, because
   `check-ignore -z` needs stdin, which the bounded runners do not offer.
+Git **control** (`control.ts`) is the interactive panel/tool surface over the same runner: status parses
+`git status --porcelain=v1 -z` into staged/unstaged/untracked facts, diffs are bounded to 512 KiB, and
+staging/commit/branch operations accept only validated workspace-relative paths and safe refs. Fetch,
+pull (`--ff-only`) and push are network-bound with the module's 55 s budget; push creates an upstream only
+when none exists. Commit never force-pushes and never rewrites history.
+
 - **Public surface (barrel):** `git`, `gitAsync`, `gitAsyncBytes`, `gitAsyncStream`, `nonInteractiveGitEnv`, `remoteRefOid`, `remoteTrackingRef`, `gitStatus`,
+  `gitControlBranches`, `gitControlStatus`, `gitControlLog`, `gitControlDiff`, `gitControlStage`,
+  `gitControlUnstage`, `gitControlCommit`, `gitControlFetch`, `gitControlPull`, `gitControlPush`,
+  `gitControlCreateBranch`, `gitControlSwitchBranch`, `gitControlShowCommit`,
   `gitUncommittedPaths`, `gitDiffFile`,
   `readBlobAt`, `readBlobBytesAt`, `readBlobBytesAtAsync`, `readBlobStreamAtAsync`, `readBlobSizeAtAsync`,
   `readPathModeAtAsync`, `readCommitSubject`, `commitsAheadOf`, `originUrls`, `countPushTargetDivergence`,

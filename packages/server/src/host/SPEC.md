@@ -213,6 +213,12 @@ channel fan-out, and the process-boot wrapper both launchers share.
   `emulator-<port>` serial, APK installation is confined to a regular workspace APK, and the manager stops
   the process on idle expiry or host shutdown. The `android` module is also used by agent's explicit Pi
   emulator tools, without routing through ACP.
+  At protocol v107, `browser.*`, `http.request.*`, `system.resources*`/`system.process.kill` and
+  `git.control.*` delegate to the browser, httpRequests, system and git-control modules. Every workspace
+  method validates its id first; browser session updates also publish the full session on
+  `browser.changed`. Requests, page reads, history and diffs are explicitly bounded. The system module
+  refuses to terminate the host or an unattributed system process. The v107 gate rejects older clients
+  before parameter validation.
   Existing review chats and plan-review
   subagents keep their own policies — and
   the **Skills-manager set**: `skill.list` / `skills.state` / `project.skills` build

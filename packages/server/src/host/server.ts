@@ -82,6 +82,7 @@ import {
 	stopJbcentralRuntime,
 } from "../auth";
 import { forgetOpenBranchReview } from "../branch-review";
+import { setBrowserPublisher } from "../browser";
 import { redeliverInterview, releaseInterview, setFeedbackPublisher } from "../feedback";
 import { watchLocalLocales } from "../locales";
 import { logger, observeLoggedErrors } from "../log";
@@ -343,6 +344,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 				ws.subscribe(WS_CHANNELS.sessionState);
 				ws.subscribe(WS_CHANNELS.providerLogin);
 				ws.subscribe(WS_CHANNELS.providerChanged);
+				ws.subscribe(WS_CHANNELS.browserChanged);
 				ws.subscribe(WS_CHANNELS.projectUpdated);
 				ws.subscribe(WS_CHANNELS.terminalTabs);
 				ws.subscribe(WS_CHANNELS.workspaceCreated);
@@ -918,6 +920,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 	setJbcentralChangedPublisher(publishProviderChanged);
 	setLogoutPublisher(publishProviderChanged);
 	setModelsJsonPublisher(publishProviderChanged);
+	setBrowserPublisher((_workspaceId, session) => {
+		server.publish(
+			WS_CHANNELS.browserChanged,
+			JSON.stringify({ channel: WS_CHANNELS.browserChanged, data: session }),
+		);
+	});
 	setModelListingPublisher(publishProviderChanged);
 
 	const initialConfig = getConfig();
