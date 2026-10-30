@@ -52,7 +52,12 @@ import {
 	type ModelSelection,
 } from "./ModelEffortPicker";
 import { isModelCommand, parseModelCommand } from "./nativeCommands";
-import { imagePasteDropHandlers, PromptImageChips, usePromptImages } from "./promptImages";
+import {
+	imagePasteDropHandlers,
+	type PromptImage,
+	PromptImageChips,
+	usePromptImages,
+} from "./promptImages";
 import type { ChatAttachment } from "./types";
 import type { ModelPreferences } from "./useModelPreferences";
 
@@ -177,6 +182,7 @@ interface ComposerProps {
 	onPickTemplate?: (name: string) => void;
 	onManageTemplates?: () => void;
 	templatesEmpty?: boolean;
+	onImagesChange?: (images: PromptImage[]) => void;
 }
 
 export interface ComposerHandle {
@@ -215,6 +221,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		onPickTemplate,
 		onManageTemplates,
 		templatesEmpty,
+		onImagesChange,
 	},
 	handleRef,
 ) {
@@ -224,6 +231,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 	const [caret, setCaret] = useState(0);
 	const attachedImages = usePromptImages();
 	const { images } = attachedImages;
+	useEffect(() => {
+		onImagesChange?.(images);
+	}, [images, onImagesChange]);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const pendingImages = attachedImages.pending;
 	useEffect(() => {

@@ -1964,7 +1964,16 @@ export const BROWSER_LIMITS = {
 	pageTextChars: 20_000,
 	pageLinks: 100,
 	pageBytes: 2 * 1024 * 1024,
+	captureBytes: 8 * 1024 * 1024,
+	captureTtlMs: 24 * 60 * 60 * 1_000,
 } as const;
+
+/** One host-owned browser screenshot that the composer can attach to a prompt. */
+export interface BrowserCapture {
+	id: string;
+	path: string;
+	fileName: string;
+}
 
 export type HttpBodyType = "none" | "json" | "text" | "urlencoded";
 

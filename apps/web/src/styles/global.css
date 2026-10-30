@@ -165,6 +165,22 @@ body {
 	}
 }
 
+.device-frame {
+	border-radius: 2.5rem;
+}
+
+.device-frame-screen {
+	border-radius: 1.75rem;
+}
+
+.device-frame-tablet {
+	border-radius: 1.5rem;
+}
+
+.device-frame-tablet-screen {
+	border-radius: 1rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	::-webkit-scrollbar-thumb,
 	.quiet-scroll-host .xterm-scrollable-element > .scrollbar.vertical > .slider::before,

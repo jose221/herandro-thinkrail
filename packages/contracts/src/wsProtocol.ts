@@ -14,6 +14,7 @@ import type {
 	BackgroundCommandOutputResult,
 	BranchList,
 	BranchStatus,
+	BrowserCapture,
 	BrowserPageSnapshot,
 	BrowserSession,
 	ChangeReceipt,
@@ -445,6 +446,8 @@ export const WS_METHODS = {
 	browserSelectTab: "browser.selectTab",
 	browserPorts: "browser.ports",
 	browserSnapshot: "browser.snapshot",
+	browserCaptureSave: "browser.capture.save",
+	browserCaptureDelete: "browser.capture.delete",
 	httpRequestSend: "http.request.send",
 	httpRequestHistory: "http.request.history",
 	httpRequestHistoryDetail: "http.request.historyDetail",
@@ -1291,6 +1294,22 @@ export interface WsMethodMap {
 	"browser.snapshot": {
 		params: { workspaceId: string; url?: string };
 		result: BrowserPageSnapshot;
+	};
+	"browser.capture.save": {
+		params: {
+			workspaceId: string;
+			data: string;
+			mimeType: "image/png" | "image/jpeg";
+			url: string;
+			device: string;
+			width: number;
+			height: number;
+		};
+		result: BrowserCapture;
+	};
+	"browser.capture.delete": {
+		params: { workspaceId: string; id: string };
+		result: Ack;
 	};
 	"http.request.send": {
 		params: { workspaceId: string; request: HttpRequestInput; source?: "user" | "agent" };

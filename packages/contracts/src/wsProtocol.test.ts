@@ -116,6 +116,8 @@ test("workspace tools are versioned at protocol v107", () => {
 	expect(WORKSPACE_TOOLS_PROTOCOL_VERSION).toBe(107);
 	expect(PROTOCOL_VERSION).toBe(107);
 	expect(WS_METHODS.browserNavigate).toBe("browser.navigate");
+	expect(WS_METHODS.browserCaptureSave).toBe("browser.capture.save");
+	expect(WS_METHODS.browserCaptureDelete).toBe("browser.capture.delete");
 	expect(WS_METHODS.httpRequestSend).toBe("http.request.send");
 	expect(WS_METHODS.systemResources).toBe("system.resources");
 	expect(WS_METHODS.gitControlStatus).toBe("git.control.status");

@@ -27,6 +27,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNow } from "@/components/useNow";
+import { BROWSER_CAPTURE_EVENT, type BrowserCapturePayload } from "@/lib/browserCapture";
 import { type ParsedTemplate, templateToSlashCommand, useTemplateCommandPicker } from "@/prompt";
 import {
 	EMPTY_RUNTIME,
@@ -63,6 +64,7 @@ import {
 	parseNativeChatCommand,
 	prepareNameChatCommand,
 } from "./nativeCommands";
+import type { PromptImage } from "./promptImages";
 import { QueueStrip } from "./QueueStrip";
 import { deriveRecentPrompts } from "./recentPrompts";
 import {
@@ -506,13 +508,56 @@ export default function ChatView({
 			.then(() => refreshStats());
 	};
 
-	const restoreTextToDraft = (text: string) => {
-		if (!text.trim()) return;
-		const current = useAppStore.getState().sessions[sessionId]?.draft ?? "";
-		const combined = [text, current].filter((t) => t.trim()).join("\n\n");
-		useAppStore.getState().setChatDraft(sessionId, combined);
-		composerRef.current?.refocus();
-	};
+	const restoreTextToDraft = useCallback(
+		(text: string) => {
+			if (!text.trim()) return;
+			const current = useAppStore.getState().sessions[sessionId]?.draft ?? "";
+			const combined = [text, current].filter((t) => t.trim()).join("\n\n");
+			useAppStore.getState().setChatDraft(sessionId, combined);
+			composerRef.current?.refocus();
+		},
+		[sessionId],
+	);
+
+	const browserCaptures = useRef(new Map<string, string>());
+	const handleImagesChange = useCallback(
+		(images: PromptImage[]) => {
+			const present = new Set(images.map((image) => image.name));
+			for (const [name, id] of browserCaptures.current) {
+				if (present.has(name)) continue;
+				browserCaptures.current.delete(name);
+				void getTransport()
+					.request("browser.capture.delete", { workspaceId, id })
+					.catch(() => undefined);
+			}
+		},
+		[workspaceId],
+	);
+
+	useEffect(() => {
+		const onCapture = (event: Event) => {
+			const detail = (event as CustomEvent<BrowserCapturePayload>).detail;
+			if (detail.workspaceId !== workspaceId || detail.sessionId !== sessionId) return;
+			browserCaptures.current.set(detail.fileName, detail.captureId);
+			restoreTextToDraft(detail.note);
+			composerRef.current?.restoreAttachments([{ name: detail.fileName, content: detail.content }]);
+			requestAnimationFrame(() => composerRef.current?.refocus());
+		};
+		window.addEventListener(BROWSER_CAPTURE_EVENT, onCapture);
+		return () => window.removeEventListener(BROWSER_CAPTURE_EVENT, onCapture);
+	}, [restoreTextToDraft, sessionId, workspaceId]);
+
+	useEffect(
+		() => () => {
+			for (const id of browserCaptures.current.values()) {
+				void getTransport()
+					.request("browser.capture.delete", { workspaceId, id })
+					.catch(() => undefined);
+			}
+			browserCaptures.current.clear();
+		},
+		[workspaceId],
+	);
 
 	const restoreQueueContentToDraft = (content: SessionQueueContent): void => {
 		const messages = [...content.steering, ...content.followUp];
@@ -887,6 +932,7 @@ export default function ChatView({
 					onPickTemplate={onPickTemplate}
 					onManageTemplates={onManageTemplates}
 					templatesEmpty={templatesEmpty}
+					onImagesChange={handleImagesChange}
 				/>
 			</div>
 			<TemplateEditorDialog

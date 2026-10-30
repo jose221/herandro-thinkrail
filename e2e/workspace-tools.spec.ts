@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { openWorkspaceChat } from "./fixtures/app";
 import { E2eWire } from "./fixtures/wire";
@@ -60,4 +61,43 @@ test("workspace tools share host state: requests, memory, git and an agent-drive
 	await expect(page.getByTestId("browser-frame")).toHaveAttribute("src", `${origin}/health`, {
 		timeout: 15_000,
 	});
+});
+
+test("browser capture attaches a host screenshot and deletes it when removed", async ({ page }) => {
+	await page.addInitScript(() => {
+		Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", {
+			configurable: true,
+			value: async () => {
+				const canvas = document.createElement("canvas");
+				canvas.width = window.innerWidth;
+				canvas.height = window.innerHeight;
+				canvas.getContext("2d")?.fillRect(0, 0, canvas.width, canvas.height);
+				return canvas.captureStream(5);
+			},
+		});
+	});
+	await openWorkspaceChat(page);
+	const origin = new URL(page.url()).origin;
+
+	await page.getByTestId("tool-rail-browser").click();
+	await expect(page.getByTestId("browser-pane")).toBeVisible();
+	await page.getByTestId("browser-viewport-mobile").click();
+	await page.getByTestId("browser-device-iphone-se").click();
+	await page.getByTestId("browser-url").fill(`${origin}/health`);
+	await page.getByTestId("browser-url").press("Enter");
+	await expect(page.getByTestId("browser-frame")).toHaveAttribute("src", `${origin}/health`);
+
+	await page.getByTestId("browser-capture").click();
+	await page.getByTestId("browser-capture-start").click();
+	const chip = page.getByTestId("composer-image");
+	await expect(chip).toHaveCount(1, { timeout: 15_000 });
+	const draft = await page.getByTestId("chat-input").inputValue();
+	const path = draft.match(/\/[^\n]+\.png/)?.[0];
+	expect(path).toBeTruthy();
+	expect(draft).toContain("iPhone SE");
+	await expect.poll(() => existsSync(path ?? "")).toBe(true);
+
+	await chip.locator("button").click();
+	await expect(chip).toHaveCount(0);
+	await expect.poll(() => existsSync(path ?? "")).toBe(false);
 });

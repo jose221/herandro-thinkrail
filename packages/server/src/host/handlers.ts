@@ -119,11 +119,13 @@ import {
 	activeBrowserUrl,
 	browserSession,
 	closeBrowserTab,
+	deleteBrowserCapture,
 	fetchPageSnapshot,
 	forgetBrowserSession,
 	listDevServerPorts,
 	navigateBrowser,
 	openBrowserTab,
+	saveBrowserCapture,
 	selectBrowserTab,
 } from "../browser";
 import { forgetWorkspaceChanges, revertChange, undoChange } from "../changes";
@@ -1242,6 +1244,15 @@ const handlers: WsHandlers = {
 		const url = params.url ?? activeBrowserUrl(params.workspaceId);
 		if (url === "about:blank") throw new Error("Open a page in the browser first");
 		return fetchPageSnapshot(url);
+	},
+	"browser.capture.save": (params) => {
+		getWorkspace(params.workspaceId);
+		return saveBrowserCapture(params);
+	},
+	"browser.capture.delete": (params) => {
+		getWorkspace(params.workspaceId);
+		deleteBrowserCapture(params.workspaceId, params.id);
+		return { ok: true } as const;
 	},
 	"http.request.send": async (params) => {
 		getWorkspace(params.workspaceId);

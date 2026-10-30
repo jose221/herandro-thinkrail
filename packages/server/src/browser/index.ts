@@ -1,3 +1,4 @@
+export { deleteBrowserCapture, saveBrowserCapture } from "./capture";
 export { fetchPageSnapshot } from "./page";
 export { listDevServerPorts } from "./ports";
 export {
