@@ -5,6 +5,7 @@ import { videoFrameAttachments } from "./videoAttachments";
 const video: VideoAttachment = {
 	id: "capture-1",
 	name: "video-capture.webm",
+	note: "Browser recording: /tmp/video-capture.webm",
 	path: "/tmp/video-capture.webm",
 	mimeType: "video/webm",
 	durationMs: 12_000,

@@ -529,27 +529,45 @@ export default function ChatView({
 		[workspaceId],
 	);
 
-	const imageCaptures = useRef(new Map<string, string>());
+	const removeCaptureNote = useCallback(
+		(note: string) => {
+			if (!note) return;
+			const current = useAppStore.getState().sessions[sessionId]?.draft ?? "";
+			if (!current.includes(note)) return;
+			const next = current
+				.replace(note, "")
+				.replace(/\n{3,}/g, "\n\n")
+				.replace(/^\n+|\n+$/g, "");
+			useAppStore.getState().setChatDraft(sessionId, next);
+		},
+		[sessionId],
+	);
+
+	const imageCaptures = useRef(new Map<string, { id: string; note: string }>());
 	const handleImagesChange = useCallback(
 		(images: PromptImage[]) => {
 			const present = new Set(images.map((image) => image.name));
-			for (const [name, id] of imageCaptures.current) {
+			for (const [name, capture] of imageCaptures.current) {
 				if (present.has(name)) continue;
 				imageCaptures.current.delete(name);
-				deleteCapture(id);
+				deleteCapture(capture.id);
+				removeCaptureNote(capture.note);
 			}
 		},
-		[deleteCapture],
+		[deleteCapture, removeCaptureNote],
 	);
 
-	const videoCapture = useRef<string | null>(null);
+	const videoCapture = useRef<{ id: string; note: string } | null>(null);
 	const handleVideoChange = useCallback(
 		(video: VideoAttachment | null) => {
 			const previous = videoCapture.current;
-			if (previous && previous !== video?.id) deleteCapture(previous);
-			videoCapture.current = video?.id ?? null;
+			if (previous && previous.id !== video?.id) {
+				deleteCapture(previous.id);
+				removeCaptureNote(previous.note);
+			}
+			videoCapture.current = video ? { id: video.id, note: video.note ?? "" } : null;
 		},
-		[deleteCapture],
+		[deleteCapture, removeCaptureNote],
 	);
 
 	useEffect(() => {
@@ -558,7 +576,10 @@ export default function ChatView({
 			if (detail.workspaceId !== workspaceId || detail.sessionId !== sessionId) return;
 			restoreTextToDraft(detail.note);
 			if (detail.capture.kind === "image" && detail.image) {
-				imageCaptures.current.set(detail.capture.fileName, detail.capture.id);
+				imageCaptures.current.set(detail.capture.fileName, {
+					id: detail.capture.id,
+					note: detail.note,
+				});
 				composerRef.current?.restoreAttachments([
 					{
 						name: detail.capture.fileName,
@@ -573,6 +594,7 @@ export default function ChatView({
 				composerRef.current?.attachVideo({
 					id: detail.capture.id,
 					name: detail.capture.fileName,
+					note: detail.note,
 					path: detail.capture.path,
 					mimeType: detail.capture.mimeType,
 					durationMs: detail.capture.durationMs ?? 0,
@@ -591,9 +613,9 @@ export default function ChatView({
 
 	useEffect(
 		() => () => {
-			for (const id of imageCaptures.current.values()) deleteCapture(id);
+			for (const capture of imageCaptures.current.values()) deleteCapture(capture.id);
 			imageCaptures.current.clear();
-			if (videoCapture.current) deleteCapture(videoCapture.current);
+			if (videoCapture.current) deleteCapture(videoCapture.current.id);
 			videoCapture.current = null;
 		},
 		[deleteCapture],

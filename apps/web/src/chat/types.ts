@@ -19,6 +19,7 @@ export interface ChatAttachment {
 export interface VideoAttachment {
 	id: string;
 	name: string;
+	note: string;
 	path: string;
 	mimeType: string;
 	durationMs: number;
