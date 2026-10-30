@@ -16,8 +16,10 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { createAgentSession, ModelRuntime, SessionManager } from "@earendil-works/pi-coding-agent";
 import { parse } from "jsonc-parser";
 import {
+	getProviderConfig,
 	listModelContextSettings,
 	listProviderModelDefinitions,
+	saveProviderConfig,
 	saveProviderModelDefinitions,
 	setModelContextWindow,
 	setModelsJsonPublisher,
@@ -456,6 +458,109 @@ test("provider model edits expose no secrets and preserve hidden model/provider 
 	});
 	expect(pi.getModel("custom", "fixture-model")?.maxTokens).toBe(4_096);
 	expect(published).toBe(1);
+});
+
+test("provider configuration hides the key, writes settings, and keeps a blank key", async () => {
+	const apiKey = "private-fixture-api-key";
+	const replacementKey = "private-fixture-replacement-key";
+	writeFileSync(
+		path,
+		JSON.stringify({
+			providers: {
+				custom: {
+					api: "openai-completions",
+					baseUrl: "http://fixture.invalid/v1",
+					apiKey,
+					models: [
+						{
+							id: "fixture-model",
+							name: "Fixture model",
+							contextWindow: 128_000,
+							maxTokens: 8_192,
+							cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+						},
+					],
+				},
+			},
+		}),
+	);
+	const pi = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: path,
+		allowModelNetwork: false,
+	});
+	await pi.refresh({ allowNetwork: false });
+	configurePiRuntime(pi);
+	expect(pi.getProviderAuthStatus("custom").source).toBe("models_json_key");
+
+	const loaded = await getProviderConfig("custom");
+	expect(loaded).toEqual({
+		providerId: "custom",
+		api: "openai-completions",
+		baseUrl: "http://fixture.invalid/v1",
+		hasApiKey: true,
+		modelCount: 1,
+	});
+	expect(JSON.stringify(loaded)).not.toContain(apiKey);
+
+	let published = 0;
+	setModelsJsonPublisher(() => {
+		published++;
+	});
+	expect(
+		await saveProviderConfig({
+			providerId: "custom",
+			api: "openai-responses",
+			baseUrl: "http://fixture.invalid/v2",
+			apiKey: "",
+		}),
+	).toEqual({
+		providerId: "custom",
+		api: "openai-responses",
+		baseUrl: "http://fixture.invalid/v2",
+		hasApiKey: true,
+		modelCount: 1,
+	});
+	expect(config()).toMatchObject({
+		providers: {
+			custom: {
+				api: "openai-responses",
+				baseUrl: "http://fixture.invalid/v2",
+				apiKey,
+			},
+		},
+	});
+	expect(published).toBe(1);
+
+	expect(
+		await saveProviderConfig({
+			providerId: "custom",
+			api: "openai-responses",
+			baseUrl: "http://fixture.invalid/v2",
+			apiKey: replacementKey,
+		}),
+	).toMatchObject({ hasApiKey: true });
+	expect((config().providers as Record<string, Record<string, unknown>>).custom?.apiKey).toBe(
+		replacementKey,
+	);
+	expect(published).toBe(2);
+
+	await saveProviderConfig({
+		providerId: "custom",
+		api: "openai-responses",
+		baseUrl: "http://fixture.invalid/v2",
+		apiKey: replacementKey,
+	});
+	expect(published).toBe(2);
+
+	await expect(
+		saveProviderConfig({
+			providerId: "custom",
+			api: "openai-responses",
+			baseUrl: "ftp://fixture.invalid/v1",
+		}),
+	).rejects.toThrow("http(s)");
+	await expect(getProviderConfig("openai")).rejects.toThrow("not editable from models.json");
 });
 
 test("models.json editor refuses providers with non-file auth", async () => {

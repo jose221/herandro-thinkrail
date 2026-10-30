@@ -787,9 +787,11 @@ a project picker, the prompt hero, and the reused
   `canLogout`** — env / models.json auth shows a "Managed" tag instead, since the host can't unset it; a
   protocol-v97 row with `canEditModelsJson` also offers **Configure models**, which edits only that
   provider's allowlisted model definitions in `models.json`; credentials, headers, and endpoints never
-  enter browser state, and unsupported host versions show no editor. At protocol v105, **Configuration**
-  asks the host to open `models.json` in its editor for API/endpoint/custom-provider changes; only the
-  path returns to the browser.
+  enter browser state, and unsupported host versions show no editor. At protocol v106, **Configuration**
+  opens the in-app `ProviderConfigDialog` to edit that provider's api, baseUrl and write-only apiKey
+  through `provider.config.get/save`; the current key is never shown, and a blank key keeps it. The
+  secondary **Advanced: models.json** header action (v105) remains for headers, compat settings, and
+  brand-new providers; only the path returns to the browser.
   `kind: "central"` row is labelled "JetBrains AI" and its Managed tag points at the JetBrains AI card,
   which owns that connection), the **JetBrains AI** card, **Subscriptions** (unconfigured `canOAuth`
   providers) and **Available (N)** (the `canApiKey`-only rest, capped with a "Show N more" expander).

@@ -113,9 +113,12 @@ default, narrow cross-ring guards, and the quit-confirmation rule both clients d
   reasoning, input modalities, token limits, and pricing; it excludes provider credentials, request
   headers, and endpoint configuration. The host edits only that provider's `models` array, preserving
   the rest of `models.json` and private fields the editor does not expose. At
-  `PROVIDER_CONFIG_PROTOCOL_VERSION` (v105), `provider.config.open` opens the host-local `models.json`
-  in the user's editor and returns only its path; the file contents, including API keys and headers,
-  never cross the wire.
+  `PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION` (v105), `provider.config.open` opens the host-local
+  `models.json` in the user's editor and returns only its path. At `PROVIDER_CONFIG_PROTOCOL_VERSION`
+  (v106), `provider.config.get` and `provider.config.save` exchange a bounded `ProviderConfig`
+  (api, baseUrl, hasApiKey, modelCount) and a `ProviderConfigUpdate` (api, baseUrl, optional write-only
+  apiKey) for one configured provider. The key is never returned; a blank or absent replacement
+  preserves the stored one. File contents, including API keys and headers, never cross the wire.
 - **Allowed deps:** none at runtime. **Type-only** devDeps on `@earendil-works/pi-ai` +
   `@earendil-works/pi-agent-core`, imported **from their package roots** (type-only → erased at build).
 - **Deployment obligation:** wire contracts describe host behavior and compatibility, never the launcher

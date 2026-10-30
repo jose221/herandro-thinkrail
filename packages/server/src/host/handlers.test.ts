@@ -17,6 +17,8 @@ import type {
 import {
 	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
+	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
+	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
 	WS_METHODS,
@@ -396,6 +398,26 @@ test("provider model editing is unavailable to pre-v97 clients", async () => {
 			{ ...CTX, protocolVersion: PROVIDER_MODELS_PROTOCOL_VERSION - 1 },
 		),
 	).rejects.toThrow("Provider model editing requires a newer host protocol.");
+});
+
+test("provider configuration opening is unavailable to pre-v105 clients", async () => {
+	await expect(
+		handleRequest(
+			"provider.config.open",
+			{},
+			{ ...CTX, protocolVersion: PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("Provider configuration opening requires a newer host protocol.");
+});
+
+test("provider configuration editing is unavailable to pre-v106 clients", async () => {
+	await expect(
+		handleRequest(
+			"provider.config.get",
+			{ providerId: "custom" },
+			{ ...CTX, protocolVersion: PROVIDER_CONFIG_PROTOCOL_VERSION - 1 },
+		),
+	).rejects.toThrow("Provider configuration editing requires a newer host protocol.");
 });
 
 test("host.update invokes only the context-injected parameterless operation", async () => {

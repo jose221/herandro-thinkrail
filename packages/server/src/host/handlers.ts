@@ -21,6 +21,8 @@ import {
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	isControlMessage,
+	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
+	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
 } from "@thinkrail/contracts";
@@ -39,6 +41,7 @@ import {
 	deleteSession,
 	ensureSessionAttached,
 	followUpSession,
+	getProviderConfig,
 	getSessionCommands,
 	getSessionMessages,
 	getSessionResources,
@@ -76,6 +79,7 @@ import {
 	replyMcpProbe,
 	resolveExtUi,
 	respondToTool,
+	saveProviderConfig,
 	saveProviderModelDefinitions,
 	sendReviewFixToSession,
 	setModelContextWindow,
@@ -1297,6 +1301,8 @@ const handlers: WsHandlers = {
 	"provider.models.list": (params) => listProviderModelDefinitions(params.providerId),
 	"provider.models.save": (params) =>
 		saveProviderModelDefinitions(params.providerId, params.models),
+	"provider.config.get": (params) => getProviderConfig(params.providerId),
+	"provider.config.save": (params) => saveProviderConfig(params),
 	"provider.config.open": () => ({ ok: true, path: openModelsJson() }) as const,
 	"provider.detect": async () => ({ accounts: await detectAccounts() }),
 	"provider.loginStart": (p) => {
@@ -1549,6 +1555,20 @@ export async function handleRequest(
 		ctx.protocolVersion < ACP_AUTH_PROTOCOL_VERSION
 	) {
 		throw new Error("ACP authentication requires a newer host protocol.");
+	}
+	if (
+		method === "provider.config.open" &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION
+	) {
+		throw new Error("Provider configuration opening requires a newer host protocol.");
+	}
+	if (
+		(method === "provider.config.get" || method === "provider.config.save") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < PROVIDER_CONFIG_PROTOCOL_VERSION
+	) {
+		throw new Error("Provider configuration editing requires a newer host protocol.");
 	}
 	if (
 		method.startsWith("provider.models.") &&

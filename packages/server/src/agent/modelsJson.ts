@@ -20,6 +20,9 @@ import {
 	MODEL_CONTEXT_WINDOW_LIMITS,
 	type ModelContextSetting,
 	type ModelContextTarget,
+	PROVIDER_CONFIG_LIMITS,
+	type ProviderConfig,
+	type ProviderConfigUpdate,
 	type ProviderModelDefinition,
 } from "@thinkrail/contracts";
 import {
@@ -40,6 +43,14 @@ const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "
 const EMPTY_CONFIG = '{\n  "providers": {}\n}\n';
 const SAVE_FAILURE =
 	"Couldn't save pi's models.json. Check the file and its permissions, then retry.";
+
+function hasControlCharacters(value: string): boolean {
+	for (const character of value) {
+		const code = character.codePointAt(0) ?? 0;
+		if (code < 0x20 || code === 0x7f) return true;
+	}
+	return false;
+}
 const MODEL_FIELDS = [
 	"id",
 	"name",
@@ -338,6 +349,125 @@ function saveProviderModelDefinitionsToFile(
 			publishModelsJsonChange?.();
 		}
 		return definitions;
+	});
+}
+
+function providerConfigValue(config: Node | undefined, providerId: string): ProviderConfig {
+	const node = config && findNodeAtLocation(config, ["providers", providerId]);
+	if (node?.type !== "object")
+		throw new Error("Provider configuration is not editable from models.json");
+	const value = valueFromNode(node);
+	if (!isRecord(value)) throw new Error("Provider configuration is invalid");
+	const api = typeof value.api === "string" ? value.api : "";
+	const baseUrl = typeof value.baseUrl === "string" ? value.baseUrl : "";
+	const apiKey = typeof value.apiKey === "string" ? value.apiKey : "";
+	if (
+		api.length > PROVIDER_CONFIG_LIMITS.apiLength ||
+		baseUrl.length > PROVIDER_CONFIG_LIMITS.baseUrlLength
+	)
+		throw new Error("Provider configuration is invalid");
+	return {
+		providerId,
+		api,
+		baseUrl,
+		hasApiKey: apiKey.length > 0,
+		modelCount: Array.isArray(value.models) ? value.models.length : 0,
+	};
+}
+
+function assertProviderConfigUpdate(update: ProviderConfigUpdate): void {
+	if (typeof update !== "object" || update === null)
+		throw new Error("Provider configuration is invalid");
+	const record = update as unknown as Record<string, unknown>;
+	const providerId = record.providerId;
+	if (
+		typeof providerId !== "string" ||
+		providerId.length === 0 ||
+		providerId.length > 256 ||
+		hasControlCharacters(providerId)
+	)
+		throw new Error("Provider configuration is unavailable");
+	const { api, baseUrl, apiKey } = record;
+	if (
+		typeof api !== "string" ||
+		api.length > PROVIDER_CONFIG_LIMITS.apiLength ||
+		hasControlCharacters(api)
+	)
+		throw new Error("Provider API is invalid");
+	if (
+		typeof baseUrl !== "string" ||
+		baseUrl.length > PROVIDER_CONFIG_LIMITS.baseUrlLength ||
+		hasControlCharacters(baseUrl)
+	)
+		throw new Error("Provider base URL is invalid");
+	if (baseUrl.trim() !== "") {
+		let parsed: URL;
+		try {
+			parsed = new URL(baseUrl.trim());
+		} catch {
+			throw new Error("Provider base URL must be an http(s) URL");
+		}
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+			throw new Error("Provider base URL must be an http(s) URL");
+	}
+	if (
+		apiKey !== undefined &&
+		(typeof apiKey !== "string" ||
+			apiKey.length > PROVIDER_CONFIG_LIMITS.apiKeyLength ||
+			hasControlCharacters(apiKey))
+	)
+		throw new Error("Provider API key is invalid");
+}
+
+export function getProviderConfig(providerId: string): Promise<ProviderConfig> {
+	return usePiRuntime(async (runtime, generation) => {
+		await runtime.refresh({ allowNetwork: false });
+		assertEditableProvider(runtime, generation.opaqueProviderIds, providerId);
+		return providerConfigValue(parseConfig(readSource(modelsPath())), providerId);
+	});
+}
+
+export function saveProviderConfig(update: ProviderConfigUpdate): Promise<ProviderConfig> {
+	try {
+		assertProviderConfigUpdate(update);
+	} catch (error) {
+		return Promise.reject(error);
+	}
+	return serializeSave(() => saveProviderConfigToFile(update));
+}
+
+function saveProviderConfigToFile(update: ProviderConfigUpdate): Promise<ProviderConfig> {
+	return usePiRuntime(async (runtime, generation) => {
+		await runtime.refresh({ allowNetwork: false });
+		assertEditableProvider(runtime, generation.opaqueProviderIds, update.providerId);
+		const path = modelsPath();
+		const source = readSource(path);
+		if (source === undefined)
+			throw new Error("Provider configuration is not editable from models.json");
+		const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
+		const content = source.slice(bom.length);
+		providerConfigValue(parseConfig(source), update.providerId);
+		const providerPath = ["providers", update.providerId];
+		let next = content;
+		const api = update.api.trim();
+		next = applyEdits(
+			next,
+			modify(next, [...providerPath, "api"], api === "" ? undefined : api, FORMATTING),
+		);
+		const baseUrl = update.baseUrl.trim();
+		next = applyEdits(
+			next,
+			modify(next, [...providerPath, "baseUrl"], baseUrl === "" ? undefined : baseUrl, FORMATTING),
+		);
+		if (update.apiKey !== undefined && update.apiKey.trim() !== "") {
+			next = applyEdits(next, modify(next, [...providerPath, "apiKey"], update.apiKey, FORMATTING));
+		}
+		if (bom + next !== source) {
+			writeModelsFile(path, bom + next);
+			await runtime.refresh({ allowNetwork: false });
+			publishModelsJsonChange?.();
+		}
+		return providerConfigValue(parseConfig(bom + next), update.providerId);
 	});
 }
 

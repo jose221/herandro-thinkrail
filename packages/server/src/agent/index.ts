@@ -55,9 +55,11 @@ export {
 export { setModelListingPublisher } from "./modelAvailability";
 export { preferredDefaultModel } from "./modelDefaults";
 export {
+	getProviderConfig,
 	listModelContextSettings,
 	listProviderModelDefinitions,
 	openModelsJson,
+	saveProviderConfig,
 	saveProviderModelDefinitions,
 	setModelContextWindow,
 	setModelsJsonPublisher,

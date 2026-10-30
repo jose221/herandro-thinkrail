@@ -86,9 +86,9 @@ create the tools it needs based on how you actually work.
   defines off until you approve them, signs you in to OAuth servers from Settings, and shows each chat's
   servers next to its background commands and subagents.
 - **Your providers, your credentials.** Sign in with [JetBrains AI](https://www.jetbrains.com/ai/) or
-  connect any provider through `pi`'s own auth. For supported connected providers, edit model definitions
-  from Settings → Providers without displaying stored credentials or headers. ThinkRail has no accounts
-  of its own.
+  connect any provider through `pi`'s own auth. For providers stored in `pi`'s `models.json`, edit the
+  API kind, base URL, API key, and model definitions from Settings → Providers without displaying stored
+  credentials or headers. ThinkRail has no accounts of its own.
 - **Your pi setup.** ThinkRail reads your existing `pi` configuration (`~/.pi/agent`). To use another one
   — say a personal `~/.pi/agent-personal` — or to pass extra environment variables to the agent, terminals
   and MCP servers, set them in Settings → Environment; they apply on the next start. A variable you set

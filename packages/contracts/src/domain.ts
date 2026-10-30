@@ -773,6 +773,29 @@ export interface ProviderModelDefinition {
 	cost?: ProviderModelCost;
 }
 
+/** Editable connection settings for one Pi models.json provider. Never carries the API key. */
+export interface ProviderConfig {
+	providerId: string;
+	api: string;
+	baseUrl: string;
+	hasApiKey: boolean;
+	modelCount: number;
+}
+
+/** Connection settings to store; an absent or blank apiKey preserves the current key. */
+export interface ProviderConfigUpdate {
+	providerId: string;
+	api: string;
+	baseUrl: string;
+	apiKey?: string;
+}
+
+export const PROVIDER_CONFIG_LIMITS = {
+	apiLength: 128,
+	baseUrlLength: 4_096,
+	apiKeyLength: 16_384,
+} as const;
+
 export const PROVIDER_MODEL_DEFINITIONS_LIMIT = 256;
 
 function isProviderModelCostTier(value: unknown): value is ProviderModelCostTier {

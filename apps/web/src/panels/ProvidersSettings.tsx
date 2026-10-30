@@ -8,6 +8,7 @@ import {
 import {
 	type AppConfigUpdate,
 	JBCENTRAL_QUOTA_PROTOCOL_VERSION,
+	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	type ProviderStatus,
@@ -20,6 +21,7 @@ import { AUTH_KIND_LABEL } from "@/chat/modelPicker";
 import { toast, useAppStore } from "@/store";
 import { errorText, getTransport } from "@/transport";
 import { JetBrainsAiCard } from "./JetBrainsAiCard";
+import { ProviderConfigDialog } from "./ProviderConfigDialog";
 import { ProviderModelsDialog } from "./ProviderModelsDialog";
 import { ProviderRow } from "./ProviderRow";
 import { SettingsGroup, SettingsPageContainer } from "./SettingsGroup";
@@ -32,6 +34,7 @@ export function ProvidersSettings() {
 	const t = useT();
 	const [showAllKeys, setShowAllKeys] = useState(false);
 	const [modelsProvider, setModelsProvider] = useState<ProviderStatus | null>(null);
+	const [configProvider, setConfigProvider] = useState<ProviderStatus | null>(null);
 	const {
 		report,
 		failed,
@@ -46,6 +49,8 @@ export function ProvidersSettings() {
 	const protocolVersion = useAppStore((s) => s.protocolVersion);
 	const modelsEditorAvailable =
 		protocolVersion !== null && protocolVersion >= PROVIDER_MODELS_PROTOCOL_VERSION;
+	const configOpenAvailable =
+		protocolVersion !== null && protocolVersion >= PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION;
 	const configEditorAvailable =
 		protocolVersion !== null && protocolVersion >= PROVIDER_CONFIG_PROTOCOL_VERSION;
 	const quotaEnabled = useAppStore((s) => s.jbcentralQuotaEnabled);
@@ -94,7 +99,7 @@ export function ProvidersSettings() {
 			<div className="flex items-center justify-between gap-12">
 				<p className="tr-text-metadata text-text-muted">{t("settings.providers.intro")}</p>
 				<div className="flex shrink-0 items-center gap-4">
-					{configEditorAvailable ? (
+					{configOpenAvailable ? (
 						<Button
 							variant="ghost"
 							size="m"
@@ -139,7 +144,7 @@ export function ProvidersSettings() {
 									canEditModels={modelsEditorAvailable && p.canEditModelsJson === true}
 									onEditModels={() => setModelsProvider(p)}
 									canOpenConfig={configEditorAvailable && p.canEditModelsJson === true}
-									onOpenConfig={() => void openConfig()}
+									onOpenConfig={() => setConfigProvider(p)}
 								/>
 							))}
 							{configEditorAvailable ? (
@@ -231,6 +236,16 @@ export function ProvidersSettings() {
 					open
 					onOpenChange={(open) => {
 						if (!open) setModelsProvider(null);
+					}}
+				/>
+			) : null}
+			{configProvider ? (
+				<ProviderConfigDialog
+					providerId={configProvider.id}
+					providerName={configProvider.name}
+					open
+					onOpenChange={(open) => {
+						if (!open) setConfigProvider(null);
 					}}
 				/>
 			) : null}

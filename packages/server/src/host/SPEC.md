@@ -203,7 +203,9 @@ channel fan-out, and the process-boot wrapper both launchers share.
   whose auth source is `models.json`; their catalog DTO excludes credentials, headers, and endpoint
   configuration. Successful saves reuse `provider.changed` to invalidate catalogs across clients.
   At protocol v105, `provider.config.open` opens the host-local `models.json` in the user's editor and
-  returns only its path; credentials, headers, and endpoints never cross the wire.
+  returns only its path. At protocol v106, `provider.config.get` and `provider.config.save` edit one
+  editable provider's api, baseUrl and optional write-only apiKey; reads expose only whether a key
+  exists, and a blank key preserves it. Credentials, headers, and endpoints never ride the wire.
   At protocol v100, `android.avds.list` and `android.emulator.*` delegate to the lazy host-local emulator
   manager; the v100 gate prevents older clients from issuing those methods. Status and AVD reads do not
   start an emulator; AVD enumeration is a bounded `emulator -list-avds` read. Start accepts only a listed
