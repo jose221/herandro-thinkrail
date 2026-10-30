@@ -7,15 +7,20 @@ import {
 	RiExternalLinkLine,
 	RiGlobalFill,
 	RiGlobalLine,
+	RiRecordCircleLine,
 	RiRefreshLine,
 	RiScreenshotLine,
+	RiStopCircleLine,
 } from "@remixicon/react";
 import {
 	BROWSER_LIMITS,
-	type BrowserCapture,
 	type BrowserPageSnapshot,
 	type BrowserSession,
+	CAPTURE_LIMITS,
+	type CaptureFrame,
 	type DevServerPort,
+	MEDIA_CAPTURE_PROTOCOL_VERSION,
+	type MediaCapture,
 	WORKSPACE_TOOLS_PROTOCOL_VERSION,
 	WS_CHANNELS,
 } from "@thinkrail/contracts";
@@ -33,7 +38,8 @@ import {
 	useState,
 } from "react";
 import { copyText } from "../lib";
-import { announceBrowserCapture } from "../lib/browserCapture";
+import { activeChatSessionId } from "../lib/activeChatSession";
+import { announceMediaCapture } from "../lib/mediaCapture";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -80,19 +86,24 @@ const VIEWPORT_KEYS = {
 const INPUT_CLASS =
 	"min-h-32 min-w-0 flex-1 rounded-sm border border-control-border-default bg-control-bg px-8 tr-code-text text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active";
 
-interface CapturedFrame {
-	data: string;
+const RECORDING_MAX_MS = 30_000;
+const RECORDING_FPS = 10;
+const RECORDING_FRAME_INTERVAL_MS = 2_000;
+const RECORDING_FRAME_LIMIT = 8;
+const RECORDING_MAX_WIDTH = 1_280;
+
+interface VideoRect {
+	x: number;
+	y: number;
 	width: number;
 	height: number;
 }
 
-async function captureVisibleFrame(
-	video: HTMLVideoElement | null,
-	target: HTMLElement | null,
+function visibleVideoRect(
+	video: HTMLVideoElement,
+	target: HTMLElement,
 	clip: HTMLElement | null,
-): Promise<CapturedFrame> {
-	if (!video || !target) throw new Error("Browser capture target is unavailable");
-	if (video.readyState < 2) throw new Error("Browser capture is not ready");
+): VideoRect {
 	const rect = target.getBoundingClientRect();
 	const clipRect = clip?.getBoundingClientRect() ?? {
 		left: 0,
@@ -109,20 +120,84 @@ async function captureVisibleFrame(
 	const scaleY = video.videoHeight / window.innerHeight;
 	const x = Math.max(0, Math.min(video.videoWidth - 1, Math.round(left * scaleX)));
 	const y = Math.max(0, Math.min(video.videoHeight - 1, Math.round(top * scaleY)));
-	const width = Math.max(1, Math.min(video.videoWidth - x, Math.round((right - left) * scaleX)));
-	const height = Math.max(1, Math.min(video.videoHeight - y, Math.round((bottom - top) * scaleY)));
-	const canvas = document.createElement("canvas");
-	canvas.width = width;
-	canvas.height = height;
+	return {
+		x,
+		y,
+		width: Math.max(1, Math.min(video.videoWidth - x, Math.round((right - left) * scaleX))),
+		height: Math.max(1, Math.min(video.videoHeight - y, Math.round((bottom - top) * scaleY))),
+	};
+}
+
+function drawVideoRect(video: HTMLVideoElement, rect: VideoRect, canvas: HTMLCanvasElement): void {
 	const context = canvas.getContext("2d");
 	if (!context) throw new Error("Browser capture canvas is unavailable");
-	context.drawImage(video, x, y, width, height, 0, 0, width, height);
-	const dataUrl = canvas.toDataURL("image/png");
-	canvas.width = 0;
-	canvas.height = 0;
+	context.drawImage(
+		video,
+		rect.x,
+		rect.y,
+		rect.width,
+		rect.height,
+		0,
+		0,
+		canvas.width,
+		canvas.height,
+	);
+}
+
+function frameFromCanvas(
+	canvas: HTMLCanvasElement,
+	mimeType: "image/png" | "image/jpeg",
+	quality?: number,
+): CaptureFrame {
+	const dataUrl = canvas.toDataURL(mimeType, quality);
 	const comma = dataUrl.indexOf(",");
 	if (comma < 0) throw new Error("Browser capture encoding failed");
-	return { data: dataUrl.slice(comma + 1), width, height };
+	return {
+		mimeType,
+		data: dataUrl.slice(comma + 1),
+		width: canvas.width,
+		height: canvas.height,
+	};
+}
+
+async function captureVisibleFrame(
+	video: HTMLVideoElement | null,
+	target: HTMLElement | null,
+	clip: HTMLElement | null,
+): Promise<CaptureFrame> {
+	if (!video || !target) throw new Error("Browser capture target is unavailable");
+	if (video.readyState < 2) throw new Error("Browser capture is not ready");
+	const rect = visibleVideoRect(video, target, clip);
+	const canvas = document.createElement("canvas");
+	canvas.width = rect.width;
+	canvas.height = rect.height;
+	drawVideoRect(video, rect, canvas);
+	const frame = frameFromCanvas(canvas, "image/png");
+	canvas.width = 0;
+	canvas.height = 0;
+	return frame;
+}
+
+function recordingMimeType(): string | null {
+	if (typeof MediaRecorder === "undefined") return null;
+	for (const candidate of ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"]) {
+		if (MediaRecorder.isTypeSupported(candidate)) return candidate;
+	}
+	return null;
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const result = String(reader.result ?? "");
+			const comma = result.indexOf(",");
+			if (comma < 0) reject(new Error("Browser recording encoding failed"));
+			else resolve(result.slice(comma + 1));
+		};
+		reader.onerror = () => reject(reader.error ?? new Error("Browser recording encoding failed"));
+		reader.readAsDataURL(blob);
+	});
 }
 
 function devicesFor(viewport: Viewport): readonly DevicePreset[] | null {
@@ -131,13 +206,39 @@ function devicesFor(viewport: Viewport): readonly DevicePreset[] | null {
 	return null;
 }
 
-function activeChatSessionId(workspaceId: string): string | null {
-	const state = useAppStore.getState();
-	const tabId = state.activeTabByWorkspace[workspaceId];
-	const tab = (state.tabsByWorkspace[workspaceId] ?? []).find(
-		(candidate) => candidate.id === tabId,
-	);
-	return tab?.kind === "chat" ? tab.sessionId : null;
+function formatRecordingTime(elapsedMs: number): string {
+	const seconds = Math.max(0, Math.round(elapsedMs / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function logicalDimension(value: number | undefined, fallback: number): number {
+	return value === undefined ? fallback : value;
+}
+
+interface BrowserRecordingSession {
+	recorder: MediaRecorder;
+	canvas: HTMLCanvasElement;
+	stream: MediaStream;
+	video: HTMLVideoElement;
+	rect: VideoRect;
+	frames: CaptureFrame[];
+	chunks: Blob[];
+	startedAt: number;
+	durationMs: number;
+	sessionId: string;
+	url: string;
+	deviceLabel: string;
+	logicalWidth: number;
+	logicalHeight: number;
+	drawTimer: number;
+	frameTimer: number;
+	autoTimer: number;
+}
+
+function clearRecordingTimers(session: BrowserRecordingSession): void {
+	window.clearInterval(session.drawTimer);
+	window.clearInterval(session.frameTimer);
+	window.clearTimeout(session.autoTimer);
 }
 
 function DevicePreview({
@@ -231,6 +332,8 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const t = useT();
 	const protocolVersion = useAppStore((state) => state.protocolVersion);
 	const supported = supportsWorkspaceTools(protocolVersion);
+	const captureSupported =
+		protocolVersion !== null && protocolVersion >= MEDIA_CAPTURE_PROTOCOL_VERSION;
 	const [session, setSession] = useState<BrowserSession | null>(null);
 	const [ports, setPorts] = useState<DevServerPort[]>([]);
 	const [urlInput, setUrlInput] = useState("");
@@ -238,7 +341,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const [viewport, setViewport] = useState<Viewport>("desktop");
 	const [deviceId, setDeviceId] = useState(PHONES[0]?.id ?? "");
 	const [captureIntroOpen, setCaptureIntroOpen] = useState(false);
+	const [pendingAction, setPendingAction] = useState<"capture" | "record" | null>(null);
 	const [capturing, setCapturing] = useState(false);
+	const [recording, setRecording] = useState<{ startedAt: number; durationMs: number } | null>(
+		null,
+	);
+	const [recordedMs, setRecordedMs] = useState(0);
+	const [recordingBusy, setRecordingBusy] = useState(false);
 	const [reloadKey, setReloadKey] = useState(0);
 	const [loading, setLoading] = useState(true);
 	const [failed, setFailed] = useState(false);
@@ -252,9 +361,11 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 	const deviceFrameRef = useRef<HTMLDivElement>(null);
 	const deviceHostRef = useRef<HTMLDivElement>(null);
-	const captureButtonRef = useRef<HTMLButtonElement>(null);
+	const captureControlsRef = useRef<HTMLDivElement>(null);
 	const captureVideo = useRef<HTMLVideoElement>(null);
 	const captureStream = useRef<MediaStream | null>(null);
+	const recordingRef = useRef<BrowserRecordingSession | null>(null);
+	const recordingStopRef = useRef<(() => void) | null>(null);
 	const hideTimer = useRef<number | null>(null);
 	const history = useRef<string[]>([]);
 	const historyIndex = useRef(-1);
@@ -378,7 +489,33 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		setSuspended(false);
 	};
 
+	const captureError = useCallback(
+		(error: unknown, fallback: string) => {
+			const name = error instanceof DOMException ? error.name : "";
+			if (name === "NotAllowedError" || name === "AbortError") {
+				toast.info(t("browser.captureCancelled"));
+			} else if (name === "NotSupportedError") {
+				toast.error(t("browser.captureUnsupported"));
+			} else {
+				toast.error(errorText(error, fallback));
+			}
+		},
+		[t],
+	);
+
 	const stopCaptureStream = useCallback(() => {
+		const activeRecording = recordingRef.current;
+		if (activeRecording) {
+			recordingRef.current = null;
+			recordingStopRef.current = null;
+			clearRecordingTimers(activeRecording);
+			try {
+				activeRecording.recorder.stop();
+			} catch {}
+			for (const track of activeRecording.stream.getTracks()) track.stop();
+			setRecording(null);
+			setRecordedMs(0);
+		}
 		const stream = captureStream.current;
 		captureStream.current = null;
 		if (stream) for (const track of stream.getTracks()) track.stop();
@@ -389,6 +526,18 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	useEffect(() => {
 		if (suspended) stopCaptureStream();
 	}, [stopCaptureStream, suspended]);
+
+	useEffect(() => {
+		if (!recording) {
+			setRecordedMs(0);
+			return;
+		}
+		const update = () =>
+			setRecordedMs(Math.min(recording.durationMs, Date.now() - recording.startedAt));
+		update();
+		const timer = window.setInterval(update, 500);
+		return () => window.clearInterval(timer);
+	}, [recording]);
 
 	const ensureCaptureStream = useCallback(async (): Promise<MediaStream> => {
 		const current = captureStream.current;
@@ -421,11 +570,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		track?.addEventListener("ended", () => {
 			if (captureStream.current === stream) captureStream.current = null;
 			video.srcObject = null;
+			recordingStopRef.current?.();
 		});
 		return stream;
 	}, [t]);
 
 	const capture = async () => {
+		if (!captureSupported) return;
 		const sessionId = activeChatSessionId(workspaceId);
 		const url = activeTab?.url ?? "about:blank";
 		if (!sessionId || !activeTab || url === "about:blank") {
@@ -435,39 +586,31 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		const target = viewport === "desktop" ? iframeRef.current : deviceFrameRef.current;
 		const clip = viewport === "desktop" ? null : deviceHostRef.current;
 		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
-		const button = captureButtonRef.current;
-		const previousVisibility = button?.style.visibility ?? "";
-		if (button) button.style.visibility = "hidden";
+		const controls = captureControlsRef.current;
+		const previousVisibility = controls?.style.visibility ?? "";
+		if (controls) controls.style.visibility = "hidden";
 		setCapturing(true);
-		let saved: BrowserCapture | null = null;
-		let frame: CapturedFrame | null = null;
+		let saved: MediaCapture | null = null;
+		let frame: CaptureFrame | null = null;
 		try {
 			await ensureCaptureStream();
 			await new Promise<void>((resolve) =>
 				requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
 			);
 			frame = await captureVisibleFrame(captureVideo.current, target, clip);
-			saved = await getTransport().request("browser.capture.save", {
+			saved = await getTransport().request("capture.save", {
 				workspaceId,
+				kind: "image",
 				data: frame.data,
-				mimeType: "image/png",
-				url,
-				device: deviceLabel,
+				mimeType: frame.mimeType,
 				width: frame.width,
 				height: frame.height,
 			});
 		} catch (error) {
-			const name = error instanceof DOMException ? error.name : "";
-			if (name === "NotAllowedError" || name === "AbortError") {
-				toast.info(t("browser.captureCancelled"));
-			} else if (name === "NotSupportedError") {
-				toast.error(t("browser.captureUnsupported"));
-			} else {
-				toast.error(errorText(error, t("browser.captureFailed")));
-			}
+			captureError(error, t("browser.captureFailed"));
 		}
 		setCapturing(false);
-		if (button) button.style.visibility = previousVisibility;
+		if (controls) controls.style.visibility = previousVisibility;
 		if (!saved || !frame) return;
 		const note = t("browser.captureNote", {
 			path: saved.path,
@@ -476,21 +619,201 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			height: device?.height ?? frame.height,
 			url,
 		});
-		announceBrowserCapture({
+		announceMediaCapture({
 			workspaceId,
 			sessionId,
-			captureId: saved.id,
-			fileName: saved.fileName,
-			path: saved.path,
-			mimeType: "image/png",
-			content: { type: "image", mimeType: "image/png", data: frame.data },
-			width: frame.width,
-			height: frame.height,
+			capture: saved,
+			image: frame,
 			device: deviceLabel,
 			url,
 			note,
 		});
 		toast.success(t("browser.captureSaved"));
+	};
+
+	const stopRecording = async () => {
+		const active = recordingRef.current;
+		if (!active) return;
+		recordingRef.current = null;
+		recordingStopRef.current = null;
+		clearRecordingTimers(active);
+		setRecording(null);
+		setRecordedMs(0);
+		setRecordingBusy(true);
+		try {
+			drawVideoRect(active.video, active.rect, active.canvas);
+		} catch {}
+		await new Promise<void>((resolve) => {
+			if (active.recorder.state === "inactive") {
+				resolve();
+				return;
+			}
+			active.recorder.addEventListener("stop", () => resolve(), { once: true });
+			active.recorder.stop();
+		});
+		for (const track of active.stream.getTracks()) track.stop();
+		const durationMs = Math.max(1, Math.min(active.durationMs, Date.now() - active.startedAt));
+		const blob = new Blob(active.chunks, { type: "video/webm" });
+		if (blob.size === 0) {
+			toast.error(t("browser.recordFailed"));
+		} else if (blob.size > CAPTURE_LIMITS.videoBytes) {
+			toast.error(t("browser.recordTooLarge"));
+		} else {
+			let saved: MediaCapture | null = null;
+			try {
+				const data = await blobToBase64(blob);
+				saved = await getTransport().request("capture.save", {
+					workspaceId,
+					kind: "video",
+					data,
+					mimeType: "video/webm",
+					width: active.canvas.width,
+					height: active.canvas.height,
+					durationMs,
+				});
+			} catch (error) {
+				captureError(error, t("browser.recordFailed"));
+			}
+			if (saved) {
+				const frames =
+					active.frames.length > 0
+						? active.frames
+						: [frameFromCanvas(active.canvas, "image/jpeg", 0.8)];
+				const poster = frames[0];
+				const note = t("browser.recordNote", {
+					path: saved.path,
+					device: active.deviceLabel,
+					width: active.logicalWidth,
+					height: active.logicalHeight,
+					duration: String(Math.max(1, Math.round(durationMs / 1000))),
+					url: active.url,
+				});
+				announceMediaCapture({
+					workspaceId,
+					sessionId: active.sessionId,
+					capture: saved,
+					...(poster ? { poster } : {}),
+					frames,
+					device: active.deviceLabel,
+					url: active.url,
+					note,
+				});
+				toast.success(t("browser.recordSaved"));
+			}
+		}
+		setRecordingBusy(false);
+	};
+
+	const startRecording = async () => {
+		if (!captureSupported || recordingRef.current) return;
+		const sessionId = activeChatSessionId(workspaceId);
+		const url = activeTab?.url ?? "about:blank";
+		if (!sessionId || !activeTab || url === "about:blank") {
+			toast.error(t("browser.captureNoChat"));
+			return;
+		}
+		const target = viewport === "desktop" ? iframeRef.current : deviceFrameRef.current;
+		const clip = viewport === "desktop" ? null : deviceHostRef.current;
+		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
+		const deviceWidth = device?.width;
+		const deviceHeight = device?.height;
+		const video = captureVideo.current;
+		if (!video || !target) {
+			toast.error(t("browser.captureUnsupported"));
+			return;
+		}
+		const mimeType = recordingMimeType();
+		if (!mimeType) {
+			toast.error(t("browser.recordUnsupported"));
+			return;
+		}
+		setRecordingBusy(true);
+		let stream: MediaStream | null = null;
+		let recorder: MediaRecorder | null = null;
+		let session: BrowserRecordingSession | null = null;
+		try {
+			await ensureCaptureStream();
+			await new Promise<void>((resolve) =>
+				requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+			);
+			const rect = visibleVideoRect(video, target, clip);
+			const canvas = document.createElement("canvas");
+			const scale = Math.min(1, RECORDING_MAX_WIDTH / rect.width);
+			canvas.width = Math.max(1, Math.round(rect.width * scale));
+			canvas.height = Math.max(1, Math.round(rect.height * scale));
+			drawVideoRect(video, rect, canvas);
+			stream = canvas.captureStream(RECORDING_FPS);
+			recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 2_000_000 });
+			const chunks: Blob[] = [];
+			recorder.ondataavailable = (event) => {
+				if (event.data.size > 0) chunks.push(event.data);
+			};
+			const frames: CaptureFrame[] = [frameFromCanvas(canvas, "image/jpeg", 0.8)];
+			const startedAt = Date.now();
+			const drawTimer = window.setInterval(
+				() => {
+					try {
+						drawVideoRect(video, rect, canvas);
+					} catch {}
+				},
+				Math.round(1000 / RECORDING_FPS),
+			);
+			const frameTimer = window.setInterval(() => {
+				if (frames.length >= RECORDING_FRAME_LIMIT) return;
+				try {
+					frames.push(frameFromCanvas(canvas, "image/jpeg", 0.8));
+				} catch {}
+			}, RECORDING_FRAME_INTERVAL_MS);
+			recorder.start(500);
+			const autoTimer = window.setTimeout(() => void stopRecording(), RECORDING_MAX_MS);
+			session = {
+				recorder,
+				canvas,
+				stream,
+				video,
+				rect,
+				frames,
+				chunks,
+				startedAt,
+				durationMs: RECORDING_MAX_MS,
+				sessionId,
+				url,
+				deviceLabel,
+				logicalWidth: logicalDimension(deviceWidth, rect.width),
+				logicalHeight: logicalDimension(deviceHeight, rect.height),
+				drawTimer,
+				frameTimer,
+				autoTimer,
+			};
+			recordingRef.current = session;
+			recordingStopRef.current = () => void stopRecording();
+			setRecording({ startedAt, durationMs: RECORDING_MAX_MS });
+			toast.info(t("browser.recordingStarted"));
+		} catch (error) {
+			if (session) {
+				clearRecordingTimers(session);
+				try {
+					session.recorder.stop();
+				} catch {}
+			}
+			for (const track of stream?.getTracks() ?? []) track.stop();
+			recordingRef.current = null;
+			recordingStopRef.current = null;
+			setRecording(null);
+			captureError(error, t("browser.recordFailed"));
+		}
+		setRecordingBusy(false);
+	};
+
+	const requestCapture = (action: "capture" | "record") => {
+		if (!captureSupported) return;
+		if (captureStream.current) {
+			if (action === "record") void startRecording();
+			else void capture();
+			return;
+		}
+		setPendingAction(action);
+		setCaptureIntroOpen(true);
 	};
 
 	const navigate = useCallback(
@@ -596,7 +919,28 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 				<h2 className="min-w-0 flex-1 truncate tr-title-compact text-text-default">
 					{t("browser.title")}
 				</h2>
-				{activeTab && activeTab.url !== "about:blank" ? (
+				{recording ? (
+					<div className="flex shrink-0 items-center gap-4" data-testid="browser-recording">
+						<span className="flex items-center gap-2 text-feedback-error tr-text-metadata">
+							<span
+								className="size-6 animate-pulse rounded-full bg-feedback-error"
+								aria-hidden="true"
+							/>
+							{t("browser.recording")} {formatRecordingTime(recordedMs)}
+						</span>
+						<Button
+							variant="outline"
+							size="s"
+							iconLeft={RiStopCircleLine}
+							loading={recordingBusy}
+							onClick={() => void stopRecording()}
+							data-testid="browser-record-stop"
+						>
+							{t("browser.recordStop")}
+						</Button>
+					</div>
+				) : null}
+				{!recording && activeTab && activeTab.url !== "about:blank" ? (
 					<>
 						<IconButton
 							icon={RiCodeSSlashLine}
@@ -844,21 +1188,35 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 									/>
 								</DevicePreview>
 							) : null}
-							<Button
-								ref={captureButtonRef}
-								variant="primary"
-								size="m"
-								iconLeft={RiScreenshotLine}
-								loading={capturing}
-								className="absolute right-12 bottom-64 z-20 shadow-[var(--shadow-md)]"
-								data-testid="browser-capture"
-								onClick={() => {
-									if (captureStream.current) void capture();
-									else setCaptureIntroOpen(true);
-								}}
-							>
-								{t("browser.capture")}
-							</Button>
+							{captureSupported && !recording && !recordingBusy ? (
+								<div
+									ref={captureControlsRef}
+									className="absolute right-12 bottom-64 z-20 flex items-center gap-8"
+								>
+									<Button
+										variant="primary"
+										size="m"
+										iconLeft={RiScreenshotLine}
+										loading={capturing}
+										className="shadow-[var(--shadow-md)]"
+										data-testid="browser-capture"
+										onClick={() => requestCapture("capture")}
+									>
+										{t("browser.capture")}
+									</Button>
+									<Button
+										variant="outline"
+										size="m"
+										iconLeft={RiRecordCircleLine}
+										disabled={capturing}
+										className="shadow-[var(--shadow-md)]"
+										data-testid="browser-record"
+										onClick={() => requestCapture("record")}
+									>
+										{t("browser.record")}
+									</Button>
+								</div>
+							) : null}
 							<p className="shrink-0 border-border-default border-t px-12 py-4 text-text-subtle tr-text-metadata">
 								{viewport === "desktop"
 									? t("browser.frameHint")
@@ -931,7 +1289,12 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 				description={t("browser.captureIntro")}
 				confirmLabel={t("browser.captureStart")}
 				confirmTestId="browser-capture-start"
-				onConfirm={() => void capture()}
+				onConfirm={() => {
+					const action = pendingAction ?? "capture";
+					setPendingAction(null);
+					if (action === "record") void startRecording();
+					else void capture();
+				}}
 			/>
 		</div>
 	);

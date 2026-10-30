@@ -1,6 +1,7 @@
 import type {
 	AssistantMessage,
 	BackgroundCommandCompletionDetails,
+	CaptureFrame,
 	ExtUiRequest,
 	ImageContent,
 	ReviewFixDetails,
@@ -13,6 +14,19 @@ import type { AssistantFailure } from "./assistantFailure";
 export interface ChatAttachment {
 	name: string;
 	content: ImageContent;
+}
+
+export interface VideoAttachment {
+	id: string;
+	name: string;
+	path: string;
+	mimeType: string;
+	durationMs: number;
+	width: number;
+	height: number;
+	bytes: number;
+	poster?: CaptureFrame;
+	frames: CaptureFrame[];
 }
 
 export type ExtUiDialogRequest = Extract<

@@ -16,6 +16,7 @@ import {
 	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	AGENT_REVIEW_SETTING_PROTOCOL_VERSION,
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
+	ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	CHANGE_MUTATIONS_PROTOCOL_VERSION,
@@ -35,6 +36,7 @@ import {
 	LOCALES_PROTOCOL_VERSION,
 	MCP_PROTOCOL_VERSION,
 	MCP_TOOL_GRANTS_PROTOCOL_VERSION,
+	MEDIA_CAPTURE_PROTOCOL_VERSION,
 	MODEL_PICKER_PROTOCOL_VERSION,
 	normalizeSessionTitle,
 	ONBOARDING_PROTOCOL_VERSION,
@@ -114,13 +116,21 @@ test("provider configuration editing is versioned at protocol v106", () => {
 
 test("workspace tools are versioned at protocol v107", () => {
 	expect(WORKSPACE_TOOLS_PROTOCOL_VERSION).toBe(107);
-	expect(PROTOCOL_VERSION).toBe(107);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(WORKSPACE_TOOLS_PROTOCOL_VERSION);
 	expect(WS_METHODS.browserNavigate).toBe("browser.navigate");
-	expect(WS_METHODS.browserCaptureSave).toBe("browser.capture.save");
-	expect(WS_METHODS.browserCaptureDelete).toBe("browser.capture.delete");
 	expect(WS_METHODS.httpRequestSend).toBe("http.request.send");
 	expect(WS_METHODS.systemResources).toBe("system.resources");
 	expect(WS_METHODS.gitControlStatus).toBe("git.control.status");
+});
+
+test("media captures and Android recordings are versioned at protocol v108", () => {
+	expect(MEDIA_CAPTURE_PROTOCOL_VERSION).toBe(108);
+	expect(ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION).toBe(108);
+	expect(PROTOCOL_VERSION).toBe(108);
+	expect(WS_METHODS.captureSave).toBe("capture.save");
+	expect(WS_METHODS.captureDelete).toBe("capture.delete");
+	expect(WS_METHODS.androidEmulatorRecordStart).toBe("android.emulator.record.start");
+	expect(WS_METHODS.androidEmulatorRecordStop).toBe("android.emulator.record.stop");
 });
 
 test("ACP config option snapshots are available from protocol v98", () => {

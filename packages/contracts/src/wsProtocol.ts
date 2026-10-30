@@ -6,6 +6,7 @@ import type {
 	AcpSessionSummary,
 	AndroidEmulatorDetails,
 	AndroidEmulatorLogs,
+	AndroidEmulatorRecordingStatus,
 	AndroidEmulatorScreenshot,
 	AndroidEmulatorStatus,
 	AppConfig,
@@ -14,9 +15,10 @@ import type {
 	BackgroundCommandOutputResult,
 	BranchList,
 	BranchStatus,
-	BrowserCapture,
 	BrowserPageSnapshot,
 	BrowserSession,
+	CaptureKind,
+	CaptureMimeType,
 	ChangeReceipt,
 	CompletionDelivery,
 	DelegationRunStatus,
@@ -60,6 +62,7 @@ import type {
 	McpServerLog,
 	McpServerScope,
 	McpStatusSnapshot,
+	MediaCapture,
 	MemoryAnalysis,
 	MemoryCheckpoint,
 	MergeMethod,
@@ -153,7 +156,7 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 107;
+export const PROTOCOL_VERSION = 108;
 export const ACP_PROTOCOL_VERSION = 96;
 export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
 export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
@@ -164,6 +167,8 @@ export const ACP_START_TIMEOUT_PROTOCOL_VERSION = 104;
 export const PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION = 105;
 export const PROVIDER_CONFIG_PROTOCOL_VERSION = 106;
 export const WORKSPACE_TOOLS_PROTOCOL_VERSION = 107;
+export const MEDIA_CAPTURE_PROTOCOL_VERSION = 108;
+export const ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION = 108;
 export const PROVIDER_MODELS_PROTOCOL_VERSION = 97;
 export const PROJECT_CLONE_PROTOCOL_VERSION = 95;
 export const ONBOARDING_PROTOCOL_VERSION = 94;
@@ -439,6 +444,8 @@ export const WS_METHODS = {
 	androidEmulatorSwipe: "android.emulator.swipe",
 	androidEmulatorInstallApk: "android.emulator.installApk",
 	androidEmulatorLogs: "android.emulator.logs",
+	androidEmulatorRecordStart: "android.emulator.record.start",
+	androidEmulatorRecordStop: "android.emulator.record.stop",
 	browserState: "browser.state",
 	browserNavigate: "browser.navigate",
 	browserOpenTab: "browser.openTab",
@@ -446,8 +453,8 @@ export const WS_METHODS = {
 	browserSelectTab: "browser.selectTab",
 	browserPorts: "browser.ports",
 	browserSnapshot: "browser.snapshot",
-	browserCaptureSave: "browser.capture.save",
-	browserCaptureDelete: "browser.capture.delete",
+	captureSave: "capture.save",
+	captureDelete: "capture.delete",
 	httpRequestSend: "http.request.send",
 	httpRequestHistory: "http.request.history",
 	httpRequestHistoryDetail: "http.request.historyDetail",
@@ -1273,6 +1280,14 @@ export interface WsMethodMap {
 		params: { lines?: number };
 		result: AndroidEmulatorLogs;
 	};
+	"android.emulator.record.start": {
+		params: { workspaceId: string; durationMs?: number };
+		result: AndroidEmulatorRecordingStatus;
+	};
+	"android.emulator.record.stop": {
+		params: { workspaceId: string };
+		result: MediaCapture;
+	};
 	"browser.state": { params: { workspaceId: string }; result: BrowserSession };
 	"browser.navigate": {
 		params: { workspaceId: string; url: string };
@@ -1295,19 +1310,19 @@ export interface WsMethodMap {
 		params: { workspaceId: string; url?: string };
 		result: BrowserPageSnapshot;
 	};
-	"browser.capture.save": {
+	"capture.save": {
 		params: {
 			workspaceId: string;
+			kind: CaptureKind;
 			data: string;
-			mimeType: "image/png" | "image/jpeg";
-			url: string;
-			device: string;
+			mimeType: CaptureMimeType;
 			width: number;
 			height: number;
+			durationMs?: number;
 		};
-		result: BrowserCapture;
+		result: MediaCapture;
 	};
-	"browser.capture.delete": {
+	"capture.delete": {
 		params: { workspaceId: string; id: string };
 		result: Ack;
 	};

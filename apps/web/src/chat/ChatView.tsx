@@ -27,7 +27,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNow } from "@/components/useNow";
-import { BROWSER_CAPTURE_EVENT, type BrowserCapturePayload } from "@/lib/browserCapture";
+import { MEDIA_CAPTURE_EVENT, type MediaCapturePayload } from "@/lib/mediaCapture";
 import { type ParsedTemplate, templateToSlashCommand, useTemplateCommandPicker } from "@/prompt";
 import {
 	EMPTY_RUNTIME,
@@ -83,8 +83,9 @@ import { useModelCatalog } from "./useModelCatalog";
 import { useModelPreferences } from "./useModelPreferences";
 import { useSessionStats } from "./useSessionStats";
 import "./tools/register";
-import type { ChatAttachment } from "./types";
+import type { ChatAttachment, VideoAttachment } from "./types";
 import { useHistorySearch } from "./useHistorySearch";
+import { videoFrameAttachments } from "./videoAttachments";
 
 const TRY_AGAIN_PROMPT = "Try again.";
 
@@ -519,44 +520,83 @@ export default function ChatView({
 		[sessionId],
 	);
 
-	const browserCaptures = useRef(new Map<string, string>());
-	const handleImagesChange = useCallback(
-		(images: PromptImage[]) => {
-			const present = new Set(images.map((image) => image.name));
-			for (const [name, id] of browserCaptures.current) {
-				if (present.has(name)) continue;
-				browserCaptures.current.delete(name);
-				void getTransport()
-					.request("browser.capture.delete", { workspaceId, id })
-					.catch(() => undefined);
-			}
+	const deleteCapture = useCallback(
+		(id: string) => {
+			void getTransport()
+				.request("capture.delete", { workspaceId, id })
+				.catch(() => undefined);
 		},
 		[workspaceId],
 	);
 
+	const imageCaptures = useRef(new Map<string, string>());
+	const handleImagesChange = useCallback(
+		(images: PromptImage[]) => {
+			const present = new Set(images.map((image) => image.name));
+			for (const [name, id] of imageCaptures.current) {
+				if (present.has(name)) continue;
+				imageCaptures.current.delete(name);
+				deleteCapture(id);
+			}
+		},
+		[deleteCapture],
+	);
+
+	const videoCapture = useRef<string | null>(null);
+	const handleVideoChange = useCallback(
+		(video: VideoAttachment | null) => {
+			const previous = videoCapture.current;
+			if (previous && previous !== video?.id) deleteCapture(previous);
+			videoCapture.current = video?.id ?? null;
+		},
+		[deleteCapture],
+	);
+
 	useEffect(() => {
 		const onCapture = (event: Event) => {
-			const detail = (event as CustomEvent<BrowserCapturePayload>).detail;
+			const detail = (event as CustomEvent<MediaCapturePayload>).detail;
 			if (detail.workspaceId !== workspaceId || detail.sessionId !== sessionId) return;
-			browserCaptures.current.set(detail.fileName, detail.captureId);
 			restoreTextToDraft(detail.note);
-			composerRef.current?.restoreAttachments([{ name: detail.fileName, content: detail.content }]);
+			if (detail.capture.kind === "image" && detail.image) {
+				imageCaptures.current.set(detail.capture.fileName, detail.capture.id);
+				composerRef.current?.restoreAttachments([
+					{
+						name: detail.capture.fileName,
+						content: {
+							type: "image",
+							mimeType: detail.image.mimeType,
+							data: detail.image.data,
+						},
+					},
+				]);
+			} else if (detail.capture.kind === "video") {
+				composerRef.current?.attachVideo({
+					id: detail.capture.id,
+					name: detail.capture.fileName,
+					path: detail.capture.path,
+					mimeType: detail.capture.mimeType,
+					durationMs: detail.capture.durationMs ?? 0,
+					width: detail.capture.width,
+					height: detail.capture.height,
+					bytes: detail.capture.bytes,
+					...(detail.poster ? { poster: detail.poster } : {}),
+					frames: detail.frames ?? [],
+				});
+			}
 			requestAnimationFrame(() => composerRef.current?.refocus());
 		};
-		window.addEventListener(BROWSER_CAPTURE_EVENT, onCapture);
-		return () => window.removeEventListener(BROWSER_CAPTURE_EVENT, onCapture);
+		window.addEventListener(MEDIA_CAPTURE_EVENT, onCapture);
+		return () => window.removeEventListener(MEDIA_CAPTURE_EVENT, onCapture);
 	}, [restoreTextToDraft, sessionId, workspaceId]);
 
 	useEffect(
 		() => () => {
-			for (const id of browserCaptures.current.values()) {
-				void getTransport()
-					.request("browser.capture.delete", { workspaceId, id })
-					.catch(() => undefined);
-			}
-			browserCaptures.current.clear();
+			for (const id of imageCaptures.current.values()) deleteCapture(id);
+			imageCaptures.current.clear();
+			if (videoCapture.current) deleteCapture(videoCapture.current);
+			videoCapture.current = null;
 		},
-		[workspaceId],
+		[deleteCapture],
 	);
 
 	const restoreQueueContentToDraft = (content: SessionQueueContent): void => {
@@ -604,15 +644,17 @@ export default function ChatView({
 	const performSend = (
 		text: string,
 		attachments: ChatAttachment[],
+		videos: VideoAttachment[],
 		behavior: Exclude<SubmitBehavior, "interrupt">,
 	) => {
+		const allAttachments = [...videoFrameAttachments(videos), ...attachments];
 		const queued = behavior !== "send";
 		freshResults.markAllSeen();
-		if (!queued && (text || attachments.length > 0)) {
+		if (!queued && (text || allAttachments.length > 0)) {
 			transcriptRef.current?.armImmediateTurn();
-			useAppStore.getState().appendUserMessage(sessionId, text, attachments);
+			useAppStore.getState().appendUserMessage(sessionId, text, allAttachments);
 		}
-		const images = attachments.map((a) => a.content);
+		const images = allAttachments.map((a) => a.content);
 		const params = { sessionId, text, ...(images.length > 0 ? { images } : {}) };
 		const method =
 			behavior === "steer"
@@ -635,31 +677,30 @@ export default function ChatView({
 	const onSubmit = (
 		text: string,
 		attachments: ChatAttachment[],
+		videos: VideoAttachment[],
 		behavior: SubmitBehavior,
 	): ComposerSubmitDisposition => {
+		const hasAttachments = attachments.length > 0 || videos.length > 0;
 		const nativeCommand = parseNativeChatCommand(text, canRenameChat);
 		if (nativeCommand?.kind === "compact") {
-			const submissionError = compactSubmissionError(
-				attachments.length > 0,
-				queue.hasImages === true,
-			);
+			const submissionError = compactSubmissionError(hasAttachments, queue.hasImages === true);
 			if (submissionError) return { accepted: false, reason: submissionError };
 			performCompact(nativeCommand.instructions);
 			return { accepted: true };
 		}
 		if (nativeCommand?.kind === "name") {
-			const prepared = prepareNameChatCommand(nativeCommand.title, attachments.length > 0);
+			const prepared = prepareNameChatCommand(nativeCommand.title, hasAttachments);
 			if ("reason" in prepared) return { accepted: false, reason: prepared.reason };
 			performRename(prepared.title);
 			return { accepted: true };
 		}
 		if (behavior !== "interrupt") {
-			performSend(text, attachments, behavior);
+			performSend(text, attachments, videos, behavior);
 			return { accepted: true };
 		}
 		getTransport()
 			.request("session.abort", { sessionId })
-			.then(() => performSend(text, attachments, "send"))
+			.then(() => performSend(text, attachments, videos, "send"))
 			.catch((err) => {
 				useAppStore.getState().appendErrorTurn(sessionId, errorText(err));
 				restoreTextToDraft(text);
@@ -767,7 +808,10 @@ export default function ChatView({
 	useInsertionEffect(() => {
 		performSendRef.current = performSend;
 	});
-	const onTryAgain = useCallback(() => performSendRef.current(TRY_AGAIN_PROMPT, [], "send"), []);
+	const onTryAgain = useCallback(
+		() => performSendRef.current(TRY_AGAIN_PROMPT, [], [], "send"),
+		[],
+	);
 
 	return (
 		<div
@@ -933,6 +977,7 @@ export default function ChatView({
 					onManageTemplates={onManageTemplates}
 					templatesEmpty={templatesEmpty}
 					onImagesChange={handleImagesChange}
+					onVideoChange={handleVideoChange}
 				/>
 			</div>
 			<TemplateEditorDialog

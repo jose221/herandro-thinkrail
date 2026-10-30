@@ -12,12 +12,13 @@ tags: [android, emulator]
 
 Manage one optional, host-local Android SDK emulator for explicit ThinkRail UI and Pi actions. Report
 local SDK/AVD readiness, launch a selected AVD, inspect its display/details/logs, perform bounded device
-input and install a workspace-contained APK, and stop the emulator after five minutes without activity.
+input and install a workspace-contained APK, record the display to a bounded MP4, and stop the emulator
+after five minutes without activity.
 
 ## Boundary
 
 - **Owns:** emulator process lifetime, SDK tool discovery, AVD enumeration, emulator-only ADB targeting,
-  bounded screenshots/logs, validated input, and APK path containment.
+  bounded screenshots/logs, bounded recordings, validated input, and APK path containment.
 - **Public surface (barrel):** `AndroidEmulatorManager`, the lazy process-local manager accessors, and the
   default five-minute idle TTL.
 - **Allowed deps:** `contracts`, `subprocess`, and Node/Bun APIs.
@@ -41,3 +42,7 @@ input and install a workspace-contained APK, and stop the emulator after five mi
   process uses argv with `shell: false`.
 - Absence of Android SDK tools is a normal unavailable state. ThinkRail does not install the SDK, create
   AVDs, or start an emulator at host boot.
+- Recording uses the fixed `screenrecord` command at 4 Mbps with a 1–60 s bound, pulls the MP4 to a
+  private temp file, rejects a missing/truncated/oversized result, and removes the device artifact even
+  on failure. Stopping the emulator, an unexpected emulator exit, or a cancelled recording terminates the
+  child and removes the device file.

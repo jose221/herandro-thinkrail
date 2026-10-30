@@ -60,6 +60,23 @@ if (args[0] === "devices") {
     png.writeUInt32BE(2, 16);
     png.writeUInt32BE(3, 20);
     process.stdout.write(png);
+  } else if (command[0] === "shell" && command[1] === "screenrecord") {
+    const target = command.at(-1);
+    const name = target.split("/").pop();
+    const mp4 = Buffer.alloc(32);
+    mp4.write("ftyp", 4, "ascii");
+    fs.writeFileSync(${JSON.stringify(directory)} + "/" + name, mp4);
+    fs.writeFileSync(${JSON.stringify(join(directory, "screenrecord.pid"))}, String(process.pid));
+    setInterval(() => {}, 1000);
+  } else if (command[0] === "pull") {
+    const name = command[1].split("/").pop();
+    fs.copyFileSync(${JSON.stringify(directory)} + "/" + name, command[2]);
+  } else if (command[0] === "shell" && command[1] === "pkill") {
+    try {
+      process.kill(Number(fs.readFileSync(${JSON.stringify(join(directory, "screenrecord.pid"))}, "utf8")), "SIGINT");
+    } catch {}
+  } else if (command[0] === "shell" && command[1] === "rm") {
+    // The fake device file is disposable.
   } else if (command[0] === "logcat") {
     process.stdout.write("sample emulator log\\n");
   } else if (command[0] === "install" && fs.existsSync(${JSON.stringify(installGatePath)})) {
@@ -204,6 +221,41 @@ test("starts and controls only the emulator serial with bounded inspection", asy
 	expect(targeted.some((args) => args.includes("3b413722"))).toBe(false);
 	expect(targeted.some((args) => args[1] === "-d")).toBe(false);
 	expect(typed.map((args) => args.at(-1))).toEqual(["'hello%sworld'", "'hello;%sexit'"]);
+});
+
+test("records the owned emulator to an MP4 and removes the device artifact", async () => {
+	const { manager, callsPath } = fixture();
+	await manager.start("Pixel_8_API_35");
+	const started = await manager.recordStart("workspace-1", 5_000);
+	expect(started).toMatchObject({ durationMs: 5_000 });
+	expect((await manager.status()).recording).toMatchObject({ durationMs: 5_000 });
+
+	const recording = await manager.recordStop("workspace-1");
+	expect(recording).toMatchObject({ width: 1080, height: 2400 });
+	expect(recording.durationMs).toBeGreaterThan(0);
+	expect(recording.durationMs).toBeLessThanOrEqual(5_000);
+	expect(recording.data.subarray(4, 8).toString("ascii")).toBe("ftyp");
+	expect((await manager.status()).recording).toBeUndefined();
+	await manager.stop();
+
+	const calls = readFileSync(callsPath, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as string[]);
+	expect(calls.some((args) => args.includes("screenrecord"))).toBe(true);
+	expect(calls.some((args) => args.includes("pull"))).toBe(true);
+	expect(calls.some((args) => args.includes("pkill") && args.includes("-INT"))).toBe(true);
+	expect(calls.some((args) => args.includes("rm") && args.includes("-f"))).toBe(true);
+});
+
+test("records only while the owned emulator is running", async () => {
+	const { manager } = fixture();
+	await expect(manager.recordStart("workspace-1")).rejects.toThrow("Start an Android emulator");
+	await manager.start("Pixel_8_API_35");
+	await expect(manager.recordStart("workspace-1", 50)).rejects.toThrow("between 1 and 60");
+	await manager.recordStart("workspace-1", 5_000);
+	await expect(manager.recordStop("other")).rejects.toThrow("active for this workspace");
+	await manager.stop();
 });
 
 test("installs the validated APK snapshot when its workspace path changes", async () => {

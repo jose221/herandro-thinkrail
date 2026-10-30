@@ -119,15 +119,14 @@ import {
 	activeBrowserUrl,
 	browserSession,
 	closeBrowserTab,
-	deleteBrowserCapture,
 	fetchPageSnapshot,
 	forgetBrowserSession,
 	listDevServerPorts,
 	navigateBrowser,
 	openBrowserTab,
-	saveBrowserCapture,
 	selectBrowserTab,
 } from "../browser";
+import { deleteCapture, saveCapture } from "../captures";
 import { forgetWorkspaceChanges, revertChange, undoChange } from "../changes";
 import { selectDirectory } from "../dialog";
 import { listAvailableEditors, openEditor, revealInFileManager } from "../editors";
@@ -1218,6 +1217,23 @@ const handlers: WsHandlers = {
 		return { ok: true };
 	},
 	"android.emulator.logs": (params) => getAndroidEmulatorManager().logs(params.lines),
+	"android.emulator.record.start": (params) => {
+		getWorkspace(params.workspaceId);
+		return getAndroidEmulatorManager().recordStart(params.workspaceId, params.durationMs);
+	},
+	"android.emulator.record.stop": async (params) => {
+		getWorkspace(params.workspaceId);
+		const recording = await getAndroidEmulatorManager().recordStop(params.workspaceId);
+		return saveCapture({
+			workspaceId: params.workspaceId,
+			kind: "video",
+			data: recording.data.toString("base64"),
+			mimeType: "video/mp4",
+			width: recording.width,
+			height: recording.height,
+			durationMs: recording.durationMs,
+		});
+	},
 	"browser.state": (params) => {
 		getWorkspace(params.workspaceId);
 		return browserSession(params.workspaceId);
@@ -1245,13 +1261,13 @@ const handlers: WsHandlers = {
 		if (url === "about:blank") throw new Error("Open a page in the browser first");
 		return fetchPageSnapshot(url);
 	},
-	"browser.capture.save": (params) => {
+	"capture.save": (params) => {
 		getWorkspace(params.workspaceId);
-		return saveBrowserCapture(params);
+		return saveCapture(params);
 	},
-	"browser.capture.delete": (params) => {
+	"capture.delete": (params) => {
 		getWorkspace(params.workspaceId);
-		deleteBrowserCapture(params.workspaceId, params.id);
+		deleteCapture(params.workspaceId, params.id);
 		return { ok: true } as const;
 	},
 	"http.request.send": async (params) => {

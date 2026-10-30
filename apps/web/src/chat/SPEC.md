@@ -919,6 +919,11 @@ both message orders. *Rejected:* keeping the modal for non-MCP extensions — ev
   skill overrides, + a **Reload** that applies changes to this chat's session via `session.reloadResources`,
   disabled while streaming) or project (`project.skills`, per-project-baseline toggles, no session) — the
   latter reused by `panels` pre-session). All props-driven; behavior detail lives in the components' jsdoc.
+- **Video capture attachments** (`Composer`, `ChatView`) — a recording is a separate attachment kind
+  with a poster/duration/size chip beside image chips. On submit, its ordered storyboard frames become
+  ordinary image attachments and the temporary video path stays in the text note; pi has no video
+  content block, so the model receives the frames plus the path, never a `video/*` image. The host file
+  is deleted when the chip is sent or removed.
 - **Live session telemetry follows Pi's finalized boundaries.** `SessionStatsBar` renders only the host's
   authoritative `session.getStats` snapshot; the web never derives billed totals or context usage from
   message content. Totals include delegated subagent spend, which the host records into the parent as pi

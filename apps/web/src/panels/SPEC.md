@@ -19,21 +19,27 @@ ThinkRail's filesystem and terminal permission callbacks, and distinguishes a st
 missing executable or protocol failure. A panel fills its container and never knows its arrangement (so the mobile shell is
 an additive layer, not a rewrite).
 
-`AndroidEmulatorPane` uses only contracts and transport for Android protocol v100. It waits for a
-compatible host before making requests, never starts an emulator on mount or status polling, and exposes
-start/stop and bounded inspection/input/install actions explicitly. A click on the screen becomes a
-device tap and a drag becomes a swipe; coordinate controls remain as the bounded fallback. The stopped
-state clears details, screen, and logs, and the running header shows the owned process's CPU/RAM and
-idle TTL. APK selection browses `fs.readDir` from the workspace root and yields only workspace-relative
-`.apk` paths; it never uploads a host-local file.
+`AndroidEmulatorPane` uses only contracts and transport for Android protocol v100, and gates screen
+capture/recording on v108. It waits for a compatible host before making requests, never starts an
+emulator on mount or status polling, and exposes start/stop and bounded inspection/input/install
+actions explicitly. Capture and recording attach a host-owned screenshot/video package to the active
+chat; recording polls bounded screen frames for the model storyboard and the host owns the MP4. A click
+on the screen becomes a device tap and a drag becomes a swipe; coordinate controls remain as the bounded
+fallback. The stopped state clears details, screen, and logs, and the running header shows the owned
+process's CPU/RAM and idle TTL. APK selection browses `fs.readDir` from the workspace root and yields
+only workspace-relative `.apk` paths; it never uploads a host-local file.
 
-The workspace tool panels share the same rules and protocol v107:
+The workspace tool panels share the same rules and protocol v107; media capture and Android recording
+are additive v108 features.
 
 - **`BrowserPane`** renders the host-owned session in an iframe and drives `browser.state/navigate/
   openTab/closeTab/selectTab`; it subscribes to `browser.changed` so an agent navigation moves the same
   panel. Ports come from `browser.ports` and never probe. **Page info** calls `browser.snapshot` for a
-  bounded text-only read; there is no console, screenshot, or script stream. The iframe unmounts after
-  90 s hidden and is resumed explicitly, so a background tab costs no renderer.
+  bounded text-only read; there is no console, network, or script stream. Screen capture and recording
+  use `getDisplayMedia` over the current tab, crop the visible device frame, and attach the host-owned
+  file plus a bounded image storyboard through `capture.save`; the temporary file is deleted when the
+  attachment is sent or removed. The iframe unmounts after 90 s hidden and is resumed explicitly, so a
+  background tab costs no renderer.
 - **`RequestsPane`** keeps a bounded per-workspace history and saved-request list in full Request/
   History/Saved tabs; every send goes through `http.request.send`, so headers, cookies and bodies reach
   only the host. The URL field suggests recent history and saved URLs, and the JSON body editor

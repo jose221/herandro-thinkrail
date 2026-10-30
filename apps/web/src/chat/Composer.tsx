@@ -58,8 +58,9 @@ import {
 	PromptImageChips,
 	usePromptImages,
 } from "./promptImages";
-import type { ChatAttachment } from "./types";
+import type { ChatAttachment, VideoAttachment } from "./types";
 import type { ModelPreferences } from "./useModelPreferences";
+import { VideoChip } from "./VideoChip";
 
 export type SubmitBehavior = "send" | "steer" | "followUp" | "interrupt";
 
@@ -175,6 +176,7 @@ interface ComposerProps {
 	onSubmit: (
 		text: string,
 		attachments: ChatAttachment[],
+		videos: VideoAttachment[],
 		behavior: SubmitBehavior,
 	) => ComposerSubmitDisposition;
 	onAbort: () => void;
@@ -183,6 +185,7 @@ interface ComposerProps {
 	onManageTemplates?: () => void;
 	templatesEmpty?: boolean;
 	onImagesChange?: (images: PromptImage[]) => void;
+	onVideoChange?: (video: VideoAttachment | null) => void;
 }
 
 export interface ComposerHandle {
@@ -190,6 +193,7 @@ export interface ComposerHandle {
 	insertAndSubmit: (text: string, behavior: SubmitBehavior) => void;
 	insertTemplate: (parsed: ParsedTemplate) => void;
 	restoreAttachments: (attachments: ChatAttachment[]) => void;
+	attachVideo: (video: VideoAttachment) => void;
 	openHistory: () => void;
 	refocus: () => void;
 }
@@ -222,6 +226,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		onManageTemplates,
 		templatesEmpty,
 		onImagesChange,
+		onVideoChange,
 	},
 	handleRef,
 ) {
@@ -231,14 +236,18 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 	const [caret, setCaret] = useState(0);
 	const attachedImages = usePromptImages();
 	const { images } = attachedImages;
+	const [video, setVideo] = useState<VideoAttachment | null>(null);
 	useEffect(() => {
 		onImagesChange?.(images);
 	}, [images, onImagesChange]);
+	useEffect(() => {
+		onVideoChange?.(video);
+	}, [video, onVideoChange]);
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const pendingImages = attachedImages.pending;
 	useEffect(() => {
-		if (images.length === 0) setSubmitError(null);
-	}, [images.length]);
+		if (images.length === 0 && video === null) setSubmitError(null);
+	}, [images.length, video]);
 	const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
 	const [mentionDismissed, setMentionDismissed] = useState(false);
 	const [sendMenuOpen, setSendMenuOpen] = useState(false);
@@ -315,7 +324,9 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 	);
 
 	const canSubmit = (raw: string) =>
-		!templatePending && pendingImages === 0 && (!!raw.trim() || images.length > 0);
+		!templatePending &&
+		pendingImages === 0 &&
+		(!!raw.trim() || images.length > 0 || video !== null);
 	const canSend = canSubmit(value);
 
 	const openModelPicker = (query: string) => {
@@ -334,6 +345,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		const disposition = onSubmit(
 			text,
 			images.map(({ name, content }) => ({ name, content })),
+			video ? [video] : [],
 			behavior,
 		);
 		if (!disposition.accepted) {
@@ -343,6 +355,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		setSubmitError(null);
 		onChange("");
 		attachedImages.reset();
+		setVideo(null);
 		recallIdxRef.current = null;
 		setSlotSession(null);
 	};
@@ -391,6 +404,11 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		restoreAttachments: (attachments: ChatAttachment[]) => {
 			if (attachments.length === 0) return;
 			attachedImages.restore(attachments);
+			setSubmitError(null);
+			focusSelection(caret);
+		},
+		attachVideo: (next: VideoAttachment) => {
+			setVideo(next);
 			setSubmitError(null);
 			focusSelection(caret);
 		},
@@ -564,15 +582,20 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 			<PromptImageChips
 				controller={attachedImages}
 				leading={
-					submitError ? (
-						<FileChip
-							data-testid="composer-command-error"
-							tone="error"
-							icon={false}
-							title={submitError}
-							label={submitError}
-						/>
-					) : null
+					submitError || video ? (
+						<>
+							{submitError ? (
+								<FileChip
+									data-testid="composer-command-error"
+									tone="error"
+									icon={false}
+									title={submitError}
+									label={submitError}
+								/>
+							) : null}
+							{video ? <VideoChip video={video} onRemove={() => setVideo(null)} /> : null}
+						</>
+					) : undefined
 				}
 			/>
 

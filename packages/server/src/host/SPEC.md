@@ -213,6 +213,10 @@ channel fan-out, and the process-boot wrapper both launchers share.
   `emulator-<port>` serial, APK installation is confined to a regular workspace APK, and the manager stops
   the process on idle expiry or host shutdown. The `android` module is also used by agent's explicit Pi
   emulator tools, without routing through ACP.
+  At protocol v108, `capture.save`/`capture.delete` persist bounded screenshots and recordings under the
+  app data dir, and `android.emulator.record.start`/`record.stop` delegate to the same emulator manager
+  before handing the validated MP4 to `captures`. Panels gate these additive capture surfaces on v108;
+  older clients keep the v107 workspace tools without capture controls.
   At protocol v107, `browser.*`, `http.request.*`, `system.resources*`/`system.process.kill` and
   `git.control.*` delegate to the browser, httpRequests, system and git-control modules. Every workspace
   method validates its id first; browser session updates also publish the full session on

@@ -1,19 +1,30 @@
-import { RiPlayLine, RiRefreshLine, RiStopLine } from "@remixicon/react";
-import type {
-	AndroidEmulatorDetails,
-	AndroidEmulatorLogs,
-	AndroidEmulatorScreenshot,
-	AndroidEmulatorState,
-	AndroidEmulatorStatus,
+import {
+	RiPlayLine,
+	RiRecordCircleLine,
+	RiRefreshLine,
+	RiScreenshotLine,
+	RiStopCircleLine,
+	RiStopLine,
+} from "@remixicon/react";
+import {
+	ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION,
+	ANDROID_EMULATOR_PROTOCOL_VERSION,
+	type AndroidEmulatorDetails,
+	type AndroidEmulatorLogs,
+	type AndroidEmulatorScreenshot,
+	type AndroidEmulatorState,
+	type AndroidEmulatorStatus,
+	type CaptureFrame,
 } from "@thinkrail/contracts";
-import { ANDROID_EMULATOR_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useAppStore } from "../store";
-import { getTransport } from "../transport";
+import { activeChatSessionId } from "../lib/activeChatSession";
+import { announceMediaCapture } from "../lib/mediaCapture";
+import { toast, useAppStore } from "../store";
+import { errorText, getTransport } from "../transport";
 import { AndroidApkPicker } from "./AndroidApkPicker";
 
 const STATE_KEYS: Record<AndroidEmulatorState, MessageKey> = {
@@ -43,6 +54,33 @@ function formatMemory(bytes: number): string {
 	return megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${Math.round(megabytes)} MB`;
 }
 
+function formatRecordingTime(elapsedMs: number): string {
+	const seconds = Math.max(0, Math.round(elapsedMs / 1000));
+	return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+async function captureFrameFromScreenshot(shot: AndroidEmulatorScreenshot): Promise<CaptureFrame> {
+	const image = new Image();
+	image.src = `data:${shot.mimeType};base64,${shot.data}`;
+	await image.decode();
+	const scale = Math.min(1, 720 / shot.width);
+	const canvas = document.createElement("canvas");
+	canvas.width = Math.max(1, Math.round(shot.width * scale));
+	canvas.height = Math.max(1, Math.round(shot.height * scale));
+	const context = canvas.getContext("2d");
+	if (!context) throw new Error("Android emulator frame canvas is unavailable");
+	context.drawImage(image, 0, 0, canvas.width, canvas.height);
+	const dataUrl = canvas.toDataURL("image/jpeg", 0.72);
+	const comma = dataUrl.indexOf(",");
+	if (comma < 0) throw new Error("Android emulator frame encoding failed");
+	return {
+		mimeType: "image/jpeg",
+		data: dataUrl.slice(comma + 1),
+		width: canvas.width,
+		height: canvas.height,
+	};
+}
+
 function readScreenPoint(
 	clientX: number,
 	clientY: number,
@@ -67,6 +105,8 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const t = useT();
 	const protocolVersion = useAppStore((state) => state.protocolVersion);
 	const supported = supportsAndroidEmulatorProtocol(protocolVersion);
+	const captureSupported =
+		protocolVersion !== null && protocolVersion >= ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION;
 	const [status, setStatus] = useState<AndroidEmulatorStatus | null>(null);
 	const [avds, setAvds] = useState<string[]>([]);
 	const [selectedAvd, setSelectedAvd] = useState("");
@@ -84,8 +124,22 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const [toX, setToX] = useState("");
 	const [toY, setToY] = useState("");
 	const [apkPath, setApkPath] = useState("");
+	const [captureBusy, setCaptureBusy] = useState(false);
+	const [recording, setRecording] = useState<{ startedAt: number; durationMs: number } | null>(
+		null,
+	);
+	const [recordedMs, setRecordedMs] = useState(0);
 	const pointerStart = useRef<ScreenPoint | null>(null);
 	const suppressClick = useRef(false);
+	const recordingRef = useRef<{
+		startedAt: number;
+		durationMs: number;
+		sessionId: string;
+		deviceLabel: string;
+	} | null>(null);
+	const recordingFrames = useRef<CaptureFrame[]>([]);
+	const recordingInterval = useRef<number | null>(null);
+	const recordingAutoStop = useRef<number | null>(null);
 	const state = status?.state;
 	const running = supported && state === "running";
 
@@ -218,18 +272,194 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 			setScreen(await getTransport().request("android.emulator.screen", {}));
 		});
 
+	useEffect(() => {
+		if (!recording) {
+			setRecordedMs(0);
+			return;
+		}
+		const update = () =>
+			setRecordedMs(Math.min(recording.durationMs, Date.now() - recording.startedAt));
+		update();
+		const timer = window.setInterval(update, 500);
+		return () => window.clearInterval(timer);
+	}, [recording]);
+
+	const clearRecordingState = () => {
+		if (recordingInterval.current !== null) window.clearInterval(recordingInterval.current);
+		if (recordingAutoStop.current !== null) window.clearTimeout(recordingAutoStop.current);
+		recordingInterval.current = null;
+		recordingAutoStop.current = null;
+		recordingRef.current = null;
+		recordingFrames.current = [];
+		setRecording(null);
+		setRecordedMs(0);
+	};
+
+	const captureDeviceLabel = () => {
+		const label = [details?.manufacturer, details?.model].filter(Boolean).join(" ");
+		return label || t("androidEmulator.captureDeviceFallback");
+	};
+
+	const readRecordingFrame = async () => {
+		const shot = await getTransport().request("android.emulator.screen", {});
+		setScreen(shot);
+		if (recordingFrames.current.length < 8) {
+			recordingFrames.current.push(await captureFrameFromScreenshot(shot));
+		}
+	};
+
+	const captureRecordingFrame = async () => {
+		if (!recordingRef.current) return;
+		try {
+			await readRecordingFrame();
+		} catch {}
+	};
+
+	const captureScreen = async () => {
+		if (!captureSupported || !running) return;
+		const sessionId = activeChatSessionId(workspaceId);
+		if (!sessionId) {
+			toast.error(t("androidEmulator.captureNoChat"));
+			return;
+		}
+		setCaptureBusy(true);
+		try {
+			const shot = await getTransport().request("android.emulator.screen", {});
+			setScreen(shot);
+			const capture = await getTransport().request("capture.save", {
+				workspaceId,
+				kind: "image",
+				data: shot.data,
+				mimeType: shot.mimeType,
+				width: shot.width,
+				height: shot.height,
+			});
+			const note = t("androidEmulator.captureNote", {
+				path: capture.path,
+				device: captureDeviceLabel(),
+				width: shot.width,
+				height: shot.height,
+			});
+			announceMediaCapture({
+				workspaceId,
+				sessionId,
+				capture,
+				image: shot,
+				device: captureDeviceLabel(),
+				url: "android-emulator",
+				note,
+			});
+			toast.success(t("androidEmulator.captureSaved"));
+		} catch (error) {
+			toast.error(errorText(error, t("androidEmulator.captureFailed")));
+		} finally {
+			setCaptureBusy(false);
+		}
+	};
+
+	const stopRecording = async () => {
+		const active = recordingRef.current;
+		if (!active) return;
+		const frames = recordingFrames.current;
+		clearRecordingState();
+		setCaptureBusy(true);
+		try {
+			const capture = await getTransport().request("android.emulator.record.stop", {
+				workspaceId,
+			});
+			try {
+				const shot = await getTransport().request("android.emulator.screen", {});
+				setScreen(shot);
+				if (frames.length < 8) frames.push(await captureFrameFromScreenshot(shot));
+			} catch {}
+			const note = t("androidEmulator.recordNote", {
+				path: capture.path,
+				device: active.deviceLabel,
+				width: capture.width,
+				height: capture.height,
+				duration: String(Math.max(1, Math.round((capture.durationMs ?? active.durationMs) / 1000))),
+			});
+			announceMediaCapture({
+				workspaceId,
+				sessionId: active.sessionId,
+				capture,
+				...(frames[0] ? { poster: frames[0] } : {}),
+				frames,
+				device: active.deviceLabel,
+				url: "android-emulator",
+				note,
+			});
+			toast.success(t("androidEmulator.recordSaved"));
+		} catch (error) {
+			toast.error(errorText(error, t("androidEmulator.recordFailed")));
+		} finally {
+			frames.length = 0;
+			setCaptureBusy(false);
+		}
+	};
+
+	const startRecording = async () => {
+		if (!captureSupported || !running || recordingRef.current) return;
+		const sessionId = activeChatSessionId(workspaceId);
+		if (!sessionId) {
+			toast.error(t("androidEmulator.captureNoChat"));
+			return;
+		}
+		setCaptureBusy(true);
+		try {
+			const started = await getTransport().request("android.emulator.record.start", {
+				workspaceId,
+				durationMs: 30_000,
+			});
+			recordingRef.current = {
+				startedAt: started.startedAt,
+				durationMs: started.durationMs,
+				sessionId,
+				deviceLabel: captureDeviceLabel(),
+			};
+			recordingFrames.current = [];
+			setRecording(started);
+			setRecordedMs(0);
+			await captureRecordingFrame();
+			recordingInterval.current = window.setInterval(() => void captureRecordingFrame(), 2_000);
+			recordingAutoStop.current = window.setTimeout(() => void stopRecording(), started.durationMs);
+			toast.info(t("androidEmulator.recordingStarted"));
+		} catch (error) {
+			clearRecordingState();
+			toast.error(errorText(error, t("androidEmulator.recordFailed")));
+		} finally {
+			setCaptureBusy(false);
+		}
+	};
+
+	useEffect(
+		() => () => {
+			if (!recordingRef.current) return;
+			clearRecordingState();
+			void getTransport()
+				.request("android.emulator.record.stop", { workspaceId })
+				.then((capture) =>
+					getTransport().request("capture.delete", { workspaceId, id: capture.id }),
+				)
+				.catch(() => undefined);
+		},
+		[workspaceId],
+	);
+
 	const start = () =>
 		runAction(async () => {
 			setStatus(await getTransport().request("android.emulator.start", { avdName: selectedAvd }));
 		});
 
-	const stop = () =>
-		runAction(async () => {
+	const stop = () => {
+		clearRecordingState();
+		return runAction(async () => {
 			setStatus(await getTransport().request("android.emulator.stop", {}));
 			setDetails(null);
 			setScreen(null);
 			setLogs(null);
 		});
+	};
 
 	const tap = (x: number, y: number) =>
 		runAction(async () => {
@@ -451,7 +681,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								variant="ghost"
 								size="s"
 								iconLeft={RiRefreshLine}
-								disabled={!running || isBusy}
+								disabled={!running || isBusy || captureBusy || recording !== null}
 								onClick={() => void refreshScreen()}
 								data-testid="android-emulator-screen-refresh"
 							>
@@ -459,6 +689,58 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 							</Button>
 						</div>
 						<p className="text-text-muted tr-text-metadata">{t("androidEmulator.screenHelp")}</p>
+						{captureSupported ? (
+							<div className="flex min-w-0 flex-wrap items-center gap-8">
+								{recording ? (
+									<>
+										<span className="flex items-center gap-2 text-feedback-error tr-text-metadata">
+											<span
+												className="size-6 animate-pulse rounded-full bg-feedback-error"
+												aria-hidden="true"
+											/>
+											{t("androidEmulator.recording")} {formatRecordingTime(recordedMs)}
+										</span>
+										<Button
+											type="button"
+											variant="primary"
+											size="s"
+											iconLeft={RiStopCircleLine}
+											loading={captureBusy}
+											onClick={() => void stopRecording()}
+											data-testid="android-emulator-record-stop"
+										>
+											{t("androidEmulator.recordStop")}
+										</Button>
+									</>
+								) : (
+									<>
+										<Button
+											type="button"
+											variant="outline"
+											size="s"
+											iconLeft={RiScreenshotLine}
+											disabled={!running || isBusy || captureBusy}
+											loading={captureBusy}
+											onClick={() => void captureScreen()}
+											data-testid="android-emulator-capture"
+										>
+											{t("androidEmulator.capture")}
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											size="s"
+											iconLeft={RiRecordCircleLine}
+											disabled={!running || isBusy || captureBusy}
+											onClick={() => void startRecording()}
+											data-testid="android-emulator-record"
+										>
+											{t("androidEmulator.record")}
+										</Button>
+									</>
+								)}
+							</div>
+						) : null}
 						<div className="flex min-w-0 justify-center overflow-hidden rounded-sm border border-border-default bg-container-content-bg p-8">
 							{screen && running ? (
 								<button

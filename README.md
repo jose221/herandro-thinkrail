@@ -90,10 +90,11 @@ create the tools it needs based on how you actually work.
   API kind, base URL, API key, and model definitions from Settings → Providers without displaying stored
   credentials or headers. ThinkRail has no accounts of its own.
 - **Workspace tools without a second app.** Open local pages in an embedded Browser with phone and
-  tablet previews, capture the visible frame into the chat, send and replay HTTP requests with bounded
-  history, watch workspace memory with checkpoints and leak analysis, and stage, commit, and sync Git
-  from their own panels. The agent can drive the same surfaces through dedicated tools; there is no
-  Chrome dependency and no background browser engine.
+  tablet previews, capture a frame or a short clip into the chat, take screenshots or recordings from the
+  Android emulator, send and replay HTTP requests with bounded history, watch workspace memory with
+  checkpoints and leak analysis, and stage, commit, and sync Git from their own panels. The agent can
+  drive the same surfaces through dedicated tools; there is no Chrome dependency and no background
+  browser engine.
 - **Your pi setup.** ThinkRail reads your existing `pi` configuration (`~/.pi/agent`). To use another one
   — say a personal `~/.pi/agent-personal` — or to pass extra environment variables to the agent, terminals
   and MCP servers, set them in Settings → Environment; they apply on the next start. A variable you set

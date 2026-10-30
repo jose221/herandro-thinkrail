@@ -1,13 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { constants, existsSync } from "node:fs";
-import { mkdtemp, open, realpath, rm, stat } from "node:fs/promises";
+import { mkdtemp, open, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import type {
-	AndroidEmulatorDetails,
-	AndroidEmulatorLogs,
-	AndroidEmulatorScreenshot,
-	AndroidEmulatorState,
-	AndroidEmulatorStatus,
+import {
+	type AndroidEmulatorDetails,
+	type AndroidEmulatorLogs,
+	type AndroidEmulatorRecordingStatus,
+	type AndroidEmulatorScreenshot,
+	type AndroidEmulatorState,
+	type AndroidEmulatorStatus,
+	CAPTURE_LIMITS,
 } from "@thinkrail/contracts";
 import { runBounded } from "../subprocess";
 
@@ -40,6 +43,24 @@ interface PendingStart {
 	avdName: string;
 	controller: AbortController;
 	promise: Promise<AndroidEmulatorStatus>;
+}
+
+interface ActiveRecording {
+	workspaceId: string;
+	serial: string;
+	process: ReturnType<typeof Bun.spawn>;
+	devicePath: string;
+	startedAt: number;
+	durationMs: number;
+	width: number;
+	height: number;
+}
+
+export interface AndroidEmulatorRecordingData {
+	data: Buffer;
+	width: number;
+	height: number;
+	durationMs: number;
 }
 
 function executableAt(root: string, path: string): string[] | null {
@@ -188,6 +209,16 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function isMp4(bytes: Uint8Array): boolean {
+	return (
+		bytes.byteLength >= 12 &&
+		bytes[4] === 0x66 &&
+		bytes[5] === 0x74 &&
+		bytes[6] === 0x79 &&
+		bytes[7] === 0x70
+	);
+}
+
 function boundedLines(value: number | undefined): number {
 	if (value === undefined) return 200;
 	if (!Number.isInteger(value) || value < 1 || value > 1000) {
@@ -211,6 +242,7 @@ export class AndroidEmulatorManager {
 	private pendingStart: PendingStart | undefined;
 	private stopPromise: Promise<AndroidEmulatorStatus> | undefined;
 	private apkInstallInProgress = false;
+	private recording: ActiveRecording | undefined;
 
 	constructor(options: { toolchain?: AndroidToolchain; idleTtlMs?: number } = {}) {
 		this.toolchain = options.toolchain ?? resolveAndroidToolchain();
@@ -268,6 +300,14 @@ export class AndroidEmulatorManager {
 					}
 				: {}),
 			...(resources ?? {}),
+			...(this.recording
+				? {
+						recording: {
+							startedAt: this.recording.startedAt,
+							durationMs: this.recording.durationMs,
+						} satisfies AndroidEmulatorRecordingStatus,
+					}
+				: {}),
 			idleTtlMs: this.idleTtlMs,
 		};
 	}
@@ -373,6 +413,7 @@ export class AndroidEmulatorManager {
 		void child.exited.then(() => {
 			active.exited = true;
 			this.clearIdleTimer();
+			void this.cancelRecording();
 			if (this.active === active) this.active = undefined;
 		});
 		this.scheduleIdleStop(active);
@@ -395,6 +436,7 @@ export class AndroidEmulatorManager {
 	}
 
 	private async stopActive(): Promise<AndroidEmulatorStatus> {
+		await this.cancelRecording();
 		const active = this.active;
 		if (!active || active.exited) {
 			this.active = undefined;
@@ -472,6 +514,158 @@ export class AndroidEmulatorManager {
 			width,
 			height,
 		};
+	}
+
+	async recordStart(
+		workspaceId: string,
+		durationMs = 30_000,
+	): Promise<AndroidEmulatorRecordingStatus> {
+		const active = await this.requireRunning();
+		if (this.recording) throw new Error("An Android recording is already in progress.");
+		if (!workspaceId || workspaceId.includes("\0")) {
+			throw new Error("Android recording workspace is invalid.");
+		}
+		if (
+			!Number.isInteger(durationMs) ||
+			durationMs < 1_000 ||
+			durationMs > CAPTURE_LIMITS.maxDurationMs
+		) {
+			throw new Error("Android recording duration must be between 1 and 60 seconds.");
+		}
+		const { width, height } = await this.screenSize(active.serial);
+		const devicePath = `/sdcard/thinkrail-${randomUUID()}.mp4`;
+		let process: ReturnType<typeof Bun.spawn>;
+		try {
+			process = Bun.spawn(
+				[
+					...this.requireAdb(),
+					"-s",
+					active.serial,
+					"shell",
+					"screenrecord",
+					"--time-limit",
+					String(Math.ceil(durationMs / 1000)),
+					"--bit-rate",
+					"4000000",
+					devicePath,
+				],
+				{
+					stdin: "ignore",
+					stdout: "ignore",
+					stderr: "ignore",
+					windowsHide: true,
+				},
+			);
+		} catch {
+			throw new Error("Could not start the Android screen recording.");
+		}
+		this.recording = {
+			workspaceId,
+			serial: active.serial,
+			process,
+			devicePath,
+			startedAt: Date.now(),
+			durationMs,
+			width,
+			height,
+		};
+		this.touch(active);
+		return { startedAt: this.recording.startedAt, durationMs };
+	}
+
+	async recordStop(workspaceId: string): Promise<AndroidEmulatorRecordingData> {
+		const recording = this.recording;
+		if (!recording || recording.workspaceId !== workspaceId) {
+			throw new Error("No Android recording is active for this workspace.");
+		}
+		this.recording = undefined;
+		const adb = this.requireAdb();
+		try {
+			await runBounded([...adb, "-s", recording.serial, "shell", "pkill", "-INT", "screenrecord"], {
+				timeoutMs: 5_000,
+				maxOutputBytes: 4096,
+			});
+		} catch {}
+		if (!(await this.waitForExit(recording.process, 2_500))) {
+			try {
+				recording.process.kill("SIGKILL");
+			} catch {}
+			await this.waitForExit(recording.process, 1_500);
+		}
+		const directory = await mkdtemp(join(tmpdir(), "thinkrail-android-recording-"));
+		const localPath = join(directory, "recording.mp4");
+		try {
+			const pulled = await runBounded(
+				[...adb, "-s", recording.serial, "pull", recording.devicePath, localPath],
+				{ timeoutMs: 30_000, maxOutputBytes: 64 * 1024 },
+			);
+			if (!pulled.ok || pulled.truncated) {
+				throw new Error("Could not retrieve the Android screen recording.");
+			}
+			const bytes = await readFile(localPath);
+			if (bytes.byteLength < 12 || bytes.byteLength > CAPTURE_LIMITS.videoBytes || !isMp4(bytes)) {
+				throw new Error("The Android screen recording is not a valid MP4 file.");
+			}
+			return {
+				data: bytes,
+				width: recording.width,
+				height: recording.height,
+				durationMs: Math.max(1, Math.min(recording.durationMs, Date.now() - recording.startedAt)),
+			};
+		} finally {
+			await rm(directory, { recursive: true, force: true }).catch(() => {});
+			try {
+				await runBounded(
+					[...adb, "-s", recording.serial, "shell", "rm", "-f", recording.devicePath],
+					{ timeoutMs: 5_000, maxOutputBytes: 4096 },
+				);
+			} catch {}
+		}
+	}
+
+	private async cancelRecording(): Promise<void> {
+		const recording = this.recording;
+		if (!recording) return;
+		this.recording = undefined;
+		const adb = this.toolchain.adb;
+		if (adb) {
+			try {
+				await runBounded(
+					[...adb, "-s", recording.serial, "shell", "pkill", "-INT", "screenrecord"],
+					{ timeoutMs: 5_000, maxOutputBytes: 4096 },
+				);
+			} catch {}
+		}
+		try {
+			recording.process.kill("SIGTERM");
+		} catch {}
+		if (adb) {
+			try {
+				await runBounded(
+					[...adb, "-s", recording.serial, "shell", "rm", "-f", recording.devicePath],
+					{ timeoutMs: 5_000, maxOutputBytes: 4096 },
+				);
+			} catch {}
+		}
+	}
+
+	private async screenSize(serial: string): Promise<{ width: number; height: number }> {
+		const size = await this.adbText(serial, ["shell", "wm", "size"]);
+		const match = size?.match(/(?:Physical|Override) size:\s*(\d+)x(\d+)/);
+		if (!match) throw new Error("Could not read the Android emulator screen size.");
+		const width = Number(match[1]);
+		const height = Number(match[2]);
+		if (
+			!Number.isInteger(width) ||
+			!Number.isInteger(height) ||
+			width < 1 ||
+			height < 1 ||
+			width > 8192 ||
+			height > 8192
+		) {
+			throw new Error("The Android emulator returned an unsupported screen size.");
+		}
+		return { width, height };
 	}
 
 	async tap(x: number, y: number): Promise<void> {

@@ -1102,6 +1102,13 @@ export interface AndroidEmulatorStatus {
 	cpuPercent?: number;
 	/** Resident memory of the owned emulator process in bytes, when the host can measure it. */
 	memoryBytes?: number;
+	/** Present while the host is recording the emulator display. */
+	recording?: AndroidEmulatorRecordingStatus;
+}
+
+export interface AndroidEmulatorRecordingStatus {
+	startedAt: number;
+	durationMs: number;
 }
 
 export interface AndroidEmulatorDetails {
@@ -1964,15 +1971,38 @@ export const BROWSER_LIMITS = {
 	pageTextChars: 20_000,
 	pageLinks: 100,
 	pageBytes: 2 * 1024 * 1024,
-	captureBytes: 8 * 1024 * 1024,
-	captureTtlMs: 24 * 60 * 60 * 1_000,
 } as const;
 
-/** One host-owned browser screenshot that the composer can attach to a prompt. */
-export interface BrowserCapture {
+export type CaptureKind = "image" | "video";
+export type CaptureMimeType = "image/png" | "image/jpeg" | "video/webm" | "video/mp4";
+
+export const CAPTURE_LIMITS = {
+	imageBytes: 8 * 1024 * 1024,
+	videoBytes: 32 * 1024 * 1024,
+	ttlMs: 24 * 60 * 60 * 1_000,
+	maxDurationMs: 60_000,
+	maxDimension: 10_000,
+} as const;
+
+/** One host-owned screenshot or recording that the composer can attach to a prompt. */
+export interface MediaCapture {
 	id: string;
+	kind: CaptureKind;
 	path: string;
 	fileName: string;
+	mimeType: CaptureMimeType;
+	width: number;
+	height: number;
+	bytes: number;
+	durationMs?: number;
+}
+
+/** A bounded still frame used for a screenshot or a video poster/storyboard. */
+export interface CaptureFrame {
+	mimeType: "image/png" | "image/jpeg";
+	data: string;
+	width: number;
+	height: number;
 }
 
 export type HttpBodyType = "none" | "json" | "text" | "urlencoded";

@@ -101,3 +101,53 @@ test("browser capture attaches a host screenshot and deletes it when removed", a
 	await expect(chip).toHaveCount(0);
 	await expect.poll(() => existsSync(path ?? "")).toBe(false);
 });
+
+test("browser recording attaches a video package and deletes it when removed", async ({ page }) => {
+	await page.addInitScript(() => {
+		Object.defineProperty(navigator.mediaDevices, "getDisplayMedia", {
+			configurable: true,
+			value: async () => {
+				const canvas = document.createElement("canvas");
+				canvas.width = window.innerWidth;
+				canvas.height = window.innerHeight;
+				const context = canvas.getContext("2d");
+				let frame = 0;
+				const draw = () => {
+					if (!context) return;
+					context.fillStyle = frame++ % 2 === 0 ? "#234" : "#432";
+					context.fillRect(0, 0, canvas.width, canvas.height);
+				};
+				draw();
+				setInterval(draw, 100);
+				return canvas.captureStream(15);
+			},
+		});
+	});
+	await openWorkspaceChat(page);
+	const origin = new URL(page.url()).origin;
+
+	await page.getByTestId("tool-rail-browser").click();
+	await expect(page.getByTestId("browser-pane")).toBeVisible();
+	await page.getByTestId("browser-viewport-mobile").click();
+	await page.getByTestId("browser-device-iphone-se").click();
+	await page.getByTestId("browser-url").fill(`${origin}/health`);
+	await page.getByTestId("browser-url").press("Enter");
+	await expect(page.getByTestId("browser-frame")).toHaveAttribute("src", `${origin}/health`);
+
+	await page.getByTestId("browser-record").click();
+	await page.getByTestId("browser-capture-start").click();
+	await page.getByTestId("browser-record-stop").waitFor({ timeout: 15_000 });
+	await page.waitForTimeout(1_200);
+	await page.getByTestId("browser-record-stop").click();
+	const chip = page.getByTestId("composer-video");
+	await expect(chip).toHaveCount(1, { timeout: 20_000 });
+	const draft = await page.getByTestId("chat-input").inputValue();
+	const path = draft.match(/\/[^\n]+\.webm/)?.[0];
+	expect(path).toBeTruthy();
+	expect(draft).toContain("iPhone SE");
+	await expect.poll(() => existsSync(path ?? "")).toBe(true);
+
+	await chip.locator("button").click();
+	await expect(chip).toHaveCount(0);
+	await expect.poll(() => existsSync(path ?? "")).toBe(false);
+});
