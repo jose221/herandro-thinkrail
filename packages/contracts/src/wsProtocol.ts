@@ -28,6 +28,7 @@ import type {
 	FileNode,
 	GitCommit,
 	GitControlBranches,
+	GitControlCommitFile,
 	GitControlCommitResult,
 	GitControlDiff,
 	GitControlLogEntry,
@@ -1395,7 +1396,7 @@ export interface WsMethodMap {
 	};
 	"git.control.showCommit": {
 		params: { workspaceId: string; sha: string };
-		result: { output: string; truncated: boolean };
+		result: { output: string; truncated: boolean; files: GitControlCommitFile[] };
 	};
 	"acp.session.list": { params: { workspaceId: string }; result: AcpSessionSummary[] };
 	"acp.session.get": {

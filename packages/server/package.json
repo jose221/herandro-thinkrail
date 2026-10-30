@@ -28,7 +28,7 @@
 		"@thinkrail/locales": "workspace:*",
 		"@thinkrail/shared": "workspace:*",
 		"bun-pty": "0.5.1",
-		"jsonc-parser": "3.3.1",
+		"jsonc-parser": "catalog:",
 		"pi-background-commands": "workspace:*",
 		"pi-delegation": "workspace:*",
 		"pi-spec-graph": "workspace:*",

@@ -2,6 +2,7 @@ import { resolve, sep } from "node:path";
 import {
 	GIT_CONTROL_LIMITS,
 	type GitControlBranches,
+	type GitControlCommitFile,
 	type GitControlCommitResult,
 	type GitControlDiff,
 	type GitControlFile,
@@ -260,19 +261,46 @@ async function localOutput(workspaceId: string, args: string[]): Promise<{ outpu
 export async function gitControlShowCommit(
 	workspaceId: string,
 	sha: string,
-): Promise<{ output: string; truncated: boolean }> {
+): Promise<{ output: string; truncated: boolean; files: GitControlCommitFile[] }> {
 	if (typeof sha !== "string" || !/^[0-9a-f]{4,40}$/i.test(sha)) {
 		throw new Error("Invalid commit");
 	}
-	const result = await gitAsync(worktree(workspaceId), [
-		"show",
-		"--no-color",
-		"--stat",
-		"--patch",
-		"--format=fuller",
-		sha,
+	const cwd = worktree(workspaceId);
+	const [show, nameStatus, numstat] = await Promise.all([
+		gitAsync(cwd, ["show", "--no-color", "--stat", "--patch", "--format=fuller", sha]),
+		gitAsync(cwd, ["show", "--no-color", "--name-status", "--format=", sha]),
+		gitAsync(cwd, ["show", "--no-color", "--numstat", "--format=", sha]),
 	]);
-	if (!result.ok) failure(result);
-	const { text, truncated } = bounded(result.out);
-	return { output: text, truncated };
+	if (!show.ok) failure(show);
+	if (!nameStatus.ok) failure(nameStatus);
+	if (!numstat.ok) failure(numstat);
+	const counts = new Map<string, { added?: number; removed?: number }>();
+	for (const line of numstat.out.split("\n")) {
+		const parts = line.split("\t");
+		if (parts.length < 3) continue;
+		const path = parts.slice(2).join("\t");
+		if (!path) continue;
+		const added = Number(parts[0]);
+		const removed = Number(parts[1]);
+		counts.set(path, {
+			...(Number.isFinite(added) ? { added } : {}),
+			...(Number.isFinite(removed) ? { removed } : {}),
+		});
+	}
+	const files: GitControlCommitFile[] = [];
+	for (const line of nameStatus.out.split("\n").slice(0, GIT_CONTROL_LIMITS.paths)) {
+		const parts = line.split("\t");
+		if (parts.length < 2) continue;
+		const code = parts[0]?.[0] ?? "M";
+		const path = parts.at(-1);
+		if (!path) continue;
+		files.push({
+			path,
+			status:
+				code === "A" ? "added" : code === "D" ? "deleted" : code === "R" ? "renamed" : "modified",
+			...counts.get(path),
+		});
+	}
+	const { text, truncated } = bounded(show.out);
+	return { output: text, truncated, files };
 }

@@ -2141,6 +2141,13 @@ export interface GitControlLogEntry {
 	committedAt: string;
 }
 
+export interface GitControlCommitFile {
+	path: string;
+	status: "added" | "modified" | "deleted" | "renamed";
+	added?: number;
+	removed?: number;
+}
+
 export interface GitControlDiff {
 	path: string;
 	staged: boolean;

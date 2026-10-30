@@ -36,7 +36,7 @@ function boundedDiff(result: Awaited<ReturnType<typeof gitControlDiff>>) {
 	return { ...result, diff: result.diff.slice(0, TOOL_DIFF_CHARS), truncated: true };
 }
 
-function boundedCommit(result: { output: string; truncated: boolean }) {
+function boundedCommit<T extends { output: string; truncated: boolean }>(result: T): T {
 	if (result.output.length <= TOOL_DIFF_CHARS) return result;
 	return { ...result, output: result.output.slice(0, TOOL_DIFF_CHARS), truncated: true };
 }

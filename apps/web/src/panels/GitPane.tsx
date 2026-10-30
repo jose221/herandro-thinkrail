@@ -1,12 +1,16 @@
 import {
 	RiAddLine,
 	RiArrowDownSLine,
+	RiCheckLine,
+	RiFileCopyLine,
 	RiGitBranchLine,
 	RiRefreshLine,
+	RiSubtractLine,
 	RiUploadLine,
 } from "@remixicon/react";
 import {
 	type GitControlBranches,
+	type GitControlCommitFile,
 	type GitControlFile,
 	type GitControlLogEntry,
 	type GitControlStatus,
@@ -15,7 +19,8 @@ import {
 import { useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
 import { cn } from "@thinkrail/ui/utils";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { copyText } from "../lib";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 
@@ -38,18 +43,40 @@ const STATUS_CLASS: Record<GitControlFile["status"], string> = {
 	untracked: "text-text-muted",
 };
 
+interface DiffSelection {
+	path: string;
+	staged: boolean;
+	diff: string;
+	truncated: boolean;
+}
+
+interface CommitDetail {
+	output: string;
+	truncated: boolean;
+	files: GitControlCommitFile[];
+}
+
 function relativeTime(value: string): string {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return value;
 	const diff = Date.now() - date.getTime();
 	const minutes = Math.floor(diff / 60_000);
-	if (minutes < 1) return "now";
+	if (minutes < 1) return "0m";
 	if (minutes < 60) return `${minutes}m`;
 	const hours = Math.floor(minutes / 60);
 	if (hours < 24) return `${hours}h`;
 	const days = Math.floor(hours / 24);
 	if (days < 30) return `${days}d`;
 	return date.toLocaleDateString();
+}
+
+function fileBase(path: string): string {
+	return path.split("/").at(-1) ?? path;
+}
+
+function commitPatch(output: string): string {
+	const start = output.indexOf("diff --git ");
+	return start >= 0 ? output.slice(start) : output;
 }
 
 export function GitPane({ workspaceId }: { workspaceId: string }) {
@@ -59,15 +86,15 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 	const [status, setStatus] = useState<GitControlStatus | null>(null);
 	const [branches, setBranches] = useState<GitControlBranches | null>(null);
 	const [log, setLog] = useState<GitControlLogEntry[]>([]);
-	const [tab, setTab] = useState<"changes" | "history">("changes");
-	const [selected, setSelected] = useState<{ path: string; staged: boolean } | null>(null);
-	const [diff, setDiff] = useState<string | null>(null);
-	const [diffTruncated, setDiffTruncated] = useState(false);
-	const [commit, setCommit] = useState<GitControlLogEntry | null>(null);
-	const [commitText, setCommitText] = useState<string | null>(null);
-	const [message, setMessage] = useState("");
+	const [view, setView] = useState<"changes" | "history">("changes");
+	const [selectedFile, setSelectedFile] = useState<{ path: string; staged: boolean } | null>(null);
+	const [diff, setDiff] = useState<DiffSelection | null>(null);
+	const [selectedCommit, setSelectedCommit] = useState<GitControlLogEntry | null>(null);
+	const [commitDetail, setCommitDetail] = useState<CommitDetail | null>(null);
+	const [commitMessage, setCommitMessage] = useState("");
 	const [branchName, setBranchName] = useState("");
 	const [createOpen, setCreateOpen] = useState(false);
+	const [filter, setFilter] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [failed, setFailed] = useState(false);
@@ -79,7 +106,7 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 			const [nextStatus, nextBranches, nextLog] = await Promise.all([
 				getTransport().request("git.control.status", { workspaceId }),
 				getTransport().request("git.control.branches", { workspaceId }),
-				getTransport().request("git.control.log", { workspaceId, limit: 30 }),
+				getTransport().request("git.control.log", { workspaceId, limit: 50 }),
 			]);
 			setStatus(nextStatus);
 			setBranches(nextBranches);
@@ -99,12 +126,11 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 		void load();
 	}, [load, protocolVersion, supported]);
 
-	const run = async (key: string, action: () => Promise<void>, done?: string) => {
+	const run = async (key: string, action: () => Promise<void>) => {
 		if (busy) return;
 		setBusy(key);
 		try {
 			await action();
-			if (done) toast.success(done);
 		} catch (error) {
 			toast.error(errorText(error, t("git.actionFailed")));
 		}
@@ -114,48 +140,49 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 	const stage = (paths: string[]) =>
 		run("stage", async () => {
 			setStatus(await getTransport().request("git.control.stage", { workspaceId, paths }));
-			setSelected(null);
+			setSelectedFile(null);
 			setDiff(null);
 		});
 
 	const unstage = (paths: string[]) =>
 		run("unstage", async () => {
 			setStatus(await getTransport().request("git.control.unstage", { workspaceId, paths }));
-			setSelected(null);
+			setSelectedFile(null);
 			setDiff(null);
 		});
 
 	const openDiff = (file: GitControlFile, staged: boolean) =>
 		run("diff", async () => {
-			setSelected({ path: file.path, staged });
+			setSelectedFile({ path: file.path, staged });
 			setDiff(null);
 			const result = await getTransport().request("git.control.diff", {
 				workspaceId,
 				path: file.path,
 				staged,
 			});
-			setDiff(result.diff || t("git.noDiff"));
-			setDiffTruncated(result.truncated);
+			setDiff({ ...result, path: file.path });
 		});
 
-	const showCommit = (entry: GitControlLogEntry) =>
-		run("commit", async () => {
-			setCommit(entry);
-			setCommitText(null);
+	const openCommit = (entry: GitControlLogEntry) =>
+		run("commit-detail", async () => {
+			setSelectedCommit(entry);
+			setCommitDetail(null);
 			const result = await getTransport().request("git.control.showCommit", {
 				workspaceId,
 				sha: entry.sha,
 			});
-			setCommitText(result.output);
+			setCommitDetail(result);
 		});
 
 	const commitStaged = () =>
 		run("commit", async () => {
 			const result = await getTransport().request("git.control.commit", {
 				workspaceId,
-				message,
+				message: commitMessage,
 			});
-			setMessage("");
+			setCommitMessage("");
+			setSelectedFile(null);
+			setDiff(null);
 			toast.success(t("git.committed", { sha: result.sha.slice(0, 7) }));
 			await load();
 		});
@@ -176,6 +203,10 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 		if (!name || name === branches?.current) return;
 		void run("switch", async () => {
 			await getTransport().request("git.control.switchBranch", { workspaceId, name });
+			setSelectedFile(null);
+			setDiff(null);
+			setSelectedCommit(null);
+			setCommitDetail(null);
 			await load();
 		});
 	};
@@ -191,12 +222,31 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 			await load();
 		});
 
+	const copySha = (sha: string) => {
+		void copyText(sha).then((copied) => {
+			if (copied) toast.success(t("git.shaCopied"));
+		});
+	};
+
 	const staged = status?.files.filter((file) => file.staged) ?? [];
 	const unstaged = status?.files.filter((file) => !file.staged || file.unstaged) ?? [];
-	const canCommit = message.trim() !== "" && staged.length > 0 && busy === null;
+	const filteredLog = useMemo(() => {
+		const query = filter.trim().toLowerCase();
+		if (query === "") return log;
+		return log.filter(
+			(entry) =>
+				entry.subject.toLowerCase().includes(query) ||
+				entry.author.toLowerCase().includes(query) ||
+				entry.shortSha.toLowerCase().includes(query),
+		);
+	}, [filter, log]);
+	const canCommit = commitMessage.trim() !== "" && staged.length > 0 && busy === null;
 
 	return (
-		<div data-testid="git-pane" className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+		<div
+			data-testid="git-pane"
+			className="@container flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+		>
 			<header className="flex h-panel-header-row shrink-0 items-center gap-8 border-border-default border-b px-12">
 				<RiGitBranchLine className="size-16 shrink-0 text-text-muted" aria-hidden="true" />
 				<h2 className="min-w-0 flex-1 truncate tr-title-compact text-text-default">
@@ -212,336 +262,446 @@ export function GitPane({ workspaceId }: { workspaceId: string }) {
 				/>
 			</header>
 
-			<div className="min-h-0 min-w-0 flex-1 overflow-auto p-panel-inset">
-				{!supported ? (
+			{!supported ? (
+				<div className="min-h-0 min-w-0 flex-1 overflow-auto p-panel-inset">
 					<p className="text-text-muted tr-text-ui">
 						{protocolVersion === null ? t("git.loading") : t("git.hostTooOld")}
 					</p>
-				) : loading && !status ? (
+				</div>
+			) : loading && !status ? (
+				<div className="min-h-0 min-w-0 flex-1 overflow-auto p-panel-inset">
 					<p className="text-text-muted tr-text-ui">{t("git.loading")}</p>
-				) : failed && !status ? (
+				</div>
+			) : failed && !status ? (
+				<div className="min-h-0 min-w-0 flex-1 overflow-auto p-panel-inset">
 					<p className="text-feedback-error tr-text-ui">{t("git.loadFailed")}</p>
-				) : status && branches ? (
-					<div className="flex min-w-0 flex-col gap-12">
-						<div className="flex min-w-0 flex-wrap items-center gap-4">
-							<select
-								className={cn(INPUT_CLASS, "min-h-28 max-w-[14rem] flex-1 tr-code-text")}
-								value={branches.current}
-								onChange={(event) => switchBranch(event.currentTarget.value)}
-								disabled={busy !== null}
-								aria-label={t("git.currentBranch")}
-							>
-								{branches.local.map((name) => (
-									<option key={name} value={name}>
-										{name}
-									</option>
-								))}
-							</select>
-							<IconButton
-								icon={createOpen ? RiArrowDownSLine : RiAddLine}
-								label={t("git.newBranch")}
-								variant="ghost"
-								size="s"
-								selected={createOpen}
-								onClick={() => setCreateOpen((open) => !open)}
+				</div>
+			) : status && branches ? (
+				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+					<div className="flex shrink-0 flex-wrap items-center gap-4 border-border-default border-b px-8 py-4">
+						<select
+							className={cn(INPUT_CLASS, "min-h-28 min-w-0 max-w-[12rem] flex-1 tr-code-text")}
+							value={branches.current}
+							onChange={(event) => switchBranch(event.currentTarget.value)}
+							disabled={busy !== null}
+							aria-label={t("git.currentBranch")}
+						>
+							{branches.local.map((name) => (
+								<option key={name} value={name}>
+									{name}
+								</option>
+							))}
+						</select>
+						<IconButton
+							icon={createOpen ? RiArrowDownSLine : RiAddLine}
+							label={t("git.newBranch")}
+							variant="ghost"
+							size="s"
+							selected={createOpen}
+							onClick={() => setCreateOpen((open) => !open)}
+						/>
+						<div className="flex-1" />
+						<Button
+							variant="ghost"
+							size="s"
+							loading={busy === "fetch"}
+							disabled={busy !== null}
+							onClick={() => network("fetch")}
+						>
+							{t("git.fetch")}
+						</Button>
+						<Button
+							variant="ghost"
+							size="s"
+							loading={busy === "pull"}
+							disabled={busy !== null}
+							onClick={() => network("pull")}
+						>
+							{t("git.pull")}
+						</Button>
+						<Button
+							variant="outline"
+							size="s"
+							iconLeft={RiUploadLine}
+							loading={busy === "push"}
+							disabled={busy !== null}
+							onClick={() => network("push")}
+						>
+							{t("git.push")}
+						</Button>
+					</div>
+
+					{createOpen ? (
+						<form
+							className="flex shrink-0 items-center gap-4 border-border-default border-b px-8 py-4"
+							onSubmit={(event) => {
+								event.preventDefault();
+								if (branchName.trim()) void createBranch();
+							}}
+						>
+							<input
+								className={cn(INPUT_CLASS, "flex-1 tr-code-text")}
+								value={branchName}
+								onChange={(event) => setBranchName(event.currentTarget.value)}
+								placeholder={t("git.branchCreatePlaceholder")}
+								aria-label={t("git.branchCreatePlaceholder")}
+								maxLength={200}
 							/>
-							<div className="flex-1" />
 							<Button
-								variant="ghost"
+								type="submit"
+								variant="primary"
 								size="s"
-								loading={busy === "fetch"}
-								disabled={busy !== null}
-								onClick={() => network("fetch")}
+								loading={busy === "create"}
+								disabled={busy !== null || branchName.trim() === ""}
 							>
-								{t("git.fetch")}
+								{t("git.createBranch")}
 							</Button>
-							<Button
-								variant="ghost"
-								size="s"
-								loading={busy === "pull"}
-								disabled={busy !== null}
-								onClick={() => network("pull")}
-							>
-								{t("git.pull")}
-							</Button>
-							<Button
-								variant="outline"
-								size="s"
-								iconLeft={RiUploadLine}
-								loading={busy === "push"}
-								disabled={busy !== null}
-								onClick={() => network("push")}
-							>
-								{t("git.push")}
-							</Button>
-						</div>
+						</form>
+					) : null}
 
-						{createOpen ? (
-							<form
-								className="flex min-w-0 items-center gap-4"
-								onSubmit={(event) => {
-									event.preventDefault();
-									if (branchName.trim()) void createBranch();
-								}}
-							>
-								<input
-									className={cn(INPUT_CLASS, "flex-1 tr-code-text")}
-									value={branchName}
-									onChange={(event) => setBranchName(event.currentTarget.value)}
-									placeholder={t("git.branchCreatePlaceholder")}
-									aria-label={t("git.branchCreatePlaceholder")}
-									maxLength={200}
-								/>
-								<Button
-									type="submit"
-									variant="primary"
-									size="s"
-									loading={busy === "create"}
-									disabled={busy !== null || branchName.trim() === ""}
+					<div className="flex min-h-0 min-w-0 flex-1 flex-col @xl:flex-row">
+						<aside className="flex min-h-0 max-h-[45%] w-full shrink-0 flex-col border-border-default border-b @xl:max-h-none @xl:w-[42%] @xl:border-r @xl:border-b-0">
+							<div className="flex shrink-0 gap-2 border-border-default border-b px-8">
+								<button
+									type="button"
+									role="tab"
+									aria-selected={view === "history"}
+									className={cn(
+										"border-b-2 px-8 py-6 tr-text-metadata",
+										view === "history"
+											? "border-primary text-text-default"
+											: "border-transparent text-text-muted hover:text-text-default",
+									)}
+									onClick={() => setView("history")}
 								>
-									{t("git.createBranch")}
-								</Button>
-							</form>
-						) : null}
+									{t("git.history")} ({log.length})
+								</button>
+								<button
+									type="button"
+									role="tab"
+									aria-selected={view === "changes"}
+									className={cn(
+										"border-b-2 px-8 py-6 tr-text-metadata",
+										view === "changes"
+											? "border-primary text-text-default"
+											: "border-transparent text-text-muted hover:text-text-default",
+									)}
+									onClick={() => setView("changes")}
+								>
+									{t("git.changes")} ({status.files.length})
+								</button>
+							</div>
 
-						<div className="flex min-w-0 gap-2 border-border-default border-b">
-							<button
-								type="button"
-								className={cn(
-									"border-b-2 px-8 py-4 tr-text-metadata",
-									tab === "changes"
-										? "border-primary text-text-default"
-										: "border-transparent text-text-muted hover:text-text-default",
-								)}
-								onClick={() => setTab("changes")}
-							>
-								{t("git.changes")} ({status.files.length})
-							</button>
-							<button
-								type="button"
-								className={cn(
-									"border-b-2 px-8 py-4 tr-text-metadata",
-									tab === "history"
-										? "border-primary text-text-default"
-										: "border-transparent text-text-muted hover:text-text-default",
-								)}
-								onClick={() => setTab("history")}
-							>
-								{t("git.history")} ({log.length})
-							</button>
-						</div>
-
-						{tab === "changes" ? (
-							<div className="flex min-w-0 flex-col gap-8">
-								{status.files.length === 0 ? (
-									<p className="text-text-muted tr-text-metadata">{t("git.noChanges")}</p>
-								) : (
-									<>
-										<section className="flex min-w-0 flex-col gap-4">
-											<div className="flex items-center gap-4">
-												<h3 className="flex-1 text-text-muted tr-text-metadata">
-													{t("git.staged")} ({staged.length})
-												</h3>
-												{staged.length > 0 ? (
-													<Button
-														variant="ghost"
-														size="s"
-														disabled={busy !== null}
-														onClick={() => void unstage(staged.map((file) => file.path))}
-													>
-														{t("git.unstageAll")}
-													</Button>
-												) : null}
-											</div>
-											{staged.length === 0 ? (
-												<p className="text-text-subtle tr-text-metadata">{t("git.noneStaged")}</p>
-											) : (
-												staged.map((file) => (
-													<div
-														key={`staged:${file.path}`}
-														className={cn(
-															"flex min-w-0 items-center gap-4 rounded-sm px-4 py-4",
-															selected?.path === file.path && selected.staged
-																? "bg-primary-subtle"
-																: "hover:bg-control-bg-hovered",
-														)}
-													>
-														<button
-															type="button"
-															className="flex min-w-0 flex-1 items-center gap-4 text-left"
-															onClick={() => void openDiff(file, true)}
-															title={file.path}
-														>
-															<span
-																className={cn(
-																	"w-12 shrink-0 tr-code-text",
-																	STATUS_CLASS[file.status],
-																)}
-															>
-																{STATUS_LABEL[file.status]}
-															</span>
-															<span className="truncate text-text-default tr-text-metadata">
-																{file.path}
-															</span>
-														</button>
-														<Button
-															variant="ghost"
-															size="s"
-															disabled={busy !== null}
-															onClick={() => void unstage([file.path])}
-														>
-															{t("git.unstage")}
-														</Button>
-													</div>
-												))
-											)}
-										</section>
-
-										<section className="flex min-w-0 flex-col gap-4">
-											<div className="flex items-center gap-4">
-												<h3 className="flex-1 text-text-muted tr-text-metadata">
-													{t("git.unstaged")} ({unstaged.length})
-												</h3>
-												{unstaged.length > 0 ? (
-													<Button
-														variant="ghost"
-														size="s"
-														disabled={busy !== null}
-														onClick={() => void stage(unstaged.map((file) => file.path))}
-													>
-														{t("git.stageAll")}
-													</Button>
-												) : null}
-											</div>
-											{unstaged.length === 0 ? (
-												<p className="text-text-subtle tr-text-metadata">{t("git.noneUnstaged")}</p>
-											) : (
-												unstaged.map((file) => (
-													<div
-														key={`unstaged:${file.path}`}
-														className={cn(
-															"flex min-w-0 items-center gap-4 rounded-sm px-4 py-4",
-															selected?.path === file.path && !selected.staged
-																? "bg-primary-subtle"
-																: "hover:bg-control-bg-hovered",
-														)}
-													>
-														<button
-															type="button"
-															className="flex min-w-0 flex-1 items-center gap-4 text-left"
-															onClick={() => void openDiff(file, false)}
-															title={file.path}
-														>
-															<span
-																className={cn(
-																	"w-12 shrink-0 tr-code-text",
-																	STATUS_CLASS[file.status],
-																)}
-															>
-																{STATUS_LABEL[file.status]}
-															</span>
-															<span className="truncate text-text-default tr-text-metadata">
-																{file.path}
-															</span>
-														</button>
-														<Button
-															variant="ghost"
-															size="s"
-															disabled={busy !== null}
-															onClick={() => void stage([file.path])}
-														>
-															{t("git.stage")}
-														</Button>
-													</div>
-												))
-											)}
-										</section>
-
-										<div className="flex min-w-0 flex-col gap-4 border-border-default border-t pt-8">
-											<textarea
-												className={cn(INPUT_CLASS, "min-h-[4rem] w-full py-4")}
-												value={message}
-												onChange={(event) => setMessage(event.currentTarget.value)}
-												placeholder={t("git.commitPlaceholder")}
-												data-testid="git-commit-message"
-												maxLength={4_000}
-											/>
-											<div className="flex items-center gap-4">
-												<p className="flex-1 text-text-subtle tr-text-metadata">
-													{t("git.commitHint")}
-												</p>
-												<Button
-													variant="primary"
-													size="s"
-													loading={busy === "commit"}
-													disabled={!canCommit}
-													onClick={() => void commitStaged()}
+							{view === "history" ? (
+								<>
+									<div className="shrink-0 border-border-default border-b p-8">
+										<input
+											className={cn(INPUT_CLASS, "min-h-28 w-full")}
+											value={filter}
+											onChange={(event) => setFilter(event.currentTarget.value)}
+											placeholder={t("git.filterCommits")}
+											aria-label={t("git.filterCommits")}
+										/>
+									</div>
+									<div className="min-h-0 flex-1 overflow-auto">
+										{filteredLog.length === 0 ? (
+											<p className="p-8 text-text-muted tr-text-metadata">{t("git.noCommits")}</p>
+										) : (
+											filteredLog.map((entry) => (
+												<button
+													key={entry.sha}
+													type="button"
+													data-testid="git-commit-entry"
+													className={cn(
+														"flex w-full min-w-0 flex-col gap-2 border-border-default border-b px-8 py-4 text-left last:border-b-0",
+														selectedCommit?.sha === entry.sha
+															? "bg-primary-subtle"
+															: "hover:bg-control-bg-hovered",
+													)}
+													onClick={() => void openCommit(entry)}
+													title={entry.subject}
 												>
-													{t("git.commit")}
-												</Button>
-											</div>
-										</div>
-
-										{diff !== null ? (
-											<section className="flex min-w-0 flex-col gap-4 border-border-default border-t pt-8">
-												<div className="flex items-center gap-4">
-													<h3 className="min-w-0 flex-1 truncate tr-code-text text-text-default">
-														{selected?.path}
-													</h3>
-													{diffTruncated ? (
-														<span className="text-feedback-warning tr-text-metadata">
-															{t("git.diffTruncated")}
+													<span className="flex w-full min-w-0 items-center gap-4">
+														<span className="min-w-0 flex-1 truncate text-text-default tr-text-metadata">
+															{entry.subject}
 														</span>
+														<span className="shrink-0 tr-code-text text-primary">
+															{entry.shortSha}
+														</span>
+													</span>
+													<span className="w-full min-w-0 truncate text-text-subtle tr-text-metadata">
+														{entry.author} · {relativeTime(entry.committedAt)}
+													</span>
+												</button>
+											))
+										)}
+									</div>
+								</>
+							) : (
+								<div className="min-h-0 flex-1 overflow-auto">
+									{status.files.length === 0 ? (
+										<p className="p-8 text-text-muted tr-text-metadata">{t("git.noChanges")}</p>
+									) : (
+										<>
+											<section className="flex min-w-0 flex-col">
+												<div className="flex items-center gap-4 px-8 py-4">
+													<h3 className="flex-1 tr-text-eyebrow text-text-muted">
+														{t("git.staged")} ({staged.length})
+													</h3>
+													{staged.length > 0 ? (
+														<Button
+															variant="ghost"
+															size="s"
+															disabled={busy !== null}
+															onClick={() => void unstage(staged.map((file) => file.path))}
+														>
+															{t("git.unstageAll")}
+														</Button>
 													) : null}
 												</div>
-												<pre className="max-h-[24rem] min-w-0 overflow-auto whitespace-pre rounded-sm bg-sunken p-8 tr-code-text text-text-default">
-													{diff}
-												</pre>
-											</section>
-										) : null}
-									</>
-								)}
-							</div>
-						) : (
-							<div className="flex min-w-0 flex-col gap-8">
-								{log.length === 0 ? (
-									<p className="text-text-muted tr-text-metadata">{t("git.noCommits")}</p>
-								) : (
-									<div className="flex min-w-0 flex-col">
-										{log.map((entry) => (
-											<button
-												key={entry.sha}
-												type="button"
-												className={cn(
-													"flex min-w-0 items-center gap-8 border-border-default border-b px-4 py-4 text-left last:border-b-0",
-													commit?.sha === entry.sha
-														? "bg-primary-subtle"
-														: "hover:bg-control-bg-hovered",
+												{staged.length === 0 ? (
+													<p className="px-8 pb-4 text-text-subtle tr-text-metadata">
+														{t("git.noneStaged")}
+													</p>
+												) : (
+													staged.map((file) => (
+														<div
+															key={`staged:${file.path}`}
+															className={cn(
+																"flex min-w-0 items-center gap-4 px-8 py-4",
+																selectedFile?.path === file.path && selectedFile.staged
+																	? "bg-primary-subtle"
+																	: "hover:bg-control-bg-hovered",
+															)}
+														>
+															<button
+																type="button"
+																className="flex min-w-0 flex-1 items-center gap-4 text-left"
+																onClick={() => void openDiff(file, true)}
+																title={file.path}
+															>
+																<span
+																	className={cn(
+																		"w-12 shrink-0 tr-code-text",
+																		STATUS_CLASS[file.status],
+																	)}
+																>
+																	{STATUS_LABEL[file.status]}
+																</span>
+																<span className="truncate text-text-default tr-text-metadata">
+																	{file.path}
+																</span>
+															</button>
+															<IconButton
+																icon={RiSubtractLine}
+																label={t("git.unstage")}
+																variant="ghost"
+																size="s"
+																disabled={busy !== null}
+																onClick={() => void unstage([file.path])}
+															/>
+														</div>
+													))
 												)}
-												onClick={() => void showCommit(entry)}
-												title={entry.subject}
-											>
-												<span className="shrink-0 tr-code-text text-primary">{entry.shortSha}</span>
-												<span className="min-w-0 flex-1 truncate text-text-default tr-text-metadata">
-													{entry.subject}
+											</section>
+
+											<section className="flex min-w-0 flex-col border-border-default border-t">
+												<div className="flex items-center gap-4 px-8 py-4">
+													<h3 className="flex-1 tr-text-eyebrow text-text-muted">
+														{t("git.unstaged")} ({unstaged.length})
+													</h3>
+													{unstaged.length > 0 ? (
+														<Button
+															variant="ghost"
+															size="s"
+															disabled={busy !== null}
+															onClick={() => void stage(unstaged.map((file) => file.path))}
+														>
+															{t("git.stageAll")}
+														</Button>
+													) : null}
+												</div>
+												{unstaged.length === 0 ? (
+													<p className="px-8 pb-4 text-text-subtle tr-text-metadata">
+														{t("git.noneUnstaged")}
+													</p>
+												) : (
+													unstaged.map((file) => (
+														<div
+															key={`unstaged:${file.path}`}
+															className={cn(
+																"flex min-w-0 items-center gap-4 px-8 py-4",
+																selectedFile?.path === file.path && !selectedFile.staged
+																	? "bg-primary-subtle"
+																	: "hover:bg-control-bg-hovered",
+															)}
+														>
+															<button
+																type="button"
+																className="flex min-w-0 flex-1 items-center gap-4 text-left"
+																onClick={() => void openDiff(file, false)}
+																title={file.path}
+															>
+																<span
+																	className={cn(
+																		"w-12 shrink-0 tr-code-text",
+																		STATUS_CLASS[file.status],
+																	)}
+																>
+																	{STATUS_LABEL[file.status]}
+																</span>
+																<span className="truncate text-text-default tr-text-metadata">
+																	{file.path}
+																</span>
+															</button>
+															<IconButton
+																icon={RiAddLine}
+																label={t("git.stage")}
+																variant="ghost"
+																size="s"
+																disabled={busy !== null}
+																onClick={() => void stage([file.path])}
+															/>
+														</div>
+													))
+												)}
+											</section>
+										</>
+									)}
+								</div>
+							)}
+						</aside>
+
+						<section className="flex min-h-0 min-w-0 flex-1 flex-col bg-sunken">
+							{view === "history" ? (
+								selectedCommit ? (
+									<>
+										<div className="shrink-0 border-border-default border-b bg-container-elevated-bg p-8">
+											<div className="flex min-w-0 items-center gap-4">
+												<span className="rounded-sm bg-primary-subtle px-4 py-2 tr-code-text text-primary">
+													{selectedCommit.shortSha}
 												</span>
+												<IconButton
+													icon={RiFileCopyLine}
+													label={t("git.copySha")}
+													variant="ghost"
+													size="s"
+													onClick={() => copySha(selectedCommit.sha)}
+												/>
+												<span className="min-w-0 flex-1" />
 												<span className="shrink-0 text-text-subtle tr-text-metadata">
-													{entry.author} · {relativeTime(entry.committedAt)}
+													{relativeTime(selectedCommit.committedAt)}
 												</span>
-											</button>
-										))}
+											</div>
+											<p className="mt-4 text-text-default tr-text-ui">{selectedCommit.subject}</p>
+											<p className="mt-2 text-text-subtle tr-text-metadata">
+												{selectedCommit.author} · {selectedCommit.committedAt}
+											</p>
+										</div>
+										{commitDetail && commitDetail.files.length > 0 ? (
+											<div className="flex shrink-0 gap-2 overflow-x-auto border-border-default border-b bg-container-elevated-bg px-8 py-4">
+												{commitDetail.files.map((file) => (
+													<span
+														key={file.path}
+														className="flex shrink-0 items-center gap-2 rounded-sm border border-border-default px-4 py-2 tr-text-metadata"
+														title={file.path}
+													>
+														<span
+															className={cn(
+																"tr-code-text",
+																file.status === "added"
+																	? "text-feedback-success"
+																	: file.status === "deleted"
+																		? "text-feedback-error"
+																		: "text-feedback-warning",
+															)}
+														>
+															{file.status === "added"
+																? "A"
+																: file.status === "deleted"
+																	? "D"
+																	: file.status === "renamed"
+																		? "R"
+																		: "M"}
+														</span>
+														<span className="max-w-[12rem] truncate text-text-default">
+															{fileBase(file.path)}
+														</span>
+														{file.added !== undefined ? (
+															<span className="text-feedback-success">+{file.added}</span>
+														) : null}
+														{file.removed !== undefined ? (
+															<span className="text-feedback-error">-{file.removed}</span>
+														) : null}
+													</span>
+												))}
+											</div>
+										) : null}
+										<pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-8 tr-code-text text-text-default">
+											{commitDetail ? commitPatch(commitDetail.output) : t("git.loading")}
+										</pre>
+									</>
+								) : (
+									<div className="flex h-full flex-col items-center justify-center gap-4 p-12 text-center text-text-subtle">
+										<RiGitBranchLine className="size-24" aria-hidden="true" />
+										<p className="tr-text-metadata">{t("git.selectCommit")}</p>
 									</div>
-								)}
-								{commitText !== null ? (
-									<pre className="max-h-[28rem] min-w-0 overflow-auto whitespace-pre rounded-sm bg-sunken p-8 tr-code-text text-text-default">
-										{commitText}
+								)
+							) : diff ? (
+								<>
+									<div className="flex shrink-0 items-center gap-4 border-border-default border-b bg-container-elevated-bg px-8 py-4">
+										<span className="min-w-0 flex-1 truncate tr-code-text text-text-default">
+											{diff.path}
+										</span>
+										<span className="shrink-0 text-text-subtle tr-text-metadata">
+											{diff.staged ? t("git.staged") : t("git.unstaged")}
+										</span>
+										{diff.truncated ? (
+											<span className="text-feedback-warning tr-text-metadata">
+												{t("git.diffTruncated")}
+											</span>
+										) : null}
+									</div>
+									<pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-8 tr-code-text text-text-default">
+										{diff.diff || t("git.noDiff")}
 									</pre>
-								) : null}
-							</div>
-						)}
+								</>
+							) : (
+								<div className="flex h-full flex-col items-center justify-center gap-4 p-12 text-center text-text-subtle">
+									<RiGitBranchLine className="size-24" aria-hidden="true" />
+									<p className="tr-text-metadata">{t("git.selectFile")}</p>
+								</div>
+							)}
+						</section>
 					</div>
-				) : null}
-			</div>
+
+					{view === "changes" ? (
+						<div className="shrink-0 border-border-default border-t bg-container-elevated-bg p-8">
+							<div className="flex min-w-0 items-end gap-4">
+								<textarea
+									className={cn(INPUT_CLASS, "min-h-[3.5rem] flex-1 py-4")}
+									value={commitMessage}
+									onChange={(event) => setCommitMessage(event.currentTarget.value)}
+									placeholder={t("git.commitPlaceholder")}
+									data-testid="git-commit-message"
+									maxLength={4_000}
+								/>
+								<Button
+									variant="primary"
+									size="s"
+									iconLeft={RiCheckLine}
+									loading={busy === "commit"}
+									disabled={!canCommit}
+									onClick={() => void commitStaged()}
+								>
+									{t("git.commit")}
+								</Button>
+							</div>
+							<p className="mt-2 text-text-subtle tr-text-metadata">{t("git.commitHint")}</p>
+						</div>
+					) : null}
+				</div>
+			) : null}
 		</div>
 	);
 }

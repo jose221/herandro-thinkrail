@@ -34,14 +34,18 @@ The workspace tool panels share the same rules and protocol v107:
   panel. Ports come from `browser.ports` and never probe. **Page info** calls `browser.snapshot` for a
   bounded text-only read; there is no console, screenshot, or script stream. The iframe unmounts after
   90 s hidden and is resumed explicitly, so a background tab costs no renderer.
-- **`RequestsPane`** keeps a bounded per-workspace history and saved-request list; every send goes through
-  `http.request.send`, so headers, cookies and bodies reach only the host. Responses are bounded and
-  truncated responses are labelled. Auth helpers only build headers; no credential is stored by the panel.
+- **`RequestsPane`** keeps a bounded per-workspace history and saved-request list in full Request/
+  History/Saved tabs; every send goes through `http.request.send`, so headers, cookies and bodies reach
+  only the host. The URL field suggests recent history and saved URLs, and the JSON body editor
+  auto-closes quotes/brackets, formats on blur or demand, and reports the first syntax error with its
+  line and column. Responses are bounded and truncated responses are labelled. Auth helpers only build
+  headers; no credential is stored by the panel.
 - **`MemoryPane`** samples `system.resources` only while visible, keeps a local 120-point chart, and
   persists checkpoints/analysis host-side. Termination is confirmed and never targets the host.
 - **`GitPane`** uses `git.control.status/branches/log/diff/stage/unstage/commit/fetch/pull/push` and
-  branch switching. It commits only the staged index and shows bounded diffs; destructive history
-  operations are absent.
+  branch switching in a list/detail layout: history or changes on one side, and the selected commit
+  (metadata, files, patch) or file diff on the other. It commits only the staged index and shows
+  bounded diffs; destructive history operations are absent.
 
 All four wait for a compatible host before making requests and show no controls on an older client.
 

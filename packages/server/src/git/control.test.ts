@@ -8,6 +8,7 @@ import {
 	gitControlCreateBranch,
 	gitControlDiff,
 	gitControlLog,
+	gitControlShowCommit,
 	gitControlStage,
 	gitControlStatus,
 	gitControlSwitchBranch,
@@ -72,6 +73,9 @@ posix("status, stage, unstage and commit stay in the workspace", async () => {
 	expect(staged.files[0]).toMatchObject({ path: "new.txt", status: "added", staged: true });
 	const committed = await gitControlCommit("w1", "feat: add new file");
 	expect(committed.subject).toBe("feat: add new file");
+	const detail = await gitControlShowCommit("w1", committed.sha);
+	expect(detail.files).toEqual([{ path: "new.txt", status: "added", added: 1, removed: 0 }]);
+	expect(detail.output).toContain("feat: add new file");
 	expect(await gitControlStatus("w1")).toMatchObject({ files: [] });
 
 	writeFileSync(join(repo, "README.md"), "# changed\n");

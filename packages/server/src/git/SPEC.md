@@ -310,7 +310,8 @@ ref off the workspace-create critical path.
   `check-ignore -z` needs stdin, which the bounded runners do not offer.
 Git **control** (`control.ts`) is the interactive panel/tool surface over the same runner: status parses
 `git status --porcelain=v1 -z` into staged/unstaged/untracked facts, diffs are bounded to 512 KiB, and
-staging/commit/branch operations accept only validated workspace-relative paths and safe refs. Fetch,
+staging/commit/branch operations accept only validated workspace-relative paths and safe refs. Commit
+details also return the changed-file list with numstat counts for the panel's file strip. Fetch,
 pull (`--ff-only`) and push are network-bound with the module's 55 s budget; push creates an upstream only
 when none exists. Commit never force-pushes and never rewrites history.
 
