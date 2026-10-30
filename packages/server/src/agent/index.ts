@@ -57,6 +57,7 @@ export { preferredDefaultModel } from "./modelDefaults";
 export {
 	listModelContextSettings,
 	listProviderModelDefinitions,
+	openModelsJson,
 	saveProviderModelDefinitions,
 	setModelContextWindow,
 	setModelsJsonPublisher,

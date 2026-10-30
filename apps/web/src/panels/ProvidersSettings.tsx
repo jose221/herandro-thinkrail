@@ -1,4 +1,5 @@
 import {
+	RiFileSettingsLine as ConfigFile,
 	RiLockLine as Lock,
 	RiLogoutBoxLine as LogOut,
 	RiSettings3Line as ModelSettings,
@@ -7,6 +8,7 @@ import {
 import {
 	type AppConfigUpdate,
 	JBCENTRAL_QUOTA_PROTOCOL_VERSION,
+	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	type ProviderStatus,
 } from "@thinkrail/contracts";
@@ -44,6 +46,8 @@ export function ProvidersSettings() {
 	const protocolVersion = useAppStore((s) => s.protocolVersion);
 	const modelsEditorAvailable =
 		protocolVersion !== null && protocolVersion >= PROVIDER_MODELS_PROTOCOL_VERSION;
+	const configEditorAvailable =
+		protocolVersion !== null && protocolVersion >= PROVIDER_CONFIG_PROTOCOL_VERSION;
 	const quotaEnabled = useAppStore((s) => s.jbcentralQuotaEnabled);
 	const quotaRefreshSeconds = useAppStore((s) => s.jbcentralQuotaRefreshSeconds);
 
@@ -55,6 +59,15 @@ export function ProvidersSettings() {
 			throw error;
 		}
 	}, []);
+
+	const openConfig = useCallback(async () => {
+		try {
+			const result = await getTransport().request("provider.config.open", {});
+			toast.success(t("settings.providers.openConfigSuccess", { path: result.path }));
+		} catch (error) {
+			toast.error(errorText(error), t("settings.providers.openConfigFailed"));
+		}
+	}, [t]);
 
 	const quotaSettings =
 		protocolVersion !== null && protocolVersion >= JBCENTRAL_QUOTA_PROTOCOL_VERSION
@@ -80,18 +93,31 @@ export function ProvidersSettings() {
 		<div data-testid="settings-providers" className="flex flex-col gap-24">
 			<div className="flex items-center justify-between gap-12">
 				<p className="tr-text-metadata text-text-muted">{t("settings.providers.intro")}</p>
-				<Button
-					variant="ghost"
-					size="m"
-					iconLeft={RefreshCw}
-					loading={refreshing}
-					spinIcon
-					data-testid="providers-refresh"
-					aria-label={t("settings.providers.refreshLabel")}
-					onClick={() => void load()}
-				>
-					{t("settings.providers.refresh")}
-				</Button>
+				<div className="flex shrink-0 items-center gap-4">
+					{configEditorAvailable ? (
+						<Button
+							variant="ghost"
+							size="m"
+							iconLeft={ConfigFile}
+							data-testid="providers-open-config"
+							onClick={() => void openConfig()}
+						>
+							{t("settings.providers.openConfig")}
+						</Button>
+					) : null}
+					<Button
+						variant="ghost"
+						size="m"
+						iconLeft={RefreshCw}
+						loading={refreshing}
+						spinIcon
+						data-testid="providers-refresh"
+						aria-label={t("settings.providers.refreshLabel")}
+						onClick={() => void load()}
+					>
+						{t("settings.providers.refresh")}
+					</Button>
+				</div>
 			</div>
 
 			{report == null && !failed ? (
@@ -112,8 +138,15 @@ export function ProvidersSettings() {
 									onSignOut={() => void logout(p.id)}
 									canEditModels={modelsEditorAvailable && p.canEditModelsJson === true}
 									onEditModels={() => setModelsProvider(p)}
+									canOpenConfig={configEditorAvailable && p.canEditModelsJson === true}
+									onOpenConfig={() => void openConfig()}
 								/>
 							))}
+							{configEditorAvailable ? (
+								<p className="px-12 py-8 text-text-muted tr-text-metadata">
+									{t("settings.providers.configHint")}
+								</p>
+							) : null}
 						</SettingsGroup>
 					) : null}
 
@@ -211,12 +244,16 @@ function ConnectedRow({
 	onSignOut,
 	canEditModels,
 	onEditModels,
+	canOpenConfig,
+	onOpenConfig,
 }: {
 	provider: ProviderStatus;
 	busy: boolean;
 	onSignOut: () => void;
 	canEditModels: boolean;
 	onEditModels: () => void;
+	canOpenConfig: boolean;
+	onOpenConfig: () => void;
 }) {
 	const t = useT();
 	const label = t(AUTH_KIND_LABEL[provider.kind ?? "other"]);
@@ -261,6 +298,18 @@ function ConnectedRow({
 						{t("settings.providers.managed")}
 					</span>
 				)}
+				{canOpenConfig ? (
+					<Button
+						variant="ghost"
+						size="m"
+						iconLeft={ConfigFile}
+						data-testid="provider-edit-config"
+						data-provider={provider.id}
+						onClick={onOpenConfig}
+					>
+						{t("settings.providers.editConfig")}
+					</Button>
+				) : null}
 				{canEditModels ? (
 					<Button
 						variant="outline"

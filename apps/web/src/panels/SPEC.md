@@ -21,8 +21,11 @@ an additive layer, not a rewrite).
 
 `AndroidEmulatorPane` uses only contracts and transport for Android protocol v100. It waits for a
 compatible host before making requests, never starts an emulator on mount or status polling, and exposes
-start/stop and bounded inspection/input/install actions explicitly. APK selection browses `fs.readDir`
-from the workspace root and yields only workspace-relative `.apk` paths; it never uploads a host-local file.
+start/stop and bounded inspection/input/install actions explicitly. A click on the screen becomes a
+device tap and a drag becomes a swipe; coordinate controls remain as the bounded fallback. The stopped
+state clears details, screen, and logs, and the running header shows the owned process's CPU/RAM and
+idle TTL. APK selection browses `fs.readDir` from the workspace root and yields only workspace-relative
+`.apk` paths; it never uploads a host-local file.
 
 Files (both modes) and Review keep their fixed toolbars outside a panel-owned `components/QuietScrollArea`
 (Files through `RememberedScrollArea`); Projects and Specs expose content for the shell-owned scroll wrapper
@@ -784,7 +787,9 @@ a project picker, the prompt hero, and the reused
   `canLogout`** — env / models.json auth shows a "Managed" tag instead, since the host can't unset it; a
   protocol-v97 row with `canEditModelsJson` also offers **Configure models**, which edits only that
   provider's allowlisted model definitions in `models.json`; credentials, headers, and endpoints never
-  enter browser state, and unsupported host versions show no editor.
+  enter browser state, and unsupported host versions show no editor. At protocol v105, **Configuration**
+  asks the host to open `models.json` in its editor for API/endpoint/custom-provider changes; only the
+  path returns to the browser.
   `kind: "central"` row is labelled "JetBrains AI" and its Managed tag points at the JetBrains AI card,
   which owns that connection), the **JetBrains AI** card, **Subscriptions** (unconfigured `canOAuth`
   providers) and **Available (N)** (the `canApiKey`-only rest, capped with a "Show N more" expander).

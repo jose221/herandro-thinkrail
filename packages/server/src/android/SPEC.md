@@ -32,7 +32,9 @@ input and install a workspace-contained APK, and stop the emulator after five mi
   `adb -s emulator-<port>`. It never selects a default device, uses `adb -d`, issues `adb kill-server`,
   or forwards arbitrary shell text.
 - The AVD starts headless without wiping user data or saving a snapshot. Only explicit device actions
-  refresh the inactivity clock; status polling does not. Expiry and host shutdown stop the owned process.
+  refresh the inactivity clock; status polling does not. Expiry and host shutdown stop the owned process,
+  clear the idle timer, and retain no child or pipe. Status reports the owned process's current CPU and
+  resident memory when the host can measure them; measurement never touches the inactivity clock.
 - Screenshot and log capture have byte limits while the child pipes continue draining. A truncated
   screenshot is rejected; log output reports truncation. Device input is range-checked, APKs must resolve
   to regular `.apk` files inside the active workspace and are installed from a private snapshot, and every

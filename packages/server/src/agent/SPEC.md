@@ -143,8 +143,10 @@ projects ACP sessions into Pi state.
     editable fields into same-id stored definitions so unexposed Pi fields survive; removed ids are
     removed, and new models inherit provider-level API, endpoint and auth settings. Both operations use
     `jsonc-parser`, reject invalid JSON, retain comments/BOM/unrelated provider config, and use the
-    existing temp-file, permission, symlink and atomic-rename protections. All writes share one in-process
-    queue to prevent cross-feature lost updates. A changed file gets one network-disabled
+    existing temp-file, permission, symlink and atomic-rename protections. `openModelsJson` opens that
+    host-local file in the user's editor (creating an empty provider document when absent) and returns
+    only its path; credentials, headers, and endpoint values never cross the wire. All writes share one
+    in-process queue to prevent cross-feature lost updates. A changed file gets one network-disabled
     `runtime.refresh` and `provider.changed`; reads also refresh locally so external Pi CLI edits appear.
     Live sessions retain their original model; new chats resolve updated metadata. Pi remains the schema
     authority, and error messages never include file contents or credential values.

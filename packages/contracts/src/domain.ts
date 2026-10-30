@@ -1065,6 +1065,10 @@ export interface AndroidEmulatorStatus {
 	idleTtlMs: number;
 	idleRemainingMs?: number;
 	lastActivityAt?: number;
+	/** Current CPU usage of the owned emulator process, when the host can measure it. */
+	cpuPercent?: number;
+	/** Resident memory of the owned emulator process in bytes, when the host can measure it. */
+	memoryBytes?: number;
 }
 
 export interface AndroidEmulatorDetails {

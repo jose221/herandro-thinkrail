@@ -10,7 +10,7 @@ import { ANDROID_EMULATOR_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
-import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../store";
 import { getTransport } from "../transport";
@@ -38,13 +38,20 @@ interface ScreenPoint {
 	at: number;
 }
 
+function formatMemory(bytes: number): string {
+	const megabytes = bytes / (1024 * 1024);
+	return megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${Math.round(megabytes)} MB`;
+}
+
 function readScreenPoint(
-	event: ReactPointerEvent<HTMLButtonElement>,
+	clientX: number,
+	clientY: number,
+	element: HTMLButtonElement,
 	screen: AndroidEmulatorScreenshot,
 ): ScreenPoint {
-	const bounds = event.currentTarget.getBoundingClientRect();
-	const x = bounds.width > 0 ? ((event.clientX - bounds.left) / bounds.width) * screen.width : 0;
-	const y = bounds.height > 0 ? ((event.clientY - bounds.top) / bounds.height) * screen.height : 0;
+	const bounds = element.getBoundingClientRect();
+	const x = bounds.width > 0 ? ((clientX - bounds.left) / bounds.width) * screen.width : 0;
+	const y = bounds.height > 0 ? ((clientY - bounds.top) / bounds.height) * screen.height : 0;
 	return {
 		x: Math.max(0, Math.min(screen.width - 1, Math.round(x))),
 		y: Math.max(0, Math.min(screen.height - 1, Math.round(y))),
@@ -78,6 +85,7 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const [toY, setToY] = useState("");
 	const [apkPath, setApkPath] = useState("");
 	const pointerStart = useRef<ScreenPoint | null>(null);
+	const suppressClick = useRef(false);
 	const state = status?.state;
 	const running = supported && state === "running";
 
@@ -351,6 +359,19 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 									})}
 								</span>
 							) : null}
+							{running &&
+							(status?.cpuPercent !== undefined || status?.memoryBytes !== undefined) ? (
+								<span
+									data-testid="android-emulator-resources"
+									className="text-text-subtle tr-text-metadata"
+								>
+									{t("androidEmulator.resources", {
+										cpu: status.cpuPercent === undefined ? "—" : status.cpuPercent.toFixed(1),
+										memory:
+											status.memoryBytes === undefined ? "—" : formatMemory(status.memoryBytes),
+									})}
+								</span>
+							) : null}
 						</div>
 						<div className="flex min-w-0 flex-col gap-8 sm:flex-row sm:items-end">
 							<label className="flex min-w-0 flex-1 flex-col gap-4">
@@ -448,24 +469,49 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 										height: screen.height,
 									})}
 									onClick={(event) => {
-										if (event.detail !== 0) return;
-										void tap(Math.floor(screen.width / 2), Math.floor(screen.height / 2));
+										if (suppressClick.current) {
+											suppressClick.current = false;
+											return;
+										}
+										if (event.detail === 0) {
+											void tap(Math.floor(screen.width / 2), Math.floor(screen.height / 2));
+											return;
+										}
+										const point = readScreenPoint(
+											event.clientX,
+											event.clientY,
+											event.currentTarget,
+											screen,
+										);
+										void tap(point.x, point.y);
 									}}
 									onPointerDown={(event) => {
 										if (!running || isBusy) return;
-										pointerStart.current = readScreenPoint(event, screen);
+										suppressClick.current = false;
+										pointerStart.current = readScreenPoint(
+											event.clientX,
+											event.clientY,
+											event.currentTarget,
+											screen,
+										);
 										event.currentTarget.setPointerCapture(event.pointerId);
 									}}
 									onPointerUp={(event) => {
 										const startPoint = pointerStart.current;
 										pointerStart.current = null;
 										if (!startPoint || !running || isBusy) return;
-										const endPoint = readScreenPoint(event, screen);
+										const endPoint = readScreenPoint(
+											event.clientX,
+											event.clientY,
+											event.currentTarget,
+											screen,
+										);
 										const distance = Math.hypot(
 											endPoint.x - startPoint.x,
 											endPoint.y - startPoint.y,
 										);
 										if (distance > 8) {
+											suppressClick.current = true;
 											void runAction(async () => {
 												await getTransport().request("android.emulator.swipe", {
 													x1: startPoint.x,
@@ -476,19 +522,20 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 												});
 												setScreen(await getTransport().request("android.emulator.screen", {}));
 											});
-										} else void tap(endPoint.x, endPoint.y);
+										}
 									}}
 									onPointerCancel={() => {
 										pointerStart.current = null;
 									}}
-									className="flex w-fit min-w-0 max-w-full cursor-pointer items-center justify-center border-0 bg-transparent p-0 disabled:cursor-default"
+									className="flex max-h-[60vh] w-fit min-w-0 max-w-full cursor-pointer touch-none items-center justify-center border-0 bg-transparent p-0 disabled:cursor-default"
 									data-testid="android-emulator-screen"
 								>
 									<img
 										src={`data:${screen.mimeType};base64,${screen.data}`}
 										alt=""
 										aria-hidden="true"
-										className="h-auto max-h-screen w-auto max-w-full select-none object-contain touch-none"
+										draggable={false}
+										className="h-auto max-h-[60vh] w-auto max-w-full select-none object-contain touch-none"
 									/>
 								</button>
 							) : (

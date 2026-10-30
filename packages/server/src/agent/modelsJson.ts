@@ -245,6 +245,25 @@ function writeModelsFile(path: string, source: string): void {
 	}
 }
 
+export function openModelsJson(): string {
+	const path = modelsPath();
+	try {
+		accessSync(path, constants.F_OK);
+	} catch {
+		writeModelsFile(path, EMPTY_CONFIG);
+	}
+	const command =
+		process.platform === "darwin"
+			? ["open", path]
+			: process.platform === "win32"
+				? ["notepad", path]
+				: ["xdg-open", path];
+	try {
+		Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+	} catch {}
+	return path;
+}
+
 export function listModelContextSettings(): Promise<ModelContextSetting[]> {
 	return usePiRuntime(async (runtime) => {
 		await runtime.refresh({ allowNetwork: false });

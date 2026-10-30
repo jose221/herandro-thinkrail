@@ -44,6 +44,7 @@ import {
 	PROJECT_TEMPLATE_PREVIEW_PROTOCOL_VERSION,
 	PROJECT_TRUST_PROTOCOL_VERSION,
 	PROTOCOL_VERSION,
+	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	RESOURCE_META_PROTOCOL_VERSION,
 	REVIEW_ACTIONS_PROTOCOL_VERSION,
@@ -94,6 +95,12 @@ test("provider model editing advances the protocol and exposes typed catalog met
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(PROVIDER_MODELS_PROTOCOL_VERSION);
 	expect(WS_METHODS.providerModelsList).toBe("provider.models.list");
 	expect(WS_METHODS.providerModelsSave).toBe("provider.models.save");
+});
+
+test("provider config file opening is versioned at protocol v105", () => {
+	expect(PROVIDER_CONFIG_PROTOCOL_VERSION).toBe(105);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(PROVIDER_CONFIG_PROTOCOL_VERSION);
+	expect(WS_METHODS.providerConfigOpen).toBe("provider.config.open");
 });
 
 test("ACP config option snapshots are available from protocol v98", () => {

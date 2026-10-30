@@ -253,6 +253,8 @@ export class AndroidEmulatorManager {
 			}
 		}
 		const current = this.active;
+		const resources =
+			current && !current.exited ? await this.processResources(current.process.pid) : undefined;
 		return {
 			available: issue === undefined,
 			...(issue ? { issue } : {}),
@@ -265,7 +267,28 @@ export class AndroidEmulatorManager {
 						idleRemainingMs: Math.max(0, this.idleTtlMs - (Date.now() - current.lastActivityAt)),
 					}
 				: {}),
+			...(resources ?? {}),
 			idleTtlMs: this.idleTtlMs,
+		};
+	}
+
+	private async processResources(
+		pid: number,
+	): Promise<Pick<AndroidEmulatorStatus, "cpuPercent" | "memoryBytes">> {
+		if (process.platform === "win32" || !Number.isInteger(pid) || pid <= 0) return {};
+		const ps = Bun.which("ps") ?? "/bin/ps";
+		const result = await runBounded([ps, "-p", String(pid), "-o", "%cpu=,rss="], {
+			timeoutMs: 3000,
+			maxOutputBytes: 4096,
+		});
+		if (!result.ok || result.truncated) return {};
+		const [cpu, rss] = result.out.trim().split(/\s+/);
+		const cpuPercent = Number(cpu);
+		const memoryKb = Number(rss);
+		if (!Number.isFinite(cpuPercent) || !Number.isFinite(memoryKb)) return {};
+		return {
+			cpuPercent: Math.max(0, Math.round(cpuPercent * 10) / 10),
+			memoryBytes: Math.max(0, Math.round(memoryKb * 1024)),
 		};
 	}
 

@@ -60,6 +60,7 @@ import {
 	markWorkspaceUnread,
 	notifyExtUi,
 	nudgeSession,
+	openModelsJson,
 	projectTrustSummary,
 	promptSession,
 	readBackgroundCommandOutput,
@@ -1296,6 +1297,7 @@ const handlers: WsHandlers = {
 	"provider.models.list": (params) => listProviderModelDefinitions(params.providerId),
 	"provider.models.save": (params) =>
 		saveProviderModelDefinitions(params.providerId, params.models),
+	"provider.config.open": () => ({ ok: true, path: openModelsJson() }) as const,
 	"provider.detect": async () => ({ accounts: await detectAccounts() }),
 	"provider.loginStart": (p) => {
 		const type = p.type ?? "oauth";
