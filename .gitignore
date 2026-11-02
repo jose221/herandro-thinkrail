@@ -34,6 +34,7 @@ apps/desktop/artifacts/
 *.bun-build
 
 # Local env / secrets (Vite auto-loads .env*; app handles provider auth tokens)
+.repomap*
 .env
 .env.local
 .env.*.local

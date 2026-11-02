@@ -7,6 +7,61 @@ type NavigationEvent = ReturnType<
 
 const MAX_NAVIGATION_DETAIL_LENGTH = 64 * 1024;
 
+export function isLocalNavigationUrl(url: URL, origin: string): boolean {
+	try {
+		const parsedOrigin = new URL(origin);
+		if (url.origin === parsedOrigin.origin) return true;
+	} catch {}
+	const host = url.hostname.toLowerCase();
+	return (
+		(url.protocol === "http:" || url.protocol === "https:") &&
+		(host === "localhost" ||
+			host === "127.0.0.1" ||
+			host === "0.0.0.0" ||
+			host === "[::1]" ||
+			host === "::1")
+	);
+}
+
+export function desktopNavigationRules(origin: string): string[] {
+	return [
+		"^*",
+		`${origin}/*`,
+		"http://localhost",
+		"http://localhost/*",
+		"http://localhost:*",
+		"http://localhost:*/*",
+		"https://localhost",
+		"https://localhost/*",
+		"https://localhost:*",
+		"https://localhost:*/*",
+		"http://127.0.0.1",
+		"http://127.0.0.1/*",
+		"http://127.0.0.1:*",
+		"http://127.0.0.1:*/*",
+		"https://127.0.0.1",
+		"https://127.0.0.1/*",
+		"https://127.0.0.1:*",
+		"https://127.0.0.1:*/*",
+		"http://0.0.0.0",
+		"http://0.0.0.0/*",
+		"http://0.0.0.0:*",
+		"http://0.0.0.0:*/*",
+		"https://0.0.0.0",
+		"https://0.0.0.0/*",
+		"https://0.0.0.0:*",
+		"https://0.0.0.0:*/*",
+		"http://[::1]",
+		"http://[::1]/*",
+		"http://[::1]:*",
+		"http://[::1]:*/*",
+		"https://[::1]",
+		"https://[::1]/*",
+		"https://[::1]:*",
+		"https://[::1]:*/*",
+	];
+}
+
 export function externalNavigationUrl(value: unknown, origin: string): string | null {
 	let detail = value;
 	if (typeof detail === "string") {
@@ -32,7 +87,7 @@ export function externalNavigationUrl(value: unknown, origin: string): string | 
 	if (!raw || raw.length > MAX_NAVIGATION_DETAIL_LENGTH) return null;
 	try {
 		const url = new URL(raw, origin);
-		if (url.origin === origin) return null;
+		if (isLocalNavigationUrl(url, origin)) return null;
 		return ["https:", "http:", "mailto:"].includes(url.protocol) ? url.href : null;
 	} catch {
 		return null;

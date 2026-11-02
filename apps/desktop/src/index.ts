@@ -21,7 +21,7 @@ import {
 } from "./applicationMenu";
 import { attributionClaimOnFirstReadiness } from "./attributionReadiness";
 import { desktopError, setDesktopErrorReporter } from "./errorReporting";
-import { installExternalNavigation } from "./externalNavigation";
+import { desktopNavigationRules, installExternalNavigation } from "./externalNavigation";
 import { createKeyStateReader } from "./keyState";
 import {
 	type DesktopDialogLabels,
@@ -428,7 +428,7 @@ async function start(): Promise<void> {
 		hidden:
 			process.env.THINKRAIL_DESKTOP_HIDDEN === "1" ||
 			process.env.THINKRAIL_DESKTOP_E2E_HOST === "1",
-		navigationRules: neutral ? null : JSON.stringify(["^*", `${origin}/*`]),
+		navigationRules: neutral ? null : JSON.stringify(desktopNavigationRules(origin)),
 		frame: { x: 80, y: 60, width: 1440, height: 920 },
 		...(neutral
 			? {}

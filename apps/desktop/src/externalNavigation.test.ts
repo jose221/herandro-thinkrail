@@ -1,12 +1,50 @@
 import { expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { externalNavigationUrl, installExternalNavigation } from "./externalNavigation";
+import {
+	desktopNavigationRules,
+	externalNavigationUrl,
+	installExternalNavigation,
+	isLocalNavigationUrl,
+} from "./externalNavigation";
 
 const origin = "http://127.0.0.1:24242";
 
 test("keeps same-origin navigation inside the webview", () => {
 	expect(externalNavigationUrl(`${origin}/#/v1`, origin)).toBeNull();
 	expect(externalNavigationUrl({ url: `${origin}/files/a/b` }, origin)).toBeNull();
+});
+
+test("keeps local development servers inside the webview", () => {
+	expect(isLocalNavigationUrl(new URL("http://localhost:42850/"), origin)).toBe(true);
+	expect(isLocalNavigationUrl(new URL("https://example.com/"), origin)).toBe(false);
+	expect(externalNavigationUrl("http://localhost:42850/", origin)).toBeNull();
+	expect(externalNavigationUrl("http://localhost:3000/dashboard", origin)).toBeNull();
+	expect(externalNavigationUrl("http://127.0.0.1:5173/", origin)).toBeNull();
+	expect(externalNavigationUrl("http://0.0.0.0:8080/", origin)).toBeNull();
+	expect(externalNavigationUrl("http://[::1]:4200/", origin)).toBeNull();
+	expect(externalNavigationUrl("https://localhost:8443/", origin)).toBeNull();
+	expect(
+		externalNavigationUrl(
+			JSON.stringify({ url: "http://localhost:42850/", allowed: false }),
+			origin,
+		),
+	).toBeNull();
+	expect(
+		externalNavigationUrl(
+			JSON.stringify({ url: "http://localhost:42850/", allowed: true }),
+			origin,
+		),
+	).toBeNull();
+});
+
+test("desktopNavigationRules confines to app origin and permits local development servers", () => {
+	const rules = desktopNavigationRules(origin);
+	expect(rules[0]).toBe("^*");
+	expect(rules).toContain(`${origin}/*`);
+	expect(rules).toContain("http://localhost:*/*");
+	expect(rules).toContain("http://127.0.0.1:*/*");
+	expect(rules).toContain("http://0.0.0.0:*/*");
+	expect(rules).toContain("http://[::1]:*/*");
 });
 
 test("opens reviewed external protocols only", () => {
@@ -80,6 +118,9 @@ test("subscribes only to this webview's SDK channels and removes its listeners o
 	events.emit("new-window-open-8", popup);
 	expect(opened).toEqual([]);
 
+	events.emit("will-navigate-7", {
+		data: { detail: JSON.stringify({ url: "http://localhost:42850/", allowed: true }) },
+	});
 	events.emit("will-navigate-7", navigation);
 	events.emit("new-window-open-7", popup);
 	expect(opened).toEqual(["https://example.com/nav", "https://example.com/popup"]);

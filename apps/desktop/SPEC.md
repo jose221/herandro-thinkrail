@@ -323,13 +323,16 @@ twice.
 
 ## Navigation and window security
 
-The native window permits navigation only within its exact loopback origin. User-requested external URLs
-open through the OS instead of replacing the app surface. Navigation listeners use the SDK emitter's
-webview-scoped `will-navigate-<id>` and `new-window-open-<id>` channels; the unscoped payload has no
-webview id, and the instance listener's typed event list omits popups. Payload types are derived from
-SDK event factories, not copied into local declarations. Detail can be a raw URL, a popup object, or
-serialized navigation JSON; bounded decoding retains only a string URL and the HTTP/HTTPS/mailto
-allowlist. Native `navigationRules` enforce confinement: navigation-event responses cannot cancel it.
+The native window permits navigation within its loopback origin and local development hosts
+(`localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]`). Local development servers and embedded browser sessions
+remain inside the app webview; user-requested non-local external URLs open through the OS instead of
+replacing the app surface. Navigation listeners use the SDK emitter's webview-scoped `will-navigate-<id>`
+and `new-window-open-<id>` channels; the unscoped payload has no webview id, and the instance listener's
+typed event list omits popups. Payload types are derived from SDK event factories, not copied into local
+declarations. Detail can be a raw URL, a popup object, or serialized navigation JSON; bounded decoding
+retains only a string URL and the HTTP/HTTPS/mailto allowlist while keeping local development targets in
+the webview. Native `navigationRules` enforce confinement to the app origin and local development hosts:
+navigation-event responses cannot cancel it.
 
 A desktop preload sends typed, one-way route, local-preference, page-zoom, and title-bar double-click
 messages, and is the only writer of the window-chrome CSS properties described above. It wraps
