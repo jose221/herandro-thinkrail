@@ -18,13 +18,18 @@ export type BoundedRunOptions = {
 	stdout?: "text";
 	signal?: AbortSignal;
 	maxOutputBytes?: number;
+	idleTimeoutMs?: number;
+	onStderr?: (text: string) => void;
 };
 
 export type BoundedBytesRunOptions = Omit<BoundedRunOptions, "stdout"> & {
 	stdout: "bytes";
 };
 
-export type BoundedStreamOptions = Omit<BoundedRunOptions, "stdout" | "signal" | "maxOutputBytes">;
+export type BoundedStreamOptions = Omit<
+	BoundedRunOptions,
+	"stdout" | "signal" | "maxOutputBytes" | "idleTimeoutMs" | "onStderr"
+>;
 export type BoundedStream = {
 	stdout: ReadableStream<Uint8Array>;
 	exited: Promise<BoundedRunBase>;
@@ -79,6 +84,7 @@ function drain(stream: ReadableStream<Uint8Array>, chunk: (value: Uint8Array) =>
 function textSink(
 	stream: ReadableStream<Uint8Array>,
 	maxBytes = Number.POSITIVE_INFINITY,
+	onText?: (text: string) => void,
 ): TextSink {
 	const decoder = new TextDecoder();
 	let text = "";
@@ -92,7 +98,9 @@ function textSink(
 			const bounded = boundedChunk(chunk, captured, maxBytes);
 			captured += bounded.value.byteLength;
 			wasTruncated ||= bounded.truncated;
-			text += decoder.decode(bounded.value, { stream: true });
+			const decoded = decoder.decode(bounded.value, { stream: true });
+			text += decoded;
+			onText?.(decoded);
 		}),
 	};
 }
@@ -100,6 +108,7 @@ function textSink(
 function bytesSink(
 	stream: ReadableStream<Uint8Array>,
 	maxBytes = Number.POSITIVE_INFINITY,
+	onChunk?: () => void,
 ): BytesSink {
 	const chunks: Uint8Array[] = [];
 	let length = 0;
@@ -121,6 +130,7 @@ function bytesSink(
 			if (bounded.value.byteLength > 0) chunks.push(bounded.value.slice());
 			length += bounded.value.byteLength;
 			wasTruncated ||= bounded.truncated;
+			onChunk?.();
 		}),
 	};
 }
@@ -132,6 +142,27 @@ function delay(ms: number): { promise: Promise<void>; cancel: () => void } {
 		timer.unref();
 	});
 	return { promise, cancel: () => clearTimeout(timer) };
+}
+
+function idleDeadline(ms: number | undefined): {
+	promise: Promise<void>;
+	touch: () => void;
+	cancel: () => void;
+} {
+	if (ms === undefined)
+		return { promise: new Promise(() => {}), touch: () => {}, cancel: () => {} };
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let fire: () => void = () => {};
+	const promise = new Promise<void>((resolve) => {
+		fire = resolve;
+	});
+	const touch = () => {
+		clearTimeout(timer);
+		timer = setTimeout(fire, boundedTimeout(ms));
+		timer.unref();
+	};
+	touch();
+	return { promise, touch, cancel: () => clearTimeout(timer) };
 }
 
 async function killTree(proc: Bun.Subprocess): Promise<void> {
@@ -306,11 +337,17 @@ export async function runBounded(
 	}
 
 	const maxOutputBytes = outputLimit(opts.maxOutputBytes);
+	const idle = idleDeadline(opts.idleTimeoutMs);
 	const out =
 		opts.stdout === "bytes"
-			? bytesSink(proc.stdout, maxOutputBytes)
-			: textSink(proc.stdout, maxOutputBytes);
-	const err = textSink(proc.stderr, maxOutputBytes);
+			? bytesSink(proc.stdout, maxOutputBytes, idle.touch)
+			: textSink(proc.stdout, maxOutputBytes, idle.touch);
+	const err = textSink(proc.stderr, maxOutputBytes, (text) => {
+		idle.touch();
+		try {
+			opts.onStderr?.(text);
+		} catch {}
+	});
 	const drained = Promise.all([out.done, err.done]);
 	const deadline = delay(boundedTimeout(opts.timeoutMs));
 
@@ -323,9 +360,11 @@ export async function runBounded(
 	const outcome = await Promise.race([
 		proc.exited.then(() => "exited" as const),
 		deadline.promise.then(() => "timed-out" as const),
+		idle.promise.then(() => "timed-out" as const),
 		aborted,
 	]);
 	deadline.cancel();
+	idle.cancel();
 	if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
 	if (outcome !== "exited") {
 		await killTree(proc);

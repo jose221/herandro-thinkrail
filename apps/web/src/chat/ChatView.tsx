@@ -1,6 +1,7 @@
 import {
 	type PromptHit,
 	type QueueLane,
+	type ResourceKind,
 	type SessionQueueContent,
 	type SubagentResourceSummary,
 	sameModel,
@@ -54,6 +55,7 @@ import {
 	type MentionCandidate,
 	type SubmitBehavior,
 } from "./Composer";
+import { ExtraUsageNotice } from "./ExtraUsageNotice";
 import { mentionLookup } from "./fileTargets";
 import { HistoryOverlay } from "./HistoryOverlay";
 import { parseModelRef, RunModelLabel } from "./ModelEffortLabel";
@@ -69,6 +71,7 @@ import { QueueStrip } from "./QueueStrip";
 import { deriveRecentPrompts } from "./recentPrompts";
 import {
 	CommandLogView,
+	newestResourceId,
 	ResourcesAttention,
 	ResourcesButton,
 	ResourcesDock,
@@ -88,6 +91,7 @@ import { useHistorySearch } from "./useHistorySearch";
 import { videoFrameAttachments } from "./videoAttachments";
 
 const TRY_AGAIN_PROMPT = "Try again.";
+const NOTHING_EXPANDED: Partial<Record<ResourceKind, boolean>> = {};
 
 function renderSubagentModel({ model, thinkingLevel }: SubagentResourceSummary) {
 	return <RunModelLabel model={model} thinkingLevel={thinkingLevel} />;
@@ -119,6 +123,8 @@ export default function ChatView({
 	const extUiWidget = useAppStore(
 		(s) => s.sessions[sessionId]?.extUiWidget ?? EMPTY_RUNTIME.extUiWidget,
 	);
+	const notice = useAppStore((s) => s.sessions[sessionId]?.notice ?? null);
+	const [disablingNotice, setDisablingNotice] = useState(false);
 	const commands = useAppStore((s) => s.sessions[sessionId]?.commands ?? EMPTY_RUNTIME.commands);
 	const stats = useAppStore((s) => s.sessions[sessionId]?.stats ?? null);
 	const statsRefreshTick = useAppStore((s) => s.sessions[sessionId]?.statsRefreshTick ?? 0);
@@ -208,9 +214,13 @@ export default function ChatView({
 	const freshResults = useFreshResults(
 		workspaceId,
 		sessionId,
-		resources.groups,
+		resources.groups.recentFinished,
 		resources.visible && resources.authoritative,
 	);
+	const freshIds = new Set([
+		...freshResults.commands.map((command) => command.id),
+		...freshResults.subagents.map((child) => child.childSessionId),
+	]);
 	const resourcesTrigger = useRef<HTMLButtonElement>(null);
 	const [stopAllOpen, setStopAllOpen] = useState(false);
 	const [inspector, setInspector] = useState<{
@@ -218,6 +228,7 @@ export default function ChatView({
 		sessionId: string;
 		open: boolean;
 		selectedId: string | null;
+		expanded: Partial<Record<ResourceKind, boolean>>;
 	} | null>(null);
 	const inspectorOpen =
 		inspector?.workspaceId === workspaceId && inspector.sessionId === sessionId && inspector.open;
@@ -225,6 +236,10 @@ export default function ChatView({
 		inspector?.workspaceId === workspaceId && inspector.sessionId === sessionId
 			? inspector.selectedId
 			: null;
+	const inspectorExpanded =
+		inspector?.workspaceId === workspaceId && inspector.sessionId === sessionId
+			? inspector.expanded
+			: NOTHING_EXPANDED;
 	const openInspector = useCallback(
 		(selectedId?: string) =>
 			setInspector((previous) => ({
@@ -236,9 +251,25 @@ export default function ChatView({
 					(previous?.workspaceId === workspaceId && previous.sessionId === sessionId
 						? previous.selectedId
 						: null),
+				expanded: NOTHING_EXPANDED,
 			})),
 		[workspaceId, sessionId],
 	);
+	const setFinishedExpanded = useCallback(
+		(kind: ResourceKind, expanded: boolean) =>
+			setInspector((previous) =>
+				previous?.workspaceId === workspaceId && previous.sessionId === sessionId
+					? { ...previous, expanded: { ...previous.expanded, [kind]: expanded } }
+					: previous,
+			),
+		[workspaceId, sessionId],
+	);
+	const openFinished = () =>
+		openInspector(
+			newestResourceId(freshResults.commands, freshResults.subagents) ??
+				newestResourceId(resources.groups.finishedCommands, resources.groups.finishedSubagents) ??
+				undefined,
+		);
 	const setInspectorOpen = useCallback(
 		(open: boolean) => {
 			if (open) openInspector();
@@ -251,7 +282,7 @@ export default function ChatView({
 			setInspector((previous) =>
 				previous?.workspaceId === workspaceId && previous.sessionId === sessionId
 					? { ...previous, selectedId }
-					: { workspaceId, sessionId, open: true, selectedId },
+					: { workspaceId, sessionId, open: true, selectedId, expanded: NOTHING_EXPANDED },
 			),
 		[workspaceId, sessionId],
 	);
@@ -823,6 +854,14 @@ export default function ChatView({
 	}, [historyOpenRequest, sessionId, historyOverlayOpen, cycleScope]);
 
 	const widgetEntries = Object.entries(extUiWidget);
+	const disableNotice = () => {
+		setDisablingNotice(true);
+		getTransport()
+			.request("provider.disableWarning", { warning: "anthropicExtraUsage" })
+			.then(() => useAppStore.getState().silenceNotice("anthropicExtraUsage"))
+			.catch((err) => toast.error(errorText(err), translate("chat.extraUsage.disableFailed")))
+			.finally(() => setDisablingNotice(false));
+	};
 	const focusComposer = useCallback(() => composerRef.current?.refocus(), []);
 	// Keep a stable `onTryAgain` identity (it is passed to every transcript row) while always calling the
 	// latest `performSend` closure.
@@ -891,7 +930,7 @@ export default function ChatView({
 				stillRunning={stillRunning}
 				readMcpOutput={supportsMcp ? readMcpOutput : undefined}
 				openMcpSettings={supportsMcp ? openMcpSettings : undefined}
-				openProviderSettings={supportsMcp ? openProviderSettings : undefined}
+				openProviderSettings={openProviderSettings}
 				findModel={findModel}
 				resourcesOverlay={
 					resources.visible ? (
@@ -903,9 +942,14 @@ export default function ChatView({
 							now={now}
 							authoritative={resources.authoritative}
 							loading={resources.loading}
-							stale={resources.stale}
+							staleness={resources.staleness}
 							error={resources.projection?.error ?? null}
 							actions={resources.actions}
+							newIds={freshIds}
+							expanded={inspectorExpanded}
+							onExpandedChange={setFinishedExpanded}
+							{...(resources.loadOlder ? { onLoadMore: resources.loadOlder } : {})}
+							retained={resources.retained}
 							selectedId={inspectorSelectedId}
 							onSelect={selectResource}
 							onRetry={resources.retry}
@@ -918,7 +962,16 @@ export default function ChatView({
 							renderSubagentModel={renderSubagentModel}
 							detail={
 								selectedCommandId ? (
-									<CommandLogView {...commandLog} onRetry={commandLog.retry} />
+									<CommandLogView
+										{...commandLog}
+										onRetry={commandLog.retry}
+										interrupted={
+											resources.groups.finishedCommands.find(
+												(command) => command.id === selectedCommandId,
+											)?.interrupted === true
+										}
+										retained={resources.retained}
+									/>
 								) : selectedSubagentId ? (
 									<SubagentTranscriptPane
 										key={selectedSubagentId}
@@ -944,15 +997,25 @@ export default function ChatView({
 				<ResourcesDock
 					commands={resources.groups.commands}
 					subagents={resources.groups.subagents}
-					freshCommands={freshResults.commands}
-					freshSubagents={freshResults.subagents}
-					onDismiss={markResultSeen}
+					finishedCount={resources.groups.finishedCount}
+					freshCount={freshResults.count}
 					now={now}
 					authoritative={resources.authoritative}
+					staleness={resources.staleness}
 					actions={resources.actions}
 					onInspect={openInspector}
+					onOpenFinished={openFinished}
 					onStopCommand={resources.stopCommand}
 					onStopSubagent={resources.stopSubagent}
+				/>
+			) : null}
+			{notice === "anthropicExtraUsage" ? (
+				<ExtraUsageNotice
+					context="chat"
+					className="mx-12 mb-8 shrink-0"
+					onDismiss={() => useAppStore.getState().dismissSessionNotice(sessionId)}
+					onDisable={disableNotice}
+					disabling={disablingNotice}
 				/>
 			) : null}
 			<div className="relative shrink-0">

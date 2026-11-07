@@ -515,7 +515,10 @@ describe("frontend-local layout state", () => {
 			kind: "group",
 			tabs: [{ kind: "acp-chat", id: "acp-tab", acpSessionId: "opaque-acp-id" }],
 		});
-		expect(JSON.stringify(restored.center.tabs)).not.toContain('"sessionId"');
+		expect(restored.center.kind).toBe("group");
+		if (restored.center.kind === "group") {
+			expect(JSON.stringify(restored.center.tabs)).not.toContain('"sessionId"');
+		}
 	});
 
 	test("reload restores the same surface without another host read", async () => {
