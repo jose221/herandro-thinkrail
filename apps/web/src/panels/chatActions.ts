@@ -1,5 +1,6 @@
 import {
 	CONTINUATION_PROTOCOL_VERSION,
+	type ModelExtraParamValues,
 	type ThinkingLevel,
 	type WireModel,
 	type Workspace,
@@ -15,6 +16,7 @@ export interface ProjectlessChatStart {
 	readonly text?: string;
 	readonly images?: readonly ChatAttachment[];
 	readonly model?: { readonly model: WireModel; readonly thinkingLevel: ThinkingLevel };
+	readonly extraParams?: ModelExtraParamValues;
 }
 
 /** The host of this protocol holds chats without a project, in the built-in container it ensures at boot. */
@@ -63,6 +65,7 @@ async function runProjectlessChatStart(start: ProjectlessChatStart): Promise<Wor
 		created.model,
 		created.thinkingLevel,
 		selectWorkspaceTick(next, workspace.id),
+		created.extraParams ? { extraParams: created.extraParams } : undefined,
 	);
 	void prewarmWorkspaceSkillLoad(workspace.id).catch(() => {});
 	const text = start.text?.trim() ?? "";
@@ -85,7 +88,10 @@ async function runProjectlessChatStart(start: ProjectlessChatStart): Promise<Wor
 }
 
 function requestChatCreate(start: ProjectlessChatStart) {
-	return getTransport().request("chat.create", start.model ? { ...start.model } : {});
+	return getTransport().request("chat.create", {
+		...(start.model ? start.model : {}),
+		...(start.extraParams ? { extraParams: start.extraParams } : {}),
+	});
 }
 
 /** The only teardown: the host trashes the transcripts and the folder, then publishes the removal. */

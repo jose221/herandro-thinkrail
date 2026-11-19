@@ -397,6 +397,7 @@ export interface LayoutOpenOptions {
 	navigation?: CenterNavigationStamp | null;
 	countNavigation?: boolean;
 	claimPreview?: boolean;
+	extraParams?: ModelExtraParamValues;
 }
 
 export type LayoutIntent =
@@ -4146,7 +4147,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 					? {
 							...s.sessions,
 							[sessionId]: {
-								...newRuntime(model, thinkingLevel, s.connectionGeneration),
+								...newRuntime(
+									model,
+									thinkingLevel,
+									s.connectionGeneration,
+									options.extraParams ?? {},
+								),
 								hostState: s.sessionStateByWorkspace[workspaceId]?.[sessionId]?.state ?? null,
 							},
 						}

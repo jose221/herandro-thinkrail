@@ -1,7 +1,12 @@
 import { existsSync } from "node:fs";
 import { opendir } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChatCreateResult, ChatInspection, Workspace } from "@thinkrail/contracts";
+import type {
+	ChatCreateResult,
+	ChatInspection,
+	ModelExtraParamValues,
+	Workspace,
+} from "@thinkrail/contracts";
 import { CHATS_PROTOCOL_VERSION } from "@thinkrail/contracts";
 import { CodedError } from "@thinkrail/shared/codedError";
 import { WORKSPACE_CONTEXT_DIR } from "@thinkrail/shared/paths";
@@ -77,14 +82,16 @@ export function assertChatOpen(workspaceId: string): void {
 }
 
 /** The chat's folder, record and the one session that owns it, in one operation. */
-export function createChat(requested: NewChatModelRequest = {}): Promise<ChatCreateResult> {
+export function createChat(
+	requested: NewChatModelRequest & { extraParams?: ModelExtraParamValues } = {},
+): Promise<ChatCreateResult> {
 	return claimStart(provisionInitialTerminal(createChatRecord()), requested, false);
 }
 
 /** A chat whose session never came up (crash between folder and session) gets it here; a start in flight is joined. */
 export function recoverChatSession(
 	workspaceId: string,
-	requested: NewChatModelRequest = {},
+	requested: NewChatModelRequest & { extraParams?: ModelExtraParamValues } = {},
 ): Promise<ChatCreateResult> {
 	const claim = claims.get(workspaceId);
 	if (claim?.kind === "start") return claim.done;
@@ -94,7 +101,7 @@ export function recoverChatSession(
 
 function claimStart(
 	workspace: Workspace,
-	requested: NewChatModelRequest,
+	requested: NewChatModelRequest & { extraParams?: ModelExtraParamValues },
 	recovering: boolean,
 ): Promise<ChatCreateResult> {
 	const claim: ChatClaim = {

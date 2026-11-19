@@ -313,6 +313,7 @@ export interface ChatCreateResult {
 	sessionId: string;
 	model: WireModel | null;
 	thinkingLevel: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 }
 
 /** What deleting a chat would trash besides its transcripts: the files its folder holds (bounded count). */
@@ -423,6 +424,7 @@ export interface WorkspaceKickoff {
 	images?: ImageContent[];
 	model?: WireModel;
 	thinkingLevel?: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 }
 
 export interface WorkspaceCreation {
@@ -1226,7 +1228,11 @@ export interface WsMethodMap {
 	};
 	"workspace.remove": { params: { id: string }; result: Ack };
 	"chat.create": {
-		params: { model?: WireModel; thinkingLevel?: ThinkingLevel };
+		params: {
+			model?: WireModel;
+			thinkingLevel?: ThinkingLevel;
+			extraParams?: ModelExtraParamValues;
+		};
 		result: ChatCreateResult;
 	};
 	"chat.delete": { params: { workspaceId: string }; result: Ack };

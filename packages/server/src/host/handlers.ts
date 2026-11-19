@@ -499,6 +499,7 @@ export const workspaceCreationHandoff: CreationHandoff = async (workspace, kicko
 		{
 			...(kickoff.model ? { model: kickoff.model } : {}),
 			...(kickoff.thinkingLevel ? { thinkingLevel: kickoff.thinkingLevel } : {}),
+			...(kickoff.extraParams ? { extraParams: kickoff.extraParams } : {}),
 		},
 		{ pick: !internal },
 	);

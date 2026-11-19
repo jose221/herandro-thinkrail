@@ -10,6 +10,7 @@ import {
 } from "@remixicon/react";
 import {
 	type ModelDefault,
+	type ModelExtraParamValues,
 	PROJECT_TEMPLATE_PREVIEW_PROTOCOL_VERSION,
 	type SlashCommandInfo,
 	type TemplateInfo,
@@ -43,6 +44,7 @@ import { cn } from "@thinkrail/ui/utils";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { type DefaultPairOption, ModelEffortPicker } from "@/chat/ModelEffortPicker";
+import { ModelExtraParamsPicker } from "@/chat/ModelExtraParamsPicker";
 import {
 	deriveProjectTrustNotice,
 	type ProjectTrustNotice,
@@ -146,6 +148,7 @@ export function NewWorkspaceDialog({
 	const [slotSession, setSlotSession] = useState<TemplateSlotSessionState | null>(null);
 	const [model, setModel] = useState<WireModel | null>(null);
 	const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("medium");
+	const [extraParams, setExtraParams] = useState<ModelExtraParamValues>({});
 	const [hostDefault, setHostDefault] = useState<ModelDefault | null>(null);
 	const [explicitPair, setExplicitPair] = useState(false);
 	const pendingDefault = useRef<(() => void) | null>(null);
@@ -324,6 +327,7 @@ export function NewWorkspaceDialog({
 		pendingDefault.current?.();
 		pendingDefault.current = cancel;
 		setExplicitPair(false);
+		setExtraParams({});
 		getTransport()
 			.request("model.default", {})
 			.then((d) => {
@@ -351,6 +355,7 @@ export function NewWorkspaceDialog({
 		if (retryModel) {
 			setModel(retryModel);
 			setThinkingLevel(retryDraft?.kickoff?.thinkingLevel ?? "medium");
+			setExtraParams(retryDraft?.kickoff?.extraParams ?? {});
 			setExplicitPair(true);
 			return;
 		}
@@ -418,11 +423,13 @@ export function NewWorkspaceDialog({
 		setCreating(true);
 		const text = finalizeTemplateSlotSession(prompt, slotSession).trim();
 		const attachments = attachedImages.images.map(({ name, content }) => ({ name, content }));
+		const activeExtraParams = Object.keys(extraParams).length > 0 ? extraParams : undefined;
 		if (target === "chat") {
 			const started = await startProjectlessChat({
 				text,
 				images: attachments,
 				...(model && explicitPair ? { model: { model, thinkingLevel } } : {}),
+				...(activeExtraParams ? { extraParams: activeExtraParams } : {}),
 			});
 			setCreating(false);
 			if (started) onOpenChange(false);
@@ -441,6 +448,7 @@ export function NewWorkspaceDialog({
 				text,
 				...(attachments.length > 0 ? { images: attachments.map((a) => a.content) } : {}),
 				...(model && explicitPair ? { model, thinkingLevel } : {}),
+				...(activeExtraParams ? { extraParams: activeExtraParams } : {}),
 			};
 			const started = async () =>
 				getTransport().request("workspace.startCreate", {
@@ -487,6 +495,7 @@ export function NewWorkspaceDialog({
 			const { result: session, syncedTick } = await createSessionWithSkillBaseline({
 				workspaceId: workspace.id,
 				...(model && explicitPair ? { model, thinkingLevel } : {}),
+				...(activeExtraParams ? { extraParams: activeExtraParams } : {}),
 			});
 			store.openChatSession(
 				workspace.id,
@@ -494,6 +503,7 @@ export function NewWorkspaceDialog({
 				session.model,
 				session.thinkingLevel,
 				syncedTick,
+				session.extraParams ? { extraParams: session.extraParams } : undefined,
 			);
 			if (!text && attachments.length === 0) return;
 			store.appendUserMessage(
@@ -776,6 +786,7 @@ export function NewWorkspaceDialog({
 							onSelect={({ model: next, level }) => {
 								pickExplicitly();
 								setModel(next);
+								setExtraParams({});
 								if (level) setThinkingLevel(level);
 							}}
 							onSelectLevel={(level) => {
@@ -786,6 +797,12 @@ export function NewWorkspaceDialog({
 							defaultOption={defaultOption}
 							container={dialogEl}
 							className="max-w-full"
+						/>
+						<ModelExtraParamsPicker
+							params={model?.extraParams ?? []}
+							values={extraParams}
+							onChange={setExtraParams}
+							container={dialogEl}
 						/>
 					</div>
 					<Button

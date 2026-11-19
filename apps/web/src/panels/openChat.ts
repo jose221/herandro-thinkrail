@@ -51,18 +51,14 @@ export async function startChatInTab(
 		const created = await createSessionOrSiblingChat(workspaceId, prompt);
 		if (!created) return;
 		const {
-			result: { sessionId, model, thinkingLevel },
+			result: { sessionId, model, thinkingLevel, extraParams },
 			syncedTick,
 		} = created;
 		const store = useAppStore.getState();
-		store.openChatSession(
-			workspaceId,
-			sessionId,
-			model,
-			thinkingLevel,
-			syncedTick,
-			layoutOpenOptionsForNavigation(store, workspaceId, navigation),
-		);
+		store.openChatSession(workspaceId, sessionId, model, thinkingLevel, syncedTick, {
+			...layoutOpenOptionsForNavigation(store, workspaceId, navigation),
+			...(extraParams ? { extraParams } : {}),
+		});
 		if (prompt) sendPrompt(sessionId, prompt);
 		else if (draft) store.setChatDraft(sessionId, draft);
 	} catch {
