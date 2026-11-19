@@ -11,6 +11,19 @@ interface StoredSession {
 const sessions = new Map<string, StoredSession>();
 let publish: (workspaceId: string, session: BrowserSession) => void = () => {};
 
+interface BrowserEngineHooks {
+	onNavigate?: (workspaceId: string, tabId: string, url: string) => void;
+	onSelectTab?: (workspaceId: string, tabId: string) => void;
+	onCloseTab?: (workspaceId: string, tabId: string) => void;
+	onForget?: (workspaceId: string) => void;
+}
+
+let engineHooks: BrowserEngineHooks = {};
+
+export function registerBrowserEngineHooks(hooks: BrowserEngineHooks): void {
+	engineHooks = hooks;
+}
+
 export function setBrowserPublisher(
 	next: (workspaceId: string, session: BrowserSession) => void,
 ): void {
@@ -90,6 +103,7 @@ export function navigateBrowser(workspaceId: string, value: string): BrowserSess
 	if (!tab) throw new Error("Browser tab not found");
 	tab.url = url;
 	delete tab.title;
+	engineHooks.onNavigate?.(workspaceId, tab.id, url);
 	return changed(session);
 }
 
@@ -102,6 +116,8 @@ export function openBrowserTab(workspaceId: string, value?: string): BrowserSess
 	const tab = newTab(url);
 	session.tabs.push(tab);
 	session.activeTabId = tab.id;
+	engineHooks.onSelectTab?.(workspaceId, tab.id);
+	if (url !== "about:blank") engineHooks.onNavigate?.(workspaceId, tab.id, url);
 	return changed(session);
 }
 
@@ -109,6 +125,7 @@ export function closeBrowserTab(workspaceId: string, tabId: string): BrowserSess
 	const session = sessionFor(workspaceId);
 	const index = session.tabs.findIndex((tab) => tab.id === tabId);
 	if (index < 0) throw new Error("Browser tab not found");
+	engineHooks.onCloseTab?.(workspaceId, tabId);
 	if (session.tabs.length === 1) {
 		session.tabs = [newTab("about:blank")];
 		session.activeTabId = session.tabs[0]?.id ?? "";
@@ -117,7 +134,10 @@ export function closeBrowserTab(workspaceId: string, tabId: string): BrowserSess
 	session.tabs.splice(index, 1);
 	if (session.activeTabId === tabId) {
 		const next = session.tabs[Math.min(index, session.tabs.length - 1)];
-		if (next) session.activeTabId = next.id;
+		if (next) {
+			session.activeTabId = next.id;
+			engineHooks.onSelectTab?.(workspaceId, next.id);
+		}
 	}
 	return changed(session);
 }
@@ -126,7 +146,30 @@ export function selectBrowserTab(workspaceId: string, tabId: string): BrowserSes
 	const session = sessionFor(workspaceId);
 	if (!session.tabs.some((tab) => tab.id === tabId)) throw new Error("Browser tab not found");
 	session.activeTabId = tabId;
+	engineHooks.onSelectTab?.(workspaceId, tabId);
 	return changed(session);
+}
+
+export function syncActiveBrowserTabMeta(
+	workspaceId: string,
+	tabId: string,
+	url: string,
+	title?: string,
+): void {
+	const session = sessions.get(workspaceId);
+	if (!session) return;
+	const tab = session.tabs.find((candidate) => candidate.id === tabId);
+	if (!tab) return;
+	let dirty = false;
+	if (tab.url !== url) {
+		tab.url = url;
+		dirty = true;
+	}
+	if (title !== undefined && tab.title !== title) {
+		tab.title = title;
+		dirty = true;
+	}
+	if (dirty) changed(session);
 }
 
 export function activeBrowserUrl(workspaceId: string): string {
@@ -135,5 +178,6 @@ export function activeBrowserUrl(workspaceId: string): string {
 }
 
 export function forgetBrowserSession(workspaceId: string): void {
+	engineHooks.onForget?.(workspaceId);
 	sessions.delete(workspaceId);
 }

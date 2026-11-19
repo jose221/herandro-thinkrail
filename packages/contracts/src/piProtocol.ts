@@ -37,6 +37,29 @@ export function assistantToolCallsAreExecutable(stopReason: string | undefined):
 	return stopReason === undefined || !NON_EXECUTABLE_TOOL_CALL_STOP_REASONS.has(stopReason);
 }
 
+export type ExtraParamPrimitive = string | number | boolean | null;
+
+export interface ModelExtraParamPricingRule {
+	value: number;
+	operator: "multiply" | "add";
+}
+
+export interface ModelExtraParamOption {
+	label: string;
+	value: ExtraParamPrimitive;
+	pricing?: Record<string, ModelExtraParamPricingRule>;
+}
+
+export interface ModelExtraParam {
+	name: string;
+	type: string;
+	values?: ExtraParamPrimitive[];
+	default?: ExtraParamPrimitive;
+	options?: ModelExtraParamOption[];
+}
+
+export type ModelExtraParamValues = Record<string, ExtraParamPrimitive>;
+
 export type WireModel = Pick<
 	Model<string>,
 	"id" | "name" | "provider" | "contextWindow" | "reasoning"
@@ -48,6 +71,8 @@ export type WireModel = Pick<
 	input?: Model<string>["input"];
 	/** How the model's provider is connected — decides whether `cost` is what the user pays. */
 	auth?: WireModelAuth;
+	/** Dynamic extra request parameters declared by the model (e.g. service_tier). */
+	extraParams?: ModelExtraParam[];
 };
 
 export interface WireModelAuth {
@@ -220,6 +245,7 @@ export interface SessionSummary {
 	firstPrompt?: string;
 	model: WireModel | null;
 	thinkingLevel: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 	isStreaming: boolean;
 	messageCount: number;
 	updatedAt: number;

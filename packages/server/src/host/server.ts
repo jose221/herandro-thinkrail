@@ -16,7 +16,9 @@ import type {
 import {
 	ACP_AUTH_PROTOCOL_VERSION,
 	ACP_PROTOCOL_VERSION,
+	ANDROID_STREAM_PROTOCOL_VERSION,
 	ARTIFACTS_PROTOCOL_VERSION,
+	BROWSER_DEVTOOLS_PROTOCOL_VERSION,
 	CONTINUATION_PROTOCOL_VERSION,
 	FEEDBACK_SURVEY_PROTOCOL_VERSION,
 	FONTS_PROTOCOL_VERSION,
@@ -107,7 +109,7 @@ import {
 	surveyEndpoint,
 	track,
 } from "../analytics";
-import { stopAndroidEmulatorManager } from "../android";
+import { setAndroidFramePublisher, stopAndroidEmulatorManager } from "../android";
 import {
 	noteArtifactPathsChanged,
 	observeArtifactSessionEvent,
@@ -122,7 +124,7 @@ import {
 	stopJbcentralRuntime,
 } from "../auth";
 import { forgetOpenBranchReview } from "../branch-review";
-import { setBrowserPublisher } from "../browser";
+import { setBrowserPublisher, setBrowserRealtimePublishers, stopBrowserEngine } from "../browser";
 import { artifactTools } from "../extensions";
 import {
 	configureSurveySource,
@@ -572,6 +574,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 					ws.subscribe(WS_CHANNELS.fontsChanged);
 				const speech = ws.data.protocolVersion >= SPEECH_PROTOCOL_VERSION;
 				if (speech) ws.subscribe(WS_CHANNELS.speechChanged);
+				if (ws.data.protocolVersion >= BROWSER_DEVTOOLS_PROTOCOL_VERSION) {
+					ws.subscribe(WS_CHANNELS.browserFrame);
+					ws.subscribe(WS_CHANNELS.browserConsole);
+					ws.subscribe(WS_CHANNELS.browserNetwork);
+					ws.subscribe(WS_CHANNELS.browserDialog);
+				}
+				if (ws.data.protocolVersion >= ANDROID_STREAM_PROTOCOL_VERSION) {
+					ws.subscribe(WS_CHANNELS.androidFrame);
+				}
 				const hostPlatform: HostPlatform =
 					process.platform === "darwin" || process.platform === "win32"
 						? process.platform
@@ -1280,6 +1291,23 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 	setBrowserPublisher((workspaceId, session) => {
 		publishScoped(WS_CHANNELS.browserChanged, session, { workspaceId });
 	});
+	setBrowserRealtimePublishers({
+		onFrame: (push) => {
+			publishScoped(WS_CHANNELS.browserFrame, push, { workspaceId: push.workspaceId });
+		},
+		onConsole: (push) => {
+			publishScoped(WS_CHANNELS.browserConsole, push, { workspaceId: push.workspaceId });
+		},
+		onNetwork: (push) => {
+			publishScoped(WS_CHANNELS.browserNetwork, push, { workspaceId: push.workspaceId });
+		},
+		onDialog: (push) => {
+			publishScoped(WS_CHANNELS.browserDialog, push, { workspaceId: push.workspaceId });
+		},
+	});
+	setAndroidFramePublisher((frame) => {
+		publishScoped(WS_CHANNELS.androidFrame, frame);
+	});
 	setModelListingPublisher(publishProviderChanged);
 
 	const initialConfig = getConfig();
@@ -1329,6 +1357,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 		disposeAllSessions();
 		void acpSessions?.closeAll();
 		void stopAndroidEmulatorManager().catch(() => {});
+		void stopBrowserEngine().catch(() => {});
 		for (const timer of reapTimers.values()) clearTimeout(timer);
 		reapTimers.clear();
 		sockets.clear();
@@ -1355,6 +1384,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<R
 				shutdownAnalytics(),
 				acpSessions?.closeAll(),
 				stopAndroidEmulatorManager(),
+				stopBrowserEngine(),
 				stopWorkspaceCreations(),
 			]);
 			await turnTracker.drain();
@@ -1439,6 +1469,13 @@ function restoreSeamDefaults(): void {
 	setLogoutPublisher(() => {});
 	setModelsFilePublisher(null);
 	setModelListingPublisher(null);
+	setBrowserRealtimePublishers({
+		onFrame: () => {},
+		onConsole: () => {},
+		onNetwork: () => {},
+		onDialog: () => {},
+	});
+	setAndroidFramePublisher(null);
 }
 
 async function serveStatic(pathname: string, staticDir: string): Promise<Response> {

@@ -9,6 +9,7 @@ import type {
 	AndroidEmulatorRecordingStatus,
 	AndroidEmulatorScreenshot,
 	AndroidEmulatorStatus,
+	AndroidKeyEvent,
 	AppConfig,
 	AppConfigUpdate,
 	AppSurvey,
@@ -16,8 +17,14 @@ import type {
 	BackgroundCommandOutputResult,
 	BranchList,
 	BranchStatus,
+	BrowserConsoleEntry,
+	BrowserElementInfo,
+	BrowserEngineStatus,
+	BrowserNetworkEntry,
 	BrowserPageSnapshot,
 	BrowserSession,
+	BrowserStorageSnapshot,
+	CaptureFrame,
 	CaptureKind,
 	CaptureMimeType,
 	ChangeReceipt,
@@ -127,6 +134,7 @@ import { isControlMessage, isDelegationRunDetails } from "./domain";
 import type {
 	ExtUiResponse,
 	ImageContent,
+	ModelExtraParamValues,
 	QueueLane,
 	RefreshedModels,
 	RemovedQueuedMessage,
@@ -177,7 +185,10 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 127;
+export const PROTOCOL_VERSION = 129;
+export const BROWSER_DEVTOOLS_PROTOCOL_VERSION = 129;
+export const ANDROID_STREAM_PROTOCOL_VERSION = 129;
+export const EXTRA_PARAMS_PROTOCOL_VERSION = 128;
 export const SUBAGENT_CATALOG_PROTOCOL_VERSION = 127;
 export const SERVER_FALLBACK_PROTOCOL_VERSION = 126;
 export const MCP_USER_SERVERS_PROTOCOL_VERSION = 125;
@@ -571,6 +582,7 @@ export const WS_METHODS = {
 	sessionSetModel: "session.setModel",
 	sessionDisableServerFallback: "session.disableServerFallback",
 	sessionSetThinkingLevel: "session.setThinkingLevel",
+	sessionSetExtraParams: "session.setExtraParams",
 	sessionCompact: "session.compact",
 	sessionGetStats: "session.getStats",
 	sessionGetCommands: "session.getCommands",
@@ -685,6 +697,9 @@ export const WS_METHODS = {
 	androidEmulatorLogs: "android.emulator.logs",
 	androidEmulatorRecordStart: "android.emulator.record.start",
 	androidEmulatorRecordStop: "android.emulator.record.stop",
+	androidEmulatorKeyevent: "android.emulator.keyevent",
+	androidEmulatorStreamStart: "android.emulator.stream.start",
+	androidEmulatorStreamStop: "android.emulator.stream.stop",
 	browserState: "browser.state",
 	browserNavigate: "browser.navigate",
 	browserOpenTab: "browser.openTab",
@@ -692,6 +707,27 @@ export const WS_METHODS = {
 	browserSelectTab: "browser.selectTab",
 	browserPorts: "browser.ports",
 	browserSnapshot: "browser.snapshot",
+	browserEngineStatus: "browser.engine.status",
+	browserStreamStart: "browser.stream.start",
+	browserStreamStop: "browser.stream.stop",
+	browserResize: "browser.resize",
+	browserBack: "browser.back",
+	browserForward: "browser.forward",
+	browserReload: "browser.reload",
+	browserPointer: "browser.pointer",
+	browserWheel: "browser.wheel",
+	browserKey: "browser.key",
+	browserText: "browser.text",
+	browserDialogReply: "browser.dialog.reply",
+	browserScreenshot: "browser.screenshot",
+	browserEvaluate: "browser.evaluate",
+	browserElements: "browser.elements",
+	browserConsoleLogs: "browser.console.logs",
+	browserConsoleClear: "browser.console.clear",
+	browserNetworkLogs: "browser.network.logs",
+	browserNetworkClear: "browser.network.clear",
+	browserStorage: "browser.storage",
+	browserHighlight: "browser.highlight",
 	captureSave: "capture.save",
 	captureDelete: "capture.delete",
 	httpRequestSend: "http.request.send",
@@ -735,6 +771,11 @@ export const WS_CHANNELS = {
 	serverWelcome: "server.welcome",
 	projectUpdated: "project.updated",
 	browserChanged: "browser.changed",
+	browserFrame: "browser.frame",
+	browserConsole: "browser.console",
+	browserNetwork: "browser.network",
+	browserDialog: "browser.dialog",
+	androidFrame: "android.frame",
 	piEvent: "pi.event",
 	piExtensionUi: "pi.extensionUi",
 	sessionCreated: "session.created",
@@ -1431,8 +1472,18 @@ export interface WsMethodMap {
 	"speech.cancelInstall": { params: Record<string, never>; result: Ack };
 	"speech.remove": { params: Record<string, never>; result: Ack };
 	"session.create": {
-		params: { workspaceId: string; model?: WireModel; thinkingLevel?: ThinkingLevel };
-		result: { sessionId: string; model: WireModel | null; thinkingLevel: ThinkingLevel };
+		params: {
+			workspaceId: string;
+			model?: WireModel;
+			thinkingLevel?: ThinkingLevel;
+			extraParams?: ModelExtraParamValues;
+		};
+		result: {
+			sessionId: string;
+			model: WireModel | null;
+			thinkingLevel: ThinkingLevel;
+			extraParams?: ModelExtraParamValues;
+		};
 	};
 	"session.prompt": {
 		params: { sessionId: string; text: string; images?: ImageContent[] };
@@ -1467,6 +1518,10 @@ export interface WsMethodMap {
 	"session.setModel": { params: { sessionId: string; model: WireModel }; result: Ack };
 	"session.disableServerFallback": { params: { sessionId: string }; result: WireModel };
 	"session.setThinkingLevel": { params: { sessionId: string; level: ThinkingLevel }; result: Ack };
+	"session.setExtraParams": {
+		params: { sessionId: string; extraParams: ModelExtraParamValues };
+		result: WireModel;
+	};
 	"session.compact": { params: { sessionId: string; instructions?: string }; result: Ack };
 	"session.getStats": { params: { sessionId: string }; result: SessionStats };
 	"session.getCommands": { params: { sessionId: string }; result: SlashCommandInfo[] };
@@ -1808,6 +1863,12 @@ export interface WsMethodMap {
 		params: { workspaceId: string };
 		result: MediaCapture;
 	};
+	"android.emulator.keyevent": {
+		params: { key: AndroidKeyEvent };
+		result: Ack;
+	};
+	"android.emulator.stream.start": { params: Record<string, never>; result: Ack };
+	"android.emulator.stream.stop": { params: Record<string, never>; result: Ack };
 	"browser.state": { params: { workspaceId: string }; result: BrowserSession };
 	"browser.navigate": {
 		params: { workspaceId: string; url: string };
@@ -1829,6 +1890,77 @@ export interface WsMethodMap {
 	"browser.snapshot": {
 		params: { workspaceId: string; url?: string };
 		result: BrowserPageSnapshot;
+	};
+	"browser.engine.status": { params: { workspaceId: string }; result: BrowserEngineStatus };
+	"browser.stream.start": {
+		params: { workspaceId: string; width?: number; height?: number };
+		result: BrowserEngineStatus;
+	};
+	"browser.stream.stop": { params: { workspaceId: string }; result: Ack };
+	"browser.resize": {
+		params: { workspaceId: string; width: number; height: number; deviceScaleFactor?: number };
+		result: Ack;
+	};
+	"browser.back": { params: { workspaceId: string }; result: BrowserSession };
+	"browser.forward": { params: { workspaceId: string }; result: BrowserSession };
+	"browser.reload": { params: { workspaceId: string }; result: Ack };
+	"browser.pointer": {
+		params: {
+			workspaceId: string;
+			action: "down" | "up" | "move";
+			x: number;
+			y: number;
+			button?: "left" | "middle" | "right";
+			clickCount?: number;
+		};
+		result: Ack;
+	};
+	"browser.wheel": {
+		params: { workspaceId: string; x: number; y: number; deltaX: number; deltaY: number };
+		result: Ack;
+	};
+	"browser.key": {
+		params: {
+			workspaceId: string;
+			action: "down" | "up";
+			key: string;
+			code?: string;
+			keyCode?: number;
+			modifiers?: number;
+		};
+		result: Ack;
+	};
+	"browser.text": { params: { workspaceId: string; text: string }; result: Ack };
+	"browser.dialog.reply": {
+		params: { workspaceId: string; accept: boolean; promptText?: string };
+		result: Ack;
+	};
+	"browser.screenshot": {
+		params: { workspaceId: string; fullPage?: boolean };
+		result: CaptureFrame;
+	};
+	"browser.evaluate": {
+		params: { workspaceId: string; expression: string };
+		result: { value: unknown; error?: string };
+	};
+	"browser.elements": {
+		params: { workspaceId: string; selector?: string; limit?: number };
+		result: BrowserElementInfo[];
+	};
+	"browser.console.logs": {
+		params: { workspaceId: string; limit?: number; level?: string };
+		result: BrowserConsoleEntry[];
+	};
+	"browser.console.clear": { params: { workspaceId: string }; result: Ack };
+	"browser.network.logs": {
+		params: { workspaceId: string; limit?: number; failedOnly?: boolean };
+		result: BrowserNetworkEntry[];
+	};
+	"browser.network.clear": { params: { workspaceId: string }; result: Ack };
+	"browser.storage": { params: { workspaceId: string }; result: BrowserStorageSnapshot };
+	"browser.highlight": {
+		params: { workspaceId: string; selector: string; label?: string; durationMs?: number };
+		result: Ack;
 	};
 	"capture.save": {
 		params: {

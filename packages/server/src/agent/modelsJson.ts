@@ -59,6 +59,7 @@ const MODEL_FIELDS = [
 	"contextWindow",
 	"maxTokens",
 	"cost",
+	"extra_params",
 ] as const;
 
 let publishModelsJsonChange: (() => void) | null = null;
@@ -106,6 +107,9 @@ function projectModelDefinition(value: unknown): ProviderModelDefinition | null 
 	const projected: Record<string, unknown> = { id: value.id };
 	for (const key of MODEL_FIELDS.slice(1)) {
 		if (Object.hasOwn(value, key)) projected[key] = value[key];
+	}
+	if (!Object.hasOwn(projected, "extra_params") && Object.hasOwn(value, "extraParams")) {
+		projected.extra_params = value.extraParams;
 	}
 	const definitions: unknown = [projected];
 	return isProviderModelDefinitions(definitions) ? (definitions[0] ?? null) : null;

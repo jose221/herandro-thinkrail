@@ -1,4 +1,8 @@
-import { isProviderModelDefinitions, type ProviderModelDefinition } from "@thinkrail/contracts";
+import {
+	isModelExtraParams,
+	isProviderModelDefinitions,
+	type ProviderModelDefinition,
+} from "@thinkrail/contracts";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import {
@@ -16,6 +20,72 @@ import { getTransport } from "@/transport";
 
 function formatDefinitions(definitions: ProviderModelDefinition[]): string {
 	return JSON.stringify(definitions, null, 2);
+}
+
+const EFFORT_SUFFIX_RE = /\s+\((?:minimal|low|medium|high|xhigh|max)\)$/;
+
+function convertOpenAiModelsList(text: string): ProviderModelDefinition[] | null {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return null;
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+	const list = (parsed as { data?: unknown }).data;
+	if (!Array.isArray(list)) return null;
+	const rawIds = new Set(
+		list
+			.filter(
+				(entry): entry is Record<string, unknown> =>
+					typeof entry === "object" &&
+					entry !== null &&
+					typeof (entry as Record<string, unknown>).id === "string",
+			)
+			.map((entry) => entry.id as string),
+	);
+	const seen = new Set<string>();
+	const converted: ProviderModelDefinition[] = [];
+	for (const entry of list) {
+		if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
+		const item = entry as Record<string, unknown>;
+		if (typeof item.id !== "string" || item.id.trim() === "") continue;
+		const id = item.id.trim();
+		const baseCandidate = id.replace(EFFORT_SUFFIX_RE, "");
+		if (baseCandidate !== id && rawIds.has(baseCandidate)) continue;
+		if (seen.has(id)) continue;
+		seen.add(id);
+		const name =
+			typeof item.display_name === "string" && item.display_name.trim()
+				? item.display_name.trim()
+				: typeof item.name === "string" && item.name.trim()
+					? item.name.trim()
+					: id;
+		const reasoning =
+			item.supports_reasoning_effort === true ||
+			(Array.isArray(item.reasoning_effort_options) && item.reasoning_effort_options.length > 0) ||
+			item.reasoning === true;
+		const input: Array<"text" | "image"> =
+			item.is_multimodal === true ? ["text", "image"] : ["text"];
+		const rawExtra = item.extra_params ?? item.extraParams;
+		converted.push({
+			id,
+			name,
+			reasoning,
+			input,
+			contextWindow: 1_000_000,
+			maxTokens: 131_072,
+			cost: {
+				input: typeof item.input_price_per_mtok === "number" ? item.input_price_per_mtok : 0,
+				output: typeof item.output_price_per_mtok === "number" ? item.output_price_per_mtok : 0,
+				cacheRead:
+					typeof item.input_cache_price_per_mtok === "number" ? item.input_cache_price_per_mtok : 0,
+				cacheWrite: 0,
+			},
+			...(isModelExtraParams(rawExtra) && rawExtra.length > 0 ? { extra_params: rawExtra } : {}),
+		});
+	}
+	return isProviderModelDefinitions(converted) ? converted : null;
 }
 
 function parseDefinitions(text: string): ProviderModelDefinition[] | null {
@@ -58,6 +128,7 @@ export function ProviderModelsDialog({
 	const [saveFailed, setSaveFailed] = useState(false);
 	const requestSequence = useRef(0);
 	const parsed = parseDefinitions(draft);
+	const importable = parsed === null ? convertOpenAiModelsList(draft) : null;
 	const valid = parsed !== null;
 	const dirty = draft !== formatDefinitions(definitions);
 
@@ -101,6 +172,26 @@ export function ProviderModelsDialog({
 		];
 		setDraft(formatDefinitions(next));
 		setSaveFailed(false);
+	};
+
+	const convertImportedList = () => {
+		if (!importable) {
+			toast.error(t("settings.providers.importModelsInvalid"));
+			return;
+		}
+		const merged = [...definitions];
+		const existingIds = new Set(merged.map((m) => m.id));
+		for (const item of importable) {
+			const idx = merged.findIndex((m) => m.id === item.id);
+			if (idx >= 0) merged[idx] = { ...merged[idx], ...item };
+			else if (!existingIds.has(item.id)) {
+				merged.push(item);
+				existingIds.add(item.id);
+			}
+		}
+		setDraft(formatDefinitions(merged));
+		setSaveFailed(false);
+		toast.success(t("settings.providers.importModelsSuccess", { count: importable.length }));
 	};
 
 	const save = () => {
@@ -183,15 +274,29 @@ export function ProviderModelsDialog({
 				</div>
 
 				<DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between">
-					<Button
-						type="button"
-						variant="outline"
-						size="m"
-						disabled={!valid || loading || saving}
-						onClick={addModel}
-					>
-						{t("settings.providers.addModel")}
-					</Button>
+					<div className="flex flex-wrap gap-8">
+						<Button
+							type="button"
+							variant="outline"
+							size="m"
+							disabled={!valid || loading || saving}
+							onClick={addModel}
+						>
+							{t("settings.providers.addModel")}
+						</Button>
+						{importable ? (
+							<Button
+								type="button"
+								variant="outline"
+								size="m"
+								disabled={loading || saving}
+								onClick={convertImportedList}
+								data-testid="provider-models-convert-list"
+							>
+								{t("settings.providers.importModelsList")}
+							</Button>
+						) : null}
+					</div>
 					<div className="flex flex-col-reverse gap-8 sm:flex-row">
 						<Button
 							type="button"

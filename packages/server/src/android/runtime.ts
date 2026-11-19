@@ -10,9 +10,38 @@ import {
 	type AndroidEmulatorScreenshot,
 	type AndroidEmulatorState,
 	type AndroidEmulatorStatus,
+	type AndroidFramePush,
+	type AndroidKeyEvent,
 	CAPTURE_LIMITS,
 } from "@thinkrail/contracts";
 import { runBounded } from "../subprocess";
+
+export type AndroidFramePublisher = (frame: AndroidFramePush) => void;
+
+let androidFramePublisher: AndroidFramePublisher | null = null;
+
+export function setAndroidFramePublisher(publisher: AndroidFramePublisher | null): void {
+	androidFramePublisher = publisher;
+}
+
+const KEYEVENT_CODES: Record<AndroidKeyEvent, number> = {
+	home: 3,
+	back: 4,
+	recents: 187,
+	volume_up: 24,
+	volume_down: 25,
+	enter: 66,
+};
+
+function hashBytesFnv1a64(bytes: Uint8Array): string {
+	let hash = 0xcbf29ce484222325n;
+	const prime = 0x100000001b3n;
+	for (let i = 0; i < bytes.length; i += 1) {
+		hash ^= BigInt(bytes[i] ?? 0);
+		hash = BigInt.asUintN(64, hash * prime);
+	}
+	return hash.toString(16);
+}
 
 export const ANDROID_EMULATOR_IDLE_TTL_MS = 5 * 60 * 1000;
 
@@ -243,6 +272,11 @@ export class AndroidEmulatorManager {
 	private stopPromise: Promise<AndroidEmulatorStatus> | undefined;
 	private apkInstallInProgress = false;
 	private recording: ActiveRecording | undefined;
+	private streamSubscribers = 0;
+	private streamLoopPromise: Promise<void> | undefined;
+	private streamWake: (() => void) | undefined;
+	private burstUntil = 0;
+	private lastFrameHash: string | undefined;
 
 	constructor(options: { toolchain?: AndroidToolchain; idleTtlMs?: number } = {}) {
 		this.toolchain = options.toolchain ?? resolveAndroidToolchain();
@@ -436,6 +470,8 @@ export class AndroidEmulatorManager {
 	}
 
 	private async stopActive(): Promise<AndroidEmulatorStatus> {
+		this.stopStreamLoop();
+		this.lastFrameHash = undefined;
 		await this.cancelRecording();
 		const active = this.active;
 		if (!active || active.exited) {
@@ -678,6 +714,7 @@ export class AndroidEmulatorManager {
 			coordinate(x),
 			coordinate(y),
 		]);
+		this.triggerStreamBurst();
 	}
 
 	async typeText(text: string): Promise<void> {
@@ -699,6 +736,7 @@ export class AndroidEmulatorManager {
 		this.touch(active);
 		const encoded = text.replaceAll(" ", "%s");
 		await this.runDeviceAction(active.serial, ["shell", "input", "text", shellQuote(encoded)]);
+		this.triggerStreamBurst();
 	}
 
 	async swipe(x1: number, y1: number, x2: number, y2: number, durationMs = 300): Promise<void> {
@@ -717,6 +755,113 @@ export class AndroidEmulatorManager {
 			coordinate(y2),
 			String(durationMs),
 		]);
+		this.triggerStreamBurst();
+	}
+
+	async keyevent(key: AndroidKeyEvent): Promise<void> {
+		if (!Object.hasOwn(KEYEVENT_CODES, key)) {
+			throw new Error(`Unsupported Android key event: ${String(key)}`);
+		}
+		const active = await this.requireRunning();
+		this.touch(active);
+		await this.runDeviceAction(active.serial, [
+			"shell",
+			"input",
+			"keyevent",
+			String(KEYEVENT_CODES[key]),
+		]);
+		this.triggerStreamBurst();
+	}
+
+	startStream(): void {
+		this.streamSubscribers += 1;
+		this.lastFrameHash = undefined;
+		this.triggerStreamBurst(3_000);
+		this.ensureStreamLoop();
+	}
+
+	stopStream(): void {
+		this.streamSubscribers = Math.max(0, this.streamSubscribers - 1);
+		if (this.streamSubscribers === 0) {
+			this.stopStreamLoop();
+		}
+	}
+
+	private triggerStreamBurst(durationMs = 3_000): void {
+		if (this.streamSubscribers <= 0) return;
+		this.burstUntil = Math.max(this.burstUntil, Date.now() + durationMs);
+		const wake = this.streamWake;
+		this.streamWake = undefined;
+		wake?.();
+	}
+
+	private stopStreamLoop(): void {
+		this.burstUntil = 0;
+		const wake = this.streamWake;
+		this.streamWake = undefined;
+		wake?.();
+	}
+
+	private ensureStreamLoop(): void {
+		if (this.streamLoopPromise || this.streamSubscribers <= 0) return;
+		const loop = (async () => {
+			while (this.streamSubscribers > 0) {
+				const active = this.active;
+				if (!active || active.exited || active.state !== "running" || !this.toolchain.adb) {
+					await this.sleepOrWake(500);
+					continue;
+				}
+				try {
+					const result = await runBounded(
+						[...this.toolchain.adb, "-s", active.serial, "exec-out", "screencap", "-p"],
+						{
+							timeoutMs: 8_000,
+							stdout: "bytes",
+							maxOutputBytes: MAX_SCREENSHOT_BYTES,
+						},
+					);
+					if (result.ok && !result.truncated && result.out.length > 24 && androidFramePublisher) {
+						const hash = hashBytesFnv1a64(result.out);
+						if (hash !== this.lastFrameHash) {
+							this.lastFrameHash = hash;
+							const { width, height } = checkPng(result.out);
+							androidFramePublisher({
+								data: Buffer.from(result.out).toString("base64"),
+								mimeType: "image/png",
+								width,
+								height,
+							});
+						}
+					}
+				} catch {
+					// Transient capture failures are ignored while the emulator boots or settles.
+				}
+				if (this.streamSubscribers <= 0) break;
+				const delayMs = Date.now() < this.burstUntil ? 140 : 500;
+				await this.sleepOrWake(delayMs);
+			}
+		})().finally(() => {
+			if (this.streamLoopPromise === loop) {
+				this.streamLoopPromise = undefined;
+			}
+		});
+		this.streamLoopPromise = loop;
+	}
+
+	private sleepOrWake(ms: number): Promise<void> {
+		return new Promise((resolveSleep) => {
+			const timer = setTimeout(() => {
+				if (this.streamWake === wake) this.streamWake = undefined;
+				resolveSleep();
+			}, ms);
+			timer.unref();
+			const wake = () => {
+				clearTimeout(timer);
+				if (this.streamWake === wake) this.streamWake = undefined;
+				resolveSleep();
+			};
+			this.streamWake = wake;
+		});
 	}
 
 	async installApk(workspaceRoot: string, workspacePath: string): Promise<void> {
@@ -738,6 +883,7 @@ export class AndroidEmulatorManager {
 						"Android rejected the APK. Check its compatibility and installation state.",
 					);
 				}
+				this.triggerStreamBurst();
 			} finally {
 				await rm(snapshot.directory, { recursive: true, force: true });
 			}

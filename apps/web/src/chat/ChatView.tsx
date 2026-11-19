@@ -1,4 +1,6 @@
 import {
+	EXTRA_PARAMS_PROTOCOL_VERSION,
+	type ModelExtraParamValues,
 	type PromptHit,
 	type QueueLane,
 	type ResourceKind,
@@ -152,6 +154,10 @@ export default function ChatView({
 	const thinkingLevel = useAppStore(
 		(s) => s.sessions[sessionId]?.thinkingLevel ?? EMPTY_RUNTIME.thinkingLevel,
 	);
+	const extraParams = useAppStore(
+		(s) => s.sessions[sessionId]?.extraParams ?? EMPTY_RUNTIME.extraParams,
+	);
+	const protocolVersion = useAppStore((s) => s.protocolVersion);
 	const extUiStatus = useAppStore(
 		(s) => s.sessions[sessionId]?.extUiStatus ?? EMPTY_RUNTIME.extUiStatus,
 	);
@@ -556,6 +562,26 @@ export default function ChatView({
 		void requestLevel(level, thinkingLevel);
 	};
 
+	const supportsExtraParams =
+		protocolVersion !== null && protocolVersion >= EXTRA_PARAMS_PROTOCOL_VERSION;
+	const onSelectExtraParams = useCallback(
+		(nextExtraParams: ModelExtraParamValues) => {
+			if (!supportsExtraParams) return;
+			const previous = useAppStore.getState().sessions[sessionId]?.extraParams ?? {};
+			useAppStore.getState().setSessionExtraParams(sessionId, nextExtraParams);
+			void getTransport()
+				.request("session.setExtraParams", { sessionId, extraParams: nextExtraParams })
+				.then((updatedModel) => {
+					useAppStore.getState().setCurrentModel(sessionId, updatedModel);
+				})
+				.catch((error: unknown) => {
+					useAppStore.getState().setSessionExtraParams(sessionId, previous);
+					toast.error(errorText(error), translate("chat.view.extraParamsChangeFailed"));
+				});
+		},
+		[sessionId, supportsExtraParams],
+	);
+
 	const onSelectModel = ({ model, level }: ModelSelection) => {
 		if (sameModel(model, currentModel)) {
 			if (level) onSelectThinking(level);
@@ -652,7 +678,7 @@ export default function ChatView({
 			const detail = (event as CustomEvent<MediaCapturePayload>).detail;
 			if (detail.workspaceId !== workspaceId || detail.sessionId !== sessionId) return;
 			restoreTextToDraft(detail.note);
-			if (detail.capture.kind === "image" && detail.image) {
+			if (detail.capture?.kind === "image" && detail.image) {
 				imageCaptures.current.set(detail.capture.fileName, {
 					id: detail.capture.id,
 					note: detail.note,
@@ -667,7 +693,7 @@ export default function ChatView({
 						},
 					},
 				]);
-			} else if (detail.capture.kind === "video") {
+			} else if (detail.capture?.kind === "video") {
 				composerRef.current?.attachVideo({
 					id: detail.capture.id,
 					name: detail.capture.fileName,
@@ -1185,11 +1211,13 @@ export default function ChatView({
 					onRefreshModels={onRefreshModels}
 					currentModel={currentModel}
 					thinkingLevel={thinkingLevel}
+					extraParams={extraParams}
 					modelPreferences={modelPreferences}
 					onMentionQuery={onMentionQuery}
 					onSlashActive={setSlashActive}
 					onSelectModel={onSelectModel}
 					onSelectThinking={onSelectThinking}
+					{...(supportsExtraParams ? { onSelectExtraParams } : {})}
 					rightAction={composerRightAction}
 					onSubmit={onSubmit}
 					onAbort={onAbort}

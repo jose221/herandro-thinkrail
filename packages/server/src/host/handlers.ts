@@ -19,9 +19,12 @@ import {
 	ACP_PROTOCOL_VERSION,
 	ACP_START_TIMEOUT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
+	ANDROID_STREAM_PROTOCOL_VERSION,
 	BRANCH_STATUS_PROTOCOL_VERSION,
+	BROWSER_DEVTOOLS_PROTOCOL_VERSION,
 	HTTP_REQUEST_LIMITS,
 	isControlMessage,
+	isModelExtraParamValues,
 	isSpeechModel,
 	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
@@ -94,6 +97,7 @@ import {
 	saveProviderModelDefinitions,
 	sendReviewFixToSession,
 	setModelContextWindow,
+	setSessionExtraParams,
 	setSessionModel,
 	setSessionThinkingLevel,
 	steerSession,
@@ -137,6 +141,24 @@ import {
 import { providerFromRemoteUrl } from "../branch-review";
 import {
 	activeBrowserUrl,
+	browserEngineBack,
+	browserEngineClearConsole,
+	browserEngineClearNetwork,
+	browserEngineConsoleLogs,
+	browserEngineElements,
+	browserEngineEvaluate,
+	browserEngineForward,
+	browserEngineHighlight,
+	browserEngineKey,
+	browserEngineNetworkLogs,
+	browserEnginePointer,
+	browserEngineReload,
+	browserEngineReplyDialog,
+	browserEngineScreenshot,
+	browserEngineStatus,
+	browserEngineStorage,
+	browserEngineText,
+	browserEngineWheel,
 	browserSession,
 	closeBrowserTab,
 	fetchPageSnapshot,
@@ -144,7 +166,10 @@ import {
 	listDevServerPorts,
 	navigateBrowser,
 	openBrowserTab,
+	resizeBrowserEngine,
 	selectBrowserTab,
+	startBrowserStream,
+	stopBrowserStream,
 } from "../browser";
 import { deleteCapture, saveCapture } from "../captures";
 import { forgetWorkspaceChanges, revertChange, undoChange } from "../changes";
@@ -1452,6 +1477,12 @@ const handlers: WsHandlers = {
 		setSessionThinkingLevel(p.sessionId, p.level);
 		return { ok: true } as const;
 	},
+	"session.setExtraParams": async (p) => {
+		if (!isModelExtraParamValues(p.extraParams)) {
+			throw new Error("Invalid extra parameters");
+		}
+		return setSessionExtraParams(p.sessionId, p.extraParams);
+	},
 	"session.compact": async (p) => {
 		await compactSession(p.sessionId, p.instructions);
 		return { ok: true } as const;
@@ -1569,6 +1600,18 @@ const handlers: WsHandlers = {
 			durationMs: recording.durationMs,
 		});
 	},
+	"android.emulator.keyevent": async (params) => {
+		await getAndroidEmulatorManager().keyevent(params.key);
+		return { ok: true } as const;
+	},
+	"android.emulator.stream.start": () => {
+		getAndroidEmulatorManager().startStream();
+		return { ok: true } as const;
+	},
+	"android.emulator.stream.stop": () => {
+		getAndroidEmulatorManager().stopStream();
+		return { ok: true } as const;
+	},
 	"browser.state": (params) => {
 		getWorkspace(params.workspaceId);
 		return browserSession(params.workspaceId);
@@ -1595,6 +1638,127 @@ const handlers: WsHandlers = {
 		const url = params.url ?? activeBrowserUrl(params.workspaceId);
 		if (url === "about:blank") throw new Error("Open a page in the browser first");
 		return fetchPageSnapshot(url);
+	},
+	"browser.engine.status": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineStatus();
+	},
+	"browser.stream.start": (params) => {
+		getWorkspace(params.workspaceId);
+		return startBrowserStream(params.workspaceId, params.width, params.height);
+	},
+	"browser.stream.stop": async (params) => {
+		getWorkspace(params.workspaceId);
+		await stopBrowserStream(params.workspaceId);
+		return { ok: true } as const;
+	},
+	"browser.resize": async (params) => {
+		getWorkspace(params.workspaceId);
+		await resizeBrowserEngine(
+			params.workspaceId,
+			params.width,
+			params.height,
+			params.deviceScaleFactor,
+		);
+		return { ok: true } as const;
+	},
+	"browser.back": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineBack(params.workspaceId);
+		return browserSession(params.workspaceId);
+	},
+	"browser.forward": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineForward(params.workspaceId);
+		return browserSession(params.workspaceId);
+	},
+	"browser.reload": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineReload(params.workspaceId);
+		return { ok: true } as const;
+	},
+	"browser.pointer": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEnginePointer(
+			params.workspaceId,
+			params.action,
+			params.x,
+			params.y,
+			params.button,
+			params.clickCount,
+		);
+		return { ok: true } as const;
+	},
+	"browser.wheel": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineWheel(params.workspaceId, params.x, params.y, params.deltaX, params.deltaY);
+		return { ok: true } as const;
+	},
+	"browser.key": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineKey(
+			params.workspaceId,
+			params.action,
+			params.key,
+			params.code,
+			params.keyCode,
+			params.modifiers,
+		);
+		return { ok: true } as const;
+	},
+	"browser.text": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineText(params.workspaceId, params.text);
+		return { ok: true } as const;
+	},
+	"browser.dialog.reply": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineReplyDialog(params.workspaceId, params.accept, params.promptText);
+		return { ok: true } as const;
+	},
+	"browser.screenshot": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineScreenshot(params.workspaceId, params.fullPage);
+	},
+	"browser.evaluate": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineEvaluate(params.workspaceId, params.expression);
+	},
+	"browser.elements": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineElements(params.workspaceId, params.selector, params.limit);
+	},
+	"browser.console.logs": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineConsoleLogs(params.workspaceId, params.limit, params.level);
+	},
+	"browser.console.clear": (params) => {
+		getWorkspace(params.workspaceId);
+		browserEngineClearConsole(params.workspaceId);
+		return { ok: true } as const;
+	},
+	"browser.network.logs": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineNetworkLogs(params.workspaceId, params.limit, params.failedOnly);
+	},
+	"browser.network.clear": (params) => {
+		getWorkspace(params.workspaceId);
+		browserEngineClearNetwork(params.workspaceId);
+		return { ok: true } as const;
+	},
+	"browser.storage": (params) => {
+		getWorkspace(params.workspaceId);
+		return browserEngineStorage(params.workspaceId);
+	},
+	"browser.highlight": async (params) => {
+		getWorkspace(params.workspaceId);
+		await browserEngineHighlight(
+			params.workspaceId,
+			params.selector,
+			params.label,
+			params.durationMs,
+		);
+		return { ok: true } as const;
 	},
 	"capture.save": (params) => {
 		getWorkspace(params.workspaceId);
@@ -2173,6 +2337,13 @@ export async function handleRequest(
 		throw new Error("Android emulator controls require a newer host protocol.");
 	}
 	if (
+		(method === "android.emulator.keyevent" || method.startsWith("android.emulator.stream.")) &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < ANDROID_STREAM_PROTOCOL_VERSION
+	) {
+		throw new Error("Android real-time streaming controls require a newer host protocol.");
+	}
+	if (
 		method.startsWith("acp.") &&
 		ctx.protocolVersion !== undefined &&
 		ctx.protocolVersion < ACP_PROTOCOL_VERSION
@@ -2217,6 +2388,30 @@ export async function handleRequest(
 		ctx.protocolVersion < WORKSPACE_TOOLS_PROTOCOL_VERSION
 	) {
 		throw new Error("Workspace tools require a newer host protocol.");
+	}
+	if (
+		(method === "browser.engine.status" ||
+			method.startsWith("browser.stream.") ||
+			method === "browser.resize" ||
+			method === "browser.back" ||
+			method === "browser.forward" ||
+			method === "browser.reload" ||
+			method === "browser.pointer" ||
+			method === "browser.wheel" ||
+			method === "browser.key" ||
+			method === "browser.text" ||
+			method.startsWith("browser.dialog.") ||
+			method === "browser.screenshot" ||
+			method === "browser.evaluate" ||
+			method === "browser.elements" ||
+			method.startsWith("browser.console.") ||
+			method.startsWith("browser.network.") ||
+			method === "browser.storage" ||
+			method === "browser.highlight") &&
+		ctx.protocolVersion !== undefined &&
+		ctx.protocolVersion < BROWSER_DEVTOOLS_PROTOCOL_VERSION
+	) {
+		throw new Error("Browser DevTools require a newer host protocol.");
 	}
 	if (
 		method.startsWith("provider.models.") &&

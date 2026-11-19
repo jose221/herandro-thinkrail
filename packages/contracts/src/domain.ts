@@ -1,6 +1,15 @@
 import type { KeybindingOverrides } from "./keybindingChord";
 import type { MatchTier } from "./match";
-import type { SessionState, ThinkingLevel, WireModel } from "./piProtocol";
+import type {
+	ExtraParamPrimitive,
+	ModelExtraParam,
+	ModelExtraParamOption,
+	ModelExtraParamPricingRule,
+	ModelExtraParamValues,
+	SessionState,
+	ThinkingLevel,
+	WireModel,
+} from "./piProtocol";
 
 export interface SessionStateRecord {
 	sessionId: string;
@@ -1190,6 +1199,7 @@ export interface ProviderModelDefinition {
 	contextWindow?: number;
 	maxTokens?: number;
 	cost?: ProviderModelCost;
+	extra_params?: ModelExtraParam[];
 }
 
 /** Editable connection settings for one Pi models.json provider. Never carries the API key. */
@@ -1257,6 +1267,119 @@ function isProviderModelCost(value: unknown): value is ProviderModelCost {
 	);
 }
 
+function isExtraParamPrimitive(value: unknown): value is ExtraParamPrimitive {
+	return (
+		value === null ||
+		typeof value === "string" ||
+		(typeof value === "number" && Number.isFinite(value)) ||
+		typeof value === "boolean"
+	);
+}
+
+function isModelExtraParamPricingRule(value: unknown): value is ModelExtraParamPricingRule {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const rule = value as Record<string, unknown>;
+	return (
+		Object.keys(rule).every((key) => key === "value" || key === "operator") &&
+		typeof rule.value === "number" &&
+		Number.isFinite(rule.value) &&
+		rule.value >= 0 &&
+		rule.value <= 1_000 &&
+		(rule.operator === "multiply" || rule.operator === "add")
+	);
+}
+
+function isModelExtraParamOption(value: unknown): value is ModelExtraParamOption {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const option = value as Record<string, unknown>;
+	const keys = Object.keys(option);
+	if (!keys.every((key) => key === "label" || key === "value" || key === "pricing")) return false;
+	if (
+		typeof option.label !== "string" ||
+		option.label.length === 0 ||
+		option.label.length > 160 ||
+		option.label.includes("\0")
+	)
+		return false;
+	if (!isExtraParamPrimitive(option.value)) return false;
+	if (option.pricing !== undefined) {
+		if (
+			typeof option.pricing !== "object" ||
+			option.pricing === null ||
+			Array.isArray(option.pricing)
+		)
+			return false;
+		const entries = Object.entries(option.pricing);
+		if (entries.length > 16) return false;
+		for (const [scope, rule] of entries) {
+			if (scope.length === 0 || scope.length > 32 || !isModelExtraParamPricingRule(rule))
+				return false;
+		}
+	}
+	return true;
+}
+
+function isModelExtraParam(value: unknown): value is ModelExtraParam {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const param = value as Record<string, unknown>;
+	const keys = Object.keys(param);
+	if (
+		!keys.every((key) => ["name", "type", "values", "default", "options"].includes(key)) ||
+		typeof param.name !== "string" ||
+		param.name.trim() !== param.name ||
+		param.name.length === 0 ||
+		param.name.length > 128 ||
+		param.name.includes("\0") ||
+		typeof param.type !== "string" ||
+		param.type.length === 0 ||
+		param.type.length > 64 ||
+		param.type.includes("\0")
+	) {
+		return false;
+	}
+	if (
+		param.values !== undefined &&
+		(!Array.isArray(param.values) ||
+			param.values.length > 64 ||
+			!param.values.every(isExtraParamPrimitive))
+	) {
+		return false;
+	}
+	if (param.default !== undefined && !isExtraParamPrimitive(param.default)) return false;
+	if (
+		param.options !== undefined &&
+		(!Array.isArray(param.options) ||
+			param.options.length > 64 ||
+			!param.options.every(isModelExtraParamOption))
+	) {
+		return false;
+	}
+	return true;
+}
+
+export function isModelExtraParams(value: unknown): value is ModelExtraParam[] {
+	if (!Array.isArray(value) || value.length > 32) return false;
+	const names = new Set<string>();
+	for (const entry of value) {
+		if (!isModelExtraParam(entry) || names.has(entry.name)) return false;
+		names.add(entry.name);
+	}
+	return true;
+}
+
+export function isModelExtraParamValues(value: unknown): value is ModelExtraParamValues {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const entries = Object.entries(value);
+	if (entries.length > 32) return false;
+	return entries.every(
+		([key, entryValue]) =>
+			key.length > 0 &&
+			key.length <= 128 &&
+			!key.includes("\0") &&
+			isExtraParamPrimitive(entryValue),
+	);
+}
+
 function isProviderModelDefinition(value: unknown): value is ProviderModelDefinition {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const model = value as Record<string, unknown>;
@@ -1270,7 +1393,16 @@ function isProviderModelDefinition(value: unknown): value is ProviderModelDefini
 			new Set(model.input).size === model.input.length);
 	return (
 		keys.every((key) =>
-			["id", "name", "reasoning", "input", "contextWindow", "maxTokens", "cost"].includes(key),
+			[
+				"id",
+				"name",
+				"reasoning",
+				"input",
+				"contextWindow",
+				"maxTokens",
+				"cost",
+				"extra_params",
+			].includes(key),
 		) &&
 		typeof model.id === "string" &&
 		model.id.trim() === model.id &&
@@ -1293,7 +1425,8 @@ function isProviderModelDefinition(value: unknown): value is ProviderModelDefini
 			(Number.isSafeInteger(model.maxTokens) &&
 				(model.maxTokens as number) > 0 &&
 				(model.maxTokens as number) <= 10_000_000)) &&
-		(model.cost === undefined || isProviderModelCost(model.cost))
+		(model.cost === undefined || isProviderModelCost(model.cost)) &&
+		(model.extra_params === undefined || isModelExtraParams(model.extra_params))
 	);
 }
 
@@ -2901,6 +3034,93 @@ export interface BrowserPageSnapshot {
 	links: string[];
 	truncated: boolean;
 	elapsedMs: number;
+}
+
+export type BrowserConsoleLevel = "log" | "info" | "warn" | "error" | "debug";
+
+export interface BrowserConsoleEntry {
+	id: string;
+	level: BrowserConsoleLevel;
+	text: string;
+	timestamp: number;
+	url?: string;
+	line?: number;
+}
+
+export interface BrowserNetworkEntry {
+	id: string;
+	url: string;
+	method: string;
+	status: number;
+	resourceType: string;
+	timestamp: number;
+	durationMs: number;
+	error?: string;
+	blockedReason?: string;
+	corsError?: string;
+	requestHeaders?: Record<string, string>;
+	responseHeaders?: Record<string, string>;
+}
+
+export interface BrowserStorageSnapshot {
+	local: Array<{ key: string; value: string }>;
+	session: Array<{ key: string; value: string }>;
+}
+
+export interface BrowserElementInfo {
+	tag: string;
+	id?: string;
+	text: string;
+	selector: string;
+	role?: string;
+	type?: string;
+	href?: string;
+	placeholder?: string;
+	rect: { x: number; y: number; width: number; height: number };
+}
+
+export interface BrowserDialogState {
+	dialogType: "alert" | "confirm" | "prompt" | "beforeunload";
+	message: string;
+	defaultValue?: string;
+}
+
+export interface BrowserEngineStatus {
+	available: boolean;
+	running: boolean;
+	error?: string;
+}
+
+export interface BrowserFramePush {
+	workspaceId: string;
+	mimeType: "image/jpeg";
+	data: string;
+	width: number;
+	height: number;
+}
+
+export interface BrowserConsolePush {
+	workspaceId: string;
+	entry: BrowserConsoleEntry;
+}
+
+export interface BrowserNetworkPush {
+	workspaceId: string;
+	entry: BrowserNetworkEntry;
+}
+
+export interface BrowserDialogPush {
+	workspaceId: string;
+	dialog: BrowserDialogState | null;
+}
+
+export type AndroidKeyEvent = "home" | "back" | "recents" | "volume_up" | "volume_down" | "enter";
+
+export interface AndroidFramePush {
+	mimeType: "image/jpeg" | "image/png";
+	data: string;
+	width: number;
+	height: number;
 }
 
 export const BROWSER_LIMITS = {

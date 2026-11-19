@@ -5,7 +5,7 @@ export const MEDIA_CAPTURE_EVENT = "thinkrail:media-capture";
 export interface MediaCapturePayload {
 	workspaceId: string;
 	sessionId: string;
-	capture: MediaCapture;
+	capture?: MediaCapture;
 	image?: CaptureFrame;
 	poster?: CaptureFrame;
 	frames?: CaptureFrame[];

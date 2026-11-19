@@ -46,6 +46,8 @@ export {
 	isLineWidth,
 	isLiveResource,
 	isLocalePreference,
+	isModelExtraParams,
+	isModelExtraParamValues,
 	isPlanReviewResult,
 	isProviderModelDefinitions,
 	isQuestionPanelHeight,

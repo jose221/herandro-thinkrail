@@ -1,4 +1,4 @@
-import type { Workspace } from "@thinkrail/contracts";
+import type { ModelExtraParamValues, Workspace } from "@thinkrail/contracts";
 import { type CreateSessionResult, createSession } from "../agent";
 import { ensureWorkspaceScratchDir } from "../workspaces";
 import { type NewChatModelRequest, noteNewChat, resolveNewChatModel } from "./newChatModel";
@@ -10,7 +10,7 @@ export interface ChatStartOptions {
 
 export async function startChatSession(
 	workspace: Workspace,
-	requested: NewChatModelRequest,
+	requested: NewChatModelRequest & { extraParams?: ModelExtraParamValues },
 	{ pick = false, assertClaimed = () => {} }: ChatStartOptions = {},
 ): Promise<CreateSessionResult> {
 	const defaults = await resolveNewChatModel(requested);
@@ -23,6 +23,7 @@ export async function startChatSession(
 			workspaceId: workspace.id,
 			...(defaults.model ? { model: defaults.model } : {}),
 			thinkingLevel: defaults.thinkingLevel,
+			...(requested.extraParams ? { extraParams: requested.extraParams } : {}),
 		});
 	} catch (error) {
 		assertClaimed();

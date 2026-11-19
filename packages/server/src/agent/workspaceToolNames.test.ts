@@ -22,6 +22,17 @@ test("browser tools stay scoped to the workspace browser", () => {
 		"browser_select_tab",
 		"browser_list_ports",
 		"browser_read_page",
+		"browser_screenshot",
+		"browser_click",
+		"browser_type",
+		"browser_press_key",
+		"browser_evaluate",
+		"browser_get_elements",
+		"browser_console_logs",
+		"browser_network_requests",
+		"browser_storage",
+		"browser_set_viewport",
+		"browser_highlight",
 	]);
 });
 

@@ -1,3 +1,33 @@
+export {
+	type BrowserRealtimePublishers,
+	browserEngineBack,
+	browserEngineClearConsole,
+	browserEngineClearNetwork,
+	browserEngineClick,
+	browserEngineConsoleLogs,
+	browserEngineElements,
+	browserEngineEvaluate,
+	browserEngineForward,
+	browserEngineHighlight,
+	browserEngineKey,
+	browserEngineNavigate,
+	browserEngineNetworkLogs,
+	browserEnginePointer,
+	browserEnginePressKey,
+	browserEngineReload,
+	browserEngineReplyDialog,
+	browserEngineScreenshot,
+	browserEngineStatus,
+	browserEngineStorage,
+	browserEngineText,
+	browserEngineType,
+	browserEngineWheel,
+	resizeBrowserEngine,
+	setBrowserRealtimePublishers,
+	startBrowserStream,
+	stopBrowserEngine,
+	stopBrowserStream,
+} from "./cdp";
 export { fetchPageSnapshot } from "./page";
 export { listDevServerPorts } from "./ports";
 export {

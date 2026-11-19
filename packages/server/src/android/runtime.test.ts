@@ -325,3 +325,18 @@ test("stops the owned emulator after its idle TTL", async () => {
 
 	expect(await manager.status()).toMatchObject({ state: "stopped" });
 });
+
+test("sends bounded hardware keyevents to the owned emulator", async () => {
+	const { manager, callsPath } = fixture();
+	await manager.start("Pixel_8_API_35");
+	await manager.keyevent("back");
+	await manager.keyevent("home");
+	await manager.stop();
+
+	const calls = readFileSync(callsPath, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as string[]);
+	expect(calls.some((args) => args.includes("keyevent") && args.includes("4"))).toBe(true);
+	expect(calls.some((args) => args.includes("keyevent") && args.includes("3"))).toBe(true);
+});

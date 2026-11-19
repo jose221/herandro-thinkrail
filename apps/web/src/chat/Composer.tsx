@@ -8,7 +8,12 @@ import {
 	RiSparkling2Line as Sparkles,
 	RiStopFill as StopFill,
 } from "@remixicon/react";
-import type { ComposerGrowthLimit, ThinkingLevel, WireModel } from "@thinkrail/contracts";
+import type {
+	ComposerGrowthLimit,
+	ModelExtraParamValues,
+	ThinkingLevel,
+	WireModel,
+} from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
@@ -56,6 +61,7 @@ import {
 	type ModelEffortPickerHandle,
 	type ModelSelection,
 } from "./ModelEffortPicker";
+import { ModelExtraParamsPicker } from "./ModelExtraParamsPicker";
 import { isModelCommand, parseModelCommand } from "./nativeCommands";
 import {
 	imagePasteDropHandlers,
@@ -190,11 +196,13 @@ interface ComposerProps {
 	onRefreshModels: (force: boolean) => void;
 	currentModel: WireModel | null;
 	thinkingLevel: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 	modelPreferences: ModelPreferences;
 	onMentionQuery: (query: string | null) => void;
 	onSlashActive: (active: boolean) => void;
 	onSelectModel: (selection: ModelSelection) => void;
 	onSelectThinking: (level: ThinkingLevel) => void;
+	onSelectExtraParams?: (values: ModelExtraParamValues) => void;
 	rightAction?: ReactNode;
 	onSubmit: (
 		text: string,
@@ -244,11 +252,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 		onRefreshModels,
 		currentModel,
 		thinkingLevel,
+		extraParams,
 		modelPreferences,
 		onMentionQuery,
 		onSlashActive,
 		onSelectModel,
 		onSelectThinking,
+		onSelectExtraParams,
 		rightAction,
 		onSubmit,
 		onAbort,
@@ -722,7 +732,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 						expanded && growthLimit === "half-chat" && "max-h-[50cqh]",
 					)}
 				>
-					<div className="col-start-1 row-start-2 flex min-w-0 items-center self-end">
+					<div className="col-start-1 row-start-2 flex min-w-0 items-center gap-4 self-end">
 						<ModelEffortPicker
 							ref={pickerRef}
 							models={models}
@@ -735,6 +745,13 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
 							preferences={modelPreferences}
 							className="max-w-[60vw] px-4 sm:max-w-[320px]"
 						/>
+						{currentModel?.extraParams?.length && onSelectExtraParams ? (
+							<ModelExtraParamsPicker
+								params={currentModel.extraParams}
+								values={extraParams ?? {}}
+								onChange={onSelectExtraParams}
+							/>
+						) : null}
 					</div>
 					<div
 						className={cn(

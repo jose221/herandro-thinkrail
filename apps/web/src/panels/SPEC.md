@@ -19,8 +19,9 @@ ThinkRail's filesystem and terminal permission callbacks, and distinguishes a st
 missing executable or protocol failure. A panel fills its container and never knows its arrangement (so the mobile shell is
 an additive layer, not a rewrite).
 
-`AndroidEmulatorPane` uses only contracts and transport for Android protocol v100, and gates screen
-capture/recording on v108. It waits for a compatible host before making requests, never starts an
+`AndroidEmulatorPane` uses only contracts and transport for Android protocol v100, gates screen
+capture/recording on v108, and gates adaptive real-time frame streaming (`android.frame`), hardware
+device keys, and region capture annotation on v129. It waits for a compatible host before making requests, never starts an
 emulator on mount or status polling, and exposes start/stop and bounded inspection/input/install
 actions explicitly. Capture and recording attach a host-owned screenshot/video package to the active
 chat; recording polls bounded screen frames for the model storyboard and the host owns the MP4. A click
@@ -30,16 +31,19 @@ process's CPU/RAM and idle TTL. APK selection browses `fs.readDir` from the work
 only workspace-relative `.apk` paths; it never uploads a host-local file.
 
 The workspace tool panels share the same rules and protocol v107; media capture and Android recording
-are additive v108 features.
+are additive v108 features; real-time Chrome CDP screencast & DevTools (`BrowserDevTools`) and
+composite capture annotation (`CaptureAnnotator`) are additive v129 features.
 
-- **`BrowserPane`** renders the host-owned session in an iframe and drives `browser.state/navigate/
-  openTab/closeTab/selectTab`; it subscribes to `browser.changed` so an agent navigation moves the same
-  panel. Ports come from `browser.ports` and never probe. **Page info** calls `browser.snapshot` for a
-  bounded text-only read; there is no console, network, or script stream. Screen capture and recording
-  use `getDisplayMedia` over the current tab, crop the visible device frame, and attach the host-owned
-  file plus a bounded image storyboard through `capture.save`; the temporary file is deleted when the
-  attachment is sent or removed. The iframe unmounts after 90 s hidden and is resumed explicitly, so a
-  background tab costs no renderer.
+- **`BrowserPane`** renders either the live host Chrome/Chromium CDP screencast (`browser.stream.start`,
+  forwarding pointer, wheel, keyboard, and IME events while streaming `browser.frame`, `browser.console`,
+  `browser.network`, and `browser.dialog`) or falls back to the iframe when Chrome/Chromium is unavailable,
+  driving `browser.state/navigate/openTab/closeTab/selectTab` and subscribing to `browser.changed` so an agent
+  navigation moves the same panel. Ports come from `browser.ports` and never probe. **Page info** calls
+  `browser.snapshot` for a bounded text-only read; **DevTools** inspects console/REPL, network/CORS/cURL,
+  and local/session storage with one-click Ask AI actions. **Capture** / **Highlight** save crisp CDP
+  screenshots (or crop via `getDisplayMedia` in iframe fallback) and optional numbered region annotations
+  through `capture.save`; the temporary file is deleted when the attachment is sent or removed. The panel
+  pauses hidden streams after 90 s hidden and resumes explicitly, so a background tab costs no renderer.
 - **`RequestsPane`** keeps a bounded per-workspace history and saved-request list in full Request/
   History/Saved tabs; every send goes through `http.request.send`, so headers, cookies and bodies reach
   only the host. The URL field suggests recent history and saved URLs, and the JSON body editor

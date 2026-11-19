@@ -15,6 +15,7 @@ import type {
 	LoginPush,
 	McpListResult,
 	McpStatusSnapshot,
+	ModelExtraParamValues,
 	PiEvent,
 	Project,
 	ProviderStatusReport,
@@ -579,6 +580,7 @@ export interface SessionRuntime {
 	queue: SessionQueueState;
 	model: WireModel | null;
 	thinkingLevel: ThinkingLevel;
+	extraParams: ModelExtraParamValues;
 	eventRevision: number;
 	syncedConnectionGeneration: number;
 	stats: SessionStats | null;
@@ -602,6 +604,7 @@ function newRuntime(
 	model: WireModel | null,
 	thinkingLevel: ThinkingLevel,
 	syncedConnectionGeneration = 0,
+	extraParams: ModelExtraParamValues = {},
 ): SessionRuntime {
 	return {
 		turns: [],
@@ -615,6 +618,7 @@ function newRuntime(
 		queue: EMPTY_QUEUE,
 		model,
 		thinkingLevel,
+		extraParams,
 		eventRevision: 0,
 		syncedConnectionGeneration,
 		stats: null,
@@ -1588,6 +1592,7 @@ interface AppState {
 	dropModelsFreshness: () => void;
 	setCurrentModel: (sessionId: string, model: WireModel) => void;
 	setThinkingLevel: (sessionId: string, level: ThinkingLevel) => void;
+	setSessionExtraParams: (sessionId: string, extraParams: ModelExtraParamValues) => void;
 	setStats: (sessionId: string, stats: SessionStats) => void;
 	setCommands: (sessionId: string, commands: SlashCommandInfo[]) => void;
 	setChatDraft: (sessionId: string, text: string) => void;
@@ -4552,7 +4557,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 			if (s.sessions[summary.sessionId]) return {};
 			const wsId = summary.workspaceId;
 			const runtime: SessionRuntime = {
-				...newRuntime(summary.model, summary.thinkingLevel, s.connectionGeneration),
+				...newRuntime(
+					summary.model,
+					summary.thinkingLevel,
+					s.connectionGeneration,
+					summary.extraParams ?? {},
+				),
 				turns: hydrated.turns,
 				toolResults: hydrated.toolResults,
 				toolResponses: hydrated.toolResponses,
@@ -4810,6 +4820,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 		set((s) => withRuntime(s, sessionId, (rt) => ({ ...rt, model }))),
 	setThinkingLevel: (sessionId, level) =>
 		set((s) => withRuntime(s, sessionId, (rt) => ({ ...rt, thinkingLevel: level }))),
+	setSessionExtraParams: (sessionId, extraParams) =>
+		set((s) => withRuntime(s, sessionId, (rt) => ({ ...rt, extraParams }))),
 	setStats: (sessionId, stats) => set((s) => withRuntime(s, sessionId, (rt) => ({ ...rt, stats }))),
 	setCommands: (sessionId, commands) =>
 		set((s) => withRuntime(s, sessionId, (rt) => ({ ...rt, commands }))),

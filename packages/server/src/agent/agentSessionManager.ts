@@ -24,6 +24,7 @@ import type {
 	AgentSettlement,
 	ImageContent,
 	Model,
+	ModelExtraParamValues,
 	QueuedMessageContent,
 	QueueLane,
 	RefreshedModels,
@@ -47,6 +48,7 @@ import type {
 import {
 	canMarkCompletionUnread,
 	firstPromptOfTexts,
+	isModelExtraParamValues,
 	isTranscriptMessageRole,
 	normalizeSessionTitle,
 	OTHER_AGENT_SKILL_GROUPS,
@@ -113,6 +115,12 @@ import {
 	toSkillCommands,
 	withoutSpecRule,
 } from "./extensions";
+import {
+	EXTRA_PARAMS_CUSTOM_TYPE,
+	getModelExtraParams,
+	sanitizeExtraParamSelections,
+	withExtraParams,
+} from "./extraParams";
 import {
 	createMcpSessionHost,
 	type McpProjectPolicy,
@@ -221,6 +229,7 @@ interface Entry {
 	mcpHost: McpSessionHost;
 	extraUsageWarned: boolean;
 	unavailableSavedModel: SavedModelRef | undefined;
+	extraParams: ModelExtraParamValues;
 }
 
 type SavedModelRef = Pick<WireModel, "provider" | "id">;
@@ -1176,6 +1185,7 @@ export interface CreateSessionInput {
 	workspaceId: string;
 	model?: WireModel;
 	thinkingLevel?: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 	/** True: an unresolvable `model` falls back to the default instead of throwing. */
 	modelOptional?: boolean;
 }
@@ -1184,9 +1194,16 @@ export interface CreateSessionResult {
 	sessionId: string;
 	model: WireModel | null;
 	thinkingLevel: ThinkingLevel;
+	extraParams?: ModelExtraParamValues;
 }
 
-export function toWireModel(model: Model<string>, auth?: WireModelAuth): WireModel {
+export function toWireModel(
+	model: Model<string>,
+	auth?: WireModelAuth,
+	selectedExtraParams?: ModelExtraParamValues,
+): WireModel {
+	const extraParams = getModelExtraParams(model.provider, model.id);
+	const effective = extraParams ? withExtraParams(model, extraParams, selectedExtraParams) : model;
 	return {
 		id: model.id,
 		name: model.name,
@@ -1194,17 +1211,19 @@ export function toWireModel(model: Model<string>, auth?: WireModelAuth): WireMod
 		contextWindow: model.contextWindow,
 		reasoning: model.reasoning,
 		thinkingLevels: getSupportedThinkingLevels(model),
-		cost: { input: model.cost.input, output: model.cost.output },
+		cost: { input: effective.cost.input, output: effective.cost.output },
 		input: [...model.input],
 		...(auth ? { auth } : {}),
+		...(extraParams && extraParams.length > 0 ? { extraParams } : {}),
 	};
 }
 
 function sessionWireModel(
 	model: Model<string>,
 	generation: Pick<PiRuntimeGeneration, "runtime" | "opaqueProviderIds">,
+	selectedExtraParams?: ModelExtraParamValues,
 ): WireModel {
-	return toWireModel(model, catalogProviderAuth(generation, model.provider));
+	return toWireModel(model, catalogProviderAuth(generation, model.provider), selectedExtraParams);
 }
 
 function resolveWireModel(
@@ -1237,6 +1256,18 @@ function resolvePersistedModel(
 interface PreparedSessionEntry {
 	entry: Entry;
 	result: CreateSessionResult;
+}
+
+function savedExtraParamsFromBranch(
+	entries: readonly SessionEntry[],
+): ModelExtraParamValues | undefined {
+	for (let i = entries.length - 1; i >= 0; i--) {
+		const entry = entries[i];
+		if (entry?.type === "custom" && entry.customType === EXTRA_PARAMS_CUSTOM_TYPE) {
+			if (isModelExtraParamValues(entry.data)) return entry.data;
+		}
+	}
+	return undefined;
 }
 
 async function prepareSessionEntry(
@@ -1286,6 +1317,7 @@ async function prepareSessionEntry(
 		mcpHost,
 		extraUsageWarned: false,
 		unavailableSavedModel: undefined,
+		extraParams: {},
 	};
 	entry.commandHistory = archiveCommandHistory(
 		workspaceId,
@@ -1397,8 +1429,9 @@ async function prepareSessionEntry(
 		entry,
 		result: {
 			sessionId,
-			model: session.model ? sessionWireModel(session.model, generation) : null,
+			model: session.model ? sessionWireModel(session.model, generation, entry.extraParams) : null,
 			thinkingLevel: session.thinkingLevel,
+			...(Object.keys(entry.extraParams).length > 0 ? { extraParams: entry.extraParams } : {}),
 		},
 	};
 }
@@ -1435,6 +1468,7 @@ async function registerSession(
 	lifecycleToken: WorkspaceLifecycleToken,
 	announceCreation = false,
 	unavailableSavedModel?: SavedModelRef,
+	requestedExtraParams?: ModelExtraParamValues,
 ): Promise<CreateSessionResult> {
 	const prepared = await prepareSessionEntry(
 		session,
@@ -1453,6 +1487,25 @@ async function registerSession(
 		throw new Error(`Workspace is unavailable: ${workspaceId}`);
 	}
 	prepared.entry.unavailableSavedModel = unavailableSavedModel;
+	if (session.model && !unavailableSavedModel) {
+		const defs = getModelExtraParams(session.model.provider, session.model.id);
+		const sanitized = sanitizeExtraParamSelections(defs, requestedExtraParams);
+		prepared.entry.extraParams = sanitized;
+		if (defs && defs.length > 0) {
+			const effective = withExtraParams(session.model, defs, sanitized);
+			if (
+				effective.samplingParams !== session.model.samplingParams ||
+				effective.cost.input !== session.model.cost.input ||
+				effective.cost.output !== session.model.cost.output
+			) {
+				const level = session.thinkingLevel;
+				await session.setModel(effective);
+				if (session.thinkingLevel !== level) session.setThinkingLevel(level);
+			}
+			prepared.result.model = sessionWireModel(effective, generation, sanitized);
+			if (Object.keys(sanitized).length > 0) prepared.result.extraParams = sanitized;
+		}
+	}
 	prepared.entry.registered = true;
 	sessions.set(session.sessionId, prepared.entry);
 	if (preparingEntries.get(session.sessionId) === prepared.entry)
@@ -1499,6 +1552,7 @@ export async function createSession(input: CreateSessionInput): Promise<CreateSe
 			settingsManager,
 			...(model ? { model } : {}),
 			...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
+			...(input.extraParams ? { initialExtraParams: input.extraParams } : {}),
 		},
 		input.workspaceId,
 		generation,
@@ -1512,6 +1566,7 @@ type ParentSessionOptions = CreateAgentSessionOptions & {
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
 	unavailableSavedModel?: SavedModelRef;
+	initialExtraParams?: ModelExtraParamValues;
 };
 
 function createParentSession(
@@ -1536,8 +1591,24 @@ async function createParentSessionInternal(
 	lifecycleToken: WorkspaceLifecycleToken,
 	announceCreation = false,
 ): Promise<CreateSessionResult> {
-	const { unavailableSavedModel, ...agentOptions } = options;
-	const { sessionManager, settingsManager, cwd } = agentOptions;
+	const { unavailableSavedModel, initialExtraParams, ...rawAgentOptions } = options;
+	const { sessionManager, settingsManager, cwd } = rawAgentOptions;
+	const persistedExtraParams = savedExtraParamsFromBranch(sessionManager.getBranch());
+	const requestedExtraParams = persistedExtraParams ?? initialExtraParams;
+	const initialDefs = rawAgentOptions.model
+		? getModelExtraParams(rawAgentOptions.model.provider, rawAgentOptions.model.id)
+		: undefined;
+	const initialSanitizedExtraParams = sanitizeExtraParamSelections(
+		initialDefs,
+		requestedExtraParams,
+	);
+	const agentOptions =
+		rawAgentOptions.model && initialDefs
+			? {
+					...rawAgentOptions,
+					model: withExtraParams(rawAgentOptions.model, initialDefs, initialSanitizedExtraParams),
+				}
+			: rawAgentOptions;
 	const sessionId = sessionManager.getSessionId();
 	const toolResponseWaiters = createToolResponseWaiters();
 	const mcpHost = createMcpSessionHost({
@@ -1618,6 +1689,7 @@ async function createParentSessionInternal(
 			lifecycleToken,
 			announceCreation,
 			unavailableSavedModel,
+			requestedExtraParams,
 		);
 	} catch (error) {
 		if (sessions.get(sessionId)?.commands === commands) {
@@ -1680,9 +1752,10 @@ function summaryOf(sessionId: string, entry: Entry): SessionSummary {
 		...entryFirstPrompt(entry),
 		model:
 			session.model && !entry.unavailableSavedModel
-				? sessionWireModel(session.model, entry.generation)
+				? sessionWireModel(session.model, entry.generation, entry.extraParams)
 				: null,
 		thinkingLevel: session.thinkingLevel,
+		...(Object.keys(entry.extraParams).length > 0 ? { extraParams: entry.extraParams } : {}),
 		isStreaming: session.isStreaming,
 		messageCount: session.messages.length,
 		updatedAt: Date.now(),
@@ -2780,9 +2853,36 @@ export async function setSessionModel(sessionId: string, model: WireModel): Prom
 	const entry = mustGetEntry(sessionId);
 	return serializeModelWrite(entry, async () => {
 		const resolved = resolveWireModel(entry.generation.runtime, model);
-		await entry.session.setModel(resolved);
+		const defs = getModelExtraParams(resolved.provider, resolved.id);
+		const sanitized = sanitizeExtraParamSelections(defs, entry.extraParams);
+		entry.extraParams = sanitized;
+		const effective = withExtraParams(resolved, defs, sanitized);
+		await entry.session.setModel(effective);
 		entry.unavailableSavedModel = undefined;
-		return sessionWireModel(resolved, entry.generation);
+		return sessionWireModel(effective, entry.generation, sanitized);
+	});
+}
+
+export async function setSessionExtraParams(
+	sessionId: string,
+	extraParams: ModelExtraParamValues,
+): Promise<WireModel> {
+	const entry = mustGetEntry(sessionId);
+	return serializeModelWrite(entry, async () => {
+		const current = entry.session.model;
+		if (!current || entry.unavailableSavedModel) {
+			throw new Error(`Session ${sessionId} has no active model`);
+		}
+		const base = resolveWireModel(entry.generation.runtime, current);
+		const defs = getModelExtraParams(base.provider, base.id);
+		const sanitized = sanitizeExtraParamSelections(defs, extraParams);
+		entry.extraParams = sanitized;
+		entry.session.sessionManager.appendCustomEntry(EXTRA_PARAMS_CUSTOM_TYPE, sanitized);
+		const effective = withExtraParams(base, defs, sanitized);
+		const level = entry.session.thinkingLevel;
+		await entry.session.setModel(effective);
+		if (entry.session.thinkingLevel !== level) entry.session.setThinkingLevel(level);
+		return sessionWireModel(effective, entry.generation, sanitized);
 	});
 }
 

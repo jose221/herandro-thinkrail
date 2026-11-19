@@ -1,31 +1,43 @@
 import {
+	RiArrowGoBackLine,
+	RiEdit2Line,
+	RiHome2Line,
 	RiPlayLine,
 	RiRecordCircleLine,
 	RiRefreshLine,
 	RiScreenshotLine,
+	RiSparklingLine,
+	RiStackLine,
 	RiStopCircleLine,
 	RiStopLine,
+	RiVolumeDownLine,
+	RiVolumeUpLine,
 } from "@remixicon/react";
 import {
 	ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
+	ANDROID_STREAM_PROTOCOL_VERSION,
 	type AndroidEmulatorDetails,
 	type AndroidEmulatorLogs,
 	type AndroidEmulatorScreenshot,
 	type AndroidEmulatorState,
 	type AndroidEmulatorStatus,
+	type AndroidFramePush,
+	type AndroidKeyEvent,
 	type CaptureFrame,
+	WS_CHANNELS,
 } from "@thinkrail/contracts";
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { activeChatSessionId } from "../lib/activeChatSession";
 import { announceMediaCapture } from "../lib/mediaCapture";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { AndroidApkPicker } from "./AndroidApkPicker";
+import { CaptureAnnotator } from "./CaptureAnnotator";
 
 const STATE_KEYS: Record<AndroidEmulatorState, MessageKey> = {
 	starting: "androidEmulator.state.starting",
@@ -107,12 +119,18 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const supported = supportsAndroidEmulatorProtocol(protocolVersion);
 	const captureSupported =
 		protocolVersion !== null && protocolVersion >= ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION;
+	const streamSupported =
+		protocolVersion !== null && protocolVersion >= ANDROID_STREAM_PROTOCOL_VERSION;
 	const [status, setStatus] = useState<AndroidEmulatorStatus | null>(null);
 	const [avds, setAvds] = useState<string[]>([]);
 	const [selectedAvd, setSelectedAvd] = useState("");
 	const [details, setDetails] = useState<AndroidEmulatorDetails | null>(null);
 	const [screen, setScreen] = useState<AndroidEmulatorScreenshot | null>(null);
 	const [logs, setLogs] = useState<AndroidEmulatorLogs | null>(null);
+	const [logsSearch, setLogsSearch] = useState("");
+	const [liveStreamActive, setLiveStreamActive] = useState(false);
+	const [annotatingFrame, setAnnotatingFrame] = useState<CaptureFrame | null>(null);
+	const [annotatingBusy, setAnnotatingBusy] = useState(false);
 	const [initialLoading, setInitialLoading] = useState(true);
 	const [isBusy, setIsBusy] = useState(false);
 	const [requestFailed, setRequestFailed] = useState(false);
@@ -201,6 +219,40 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 		if (!supported || state !== "running") return;
 		void refreshInspection().catch(() => setRequestFailed(true));
 	}, [state, refreshInspection, supported]);
+
+	useEffect(() => {
+		if (!running || !streamSupported) {
+			setLiveStreamActive(false);
+			return;
+		}
+		let cancelled = false;
+		const transport = getTransport();
+		const unsubscribe = transport.subscribe(WS_CHANNELS.androidFrame, (data) => {
+			const frame = data as AndroidFramePush;
+			if (!frame || typeof frame.data !== "string") return;
+			setScreen({
+				mimeType: "image/png",
+				data: frame.data,
+				width: frame.width,
+				height: frame.height,
+			});
+		});
+		const startStream = async () => {
+			try {
+				await transport.request("android.emulator.stream.start", {});
+				if (!cancelled) setLiveStreamActive(true);
+			} catch {
+				if (!cancelled) setLiveStreamActive(false);
+			}
+		};
+		void startStream();
+		return () => {
+			cancelled = true;
+			unsubscribe();
+			setLiveStreamActive(false);
+			void transport.request("android.emulator.stream.stop", {}).catch(() => {});
+		};
+	}, [running, streamSupported]);
 
 	useEffect(() => {
 		if (!supported || (state !== "starting" && state !== "running")) return;
@@ -464,8 +516,97 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 	const tap = (x: number, y: number) =>
 		runAction(async () => {
 			await getTransport().request("android.emulator.tap", { x, y });
-			setScreen(await getTransport().request("android.emulator.screen", {}));
+			if (!liveStreamActive) {
+				setScreen(await getTransport().request("android.emulator.screen", {}));
+			}
 		});
+
+	const sendKeyevent = (key: AndroidKeyEvent) => {
+		if (!running || !streamSupported) return;
+		void getTransport()
+			.request("android.emulator.keyevent", { key })
+			.catch(() => setRequestFailed(true));
+	};
+
+	const startAnnotate = async () => {
+		if (!running) return;
+		setCaptureBusy(true);
+		try {
+			const shot = screen ?? (await getTransport().request("android.emulator.screen", {}));
+			setScreen(shot);
+			setAnnotatingFrame({
+				mimeType: "image/png",
+				data: shot.data,
+				width: shot.width,
+				height: shot.height,
+			});
+		} catch (error) {
+			toast.error(errorText(error, t("androidEmulator.captureFailed")));
+		} finally {
+			setCaptureBusy(false);
+		}
+	};
+
+	const sendAnnotatedScreen = async (annotated: CaptureFrame, regionNotes: string[]) => {
+		const sessionId = activeChatSessionId(workspaceId);
+		if (!sessionId) {
+			toast.error(t("androidEmulator.captureNoChat"));
+			return;
+		}
+		setAnnotatingBusy(true);
+		try {
+			const capture = await getTransport().request("capture.save", {
+				workspaceId,
+				kind: "image",
+				data: annotated.data,
+				mimeType: annotated.mimeType,
+				width: annotated.width,
+				height: annotated.height,
+			});
+			const baseNote = t("androidEmulator.captureNote", {
+				path: capture.path,
+				device: captureDeviceLabel(),
+				width: annotated.width,
+				height: annotated.height,
+			});
+			const note = regionNotes.length > 0 ? `${baseNote}\n${regionNotes.join("\n")}` : baseNote;
+			announceMediaCapture({
+				workspaceId,
+				sessionId,
+				capture,
+				image: annotated,
+				device: captureDeviceLabel(),
+				url: "android-emulator",
+				note,
+			});
+			setAnnotatingFrame(null);
+			toast.success(t("androidEmulator.captureSaved"));
+		} catch (error) {
+			toast.error(errorText(error, t("androidEmulator.captureFailed")));
+		} finally {
+			setAnnotatingBusy(false);
+		}
+	};
+
+	const askAiAboutLogs = () => {
+		const sessionId = activeChatSessionId(workspaceId);
+		if (!sessionId) {
+			toast.error(t("androidEmulator.captureNoChat"));
+			return;
+		}
+		const linesToSend = filteredLogs.split("\n").slice(-80).join("\n");
+		announceMediaCapture({
+			workspaceId,
+			sessionId,
+			device: captureDeviceLabel(),
+			url: "android-emulator",
+			note: t("androidEmulator.logsAskAiNote", {
+				device: captureDeviceLabel(),
+				logs: linesToSend,
+			}),
+		});
+		toast.success(t("androidEmulator.captureSaved"));
+	};
 
 	const submitTap = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
@@ -531,6 +672,15 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 		{ label: t("androidEmulator.toX"), value: toX, onChange: setToX },
 		{ label: t("androidEmulator.toY"), value: toY, onChange: setToY },
 	];
+	const filteredLogs = useMemo(() => {
+		const text = logs?.text ?? "";
+		const needle = logsSearch.trim().toLowerCase();
+		if (!needle || !text) return text;
+		return text
+			.split("\n")
+			.filter((line) => line.toLowerCase().includes(needle))
+			.join("\n");
+	}, [logs?.text, logsSearch]);
 
 	return (
 		<div
@@ -673,8 +823,14 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 
 					<section className="flex min-w-0 flex-col gap-8">
 						<div className="flex items-center gap-8">
-							<h3 className="flex-1 tr-title-compact text-text-default">
-								{t("androidEmulator.screen")}
+							<h3 className="flex items-center gap-8 flex-1 tr-title-compact text-text-default">
+								<span>{t("androidEmulator.screen")}</span>
+								{running && liveStreamActive ? (
+									<span className="flex items-center gap-4 rounded-sm bg-feedback-success-subtle px-8 py-2 text-feedback-success tr-text-metadata">
+										<span className="size-6 rounded-full bg-feedback-success" aria-hidden="true" />
+										{t("androidEmulator.live")}
+									</span>
+								) : null}
 							</h3>
 							<Button
 								type="button"
@@ -689,6 +845,63 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 							</Button>
 						</div>
 						<p className="text-text-muted tr-text-metadata">{t("androidEmulator.screenHelp")}</p>
+						{running && streamSupported ? (
+							<fieldset
+								className="m-0 flex min-w-0 flex-wrap items-center gap-4 border-0 p-0"
+								aria-label={t("androidEmulator.hardwareKeys")}
+							>
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiArrowGoBackLine}
+									onClick={() => sendKeyevent("back")}
+									data-testid="android-emulator-key-back"
+								>
+									{t("androidEmulator.key.back")}
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiHome2Line}
+									onClick={() => sendKeyevent("home")}
+									data-testid="android-emulator-key-home"
+								>
+									{t("androidEmulator.key.home")}
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiStackLine}
+									onClick={() => sendKeyevent("recents")}
+									data-testid="android-emulator-key-recents"
+								>
+									{t("androidEmulator.key.recents")}
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiVolumeDownLine}
+									onClick={() => sendKeyevent("volume_down")}
+									data-testid="android-emulator-key-vol-down"
+								>
+									{t("androidEmulator.key.volumeDown")}
+								</Button>
+								<Button
+									type="button"
+									variant="outline"
+									size="s"
+									iconLeft={RiVolumeUpLine}
+									onClick={() => sendKeyevent("volume_up")}
+									data-testid="android-emulator-key-vol-up"
+								>
+									{t("androidEmulator.key.volumeUp")}
+								</Button>
+							</fieldset>
+						) : null}
 						{captureSupported ? (
 							<div className="flex min-w-0 flex-wrap items-center gap-8">
 								{recording ? (
@@ -718,6 +931,17 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 											type="button"
 											variant="outline"
 											size="s"
+											iconLeft={RiEdit2Line}
+											disabled={!running || isBusy || captureBusy || !screen}
+											onClick={() => void startAnnotate()}
+											data-testid="android-emulator-annotate"
+										>
+											{t("androidEmulator.annotate")}
+										</Button>
+										<Button
+											type="button"
+											variant="outline"
+											size="s"
 											iconLeft={RiScreenshotLine}
 											disabled={!running || isBusy || captureBusy}
 											loading={captureBusy}
@@ -741,91 +965,100 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								)}
 							</div>
 						) : null}
-						<div className="flex min-w-0 justify-center overflow-hidden rounded-sm border border-border-default bg-container-content-bg p-8">
-							{screen && running ? (
-								<button
-									type="button"
-									disabled={isBusy}
-									aria-label={t("androidEmulator.screenAlt", {
-										width: screen.width,
-										height: screen.height,
-									})}
-									onClick={(event) => {
-										if (suppressClick.current) {
+						{annotatingFrame ? (
+							<CaptureAnnotator
+								frame={annotatingFrame}
+								busy={annotatingBusy}
+								onCancel={() => setAnnotatingFrame(null)}
+								onSend={sendAnnotatedScreen}
+							/>
+						) : (
+							<div className="flex min-w-0 justify-center overflow-hidden rounded-sm border border-border-default bg-container-content-bg p-8">
+								{screen && running ? (
+									<button
+										type="button"
+										disabled={isBusy}
+										aria-label={t("androidEmulator.screenAlt", {
+											width: screen.width,
+											height: screen.height,
+										})}
+										onClick={(event) => {
+											if (suppressClick.current) {
+												suppressClick.current = false;
+												return;
+											}
+											if (event.detail === 0) {
+												void tap(Math.floor(screen.width / 2), Math.floor(screen.height / 2));
+												return;
+											}
+											const point = readScreenPoint(
+												event.clientX,
+												event.clientY,
+												event.currentTarget,
+												screen,
+											);
+											void tap(point.x, point.y);
+										}}
+										onPointerDown={(event) => {
+											if (!running || isBusy) return;
 											suppressClick.current = false;
-											return;
-										}
-										if (event.detail === 0) {
-											void tap(Math.floor(screen.width / 2), Math.floor(screen.height / 2));
-											return;
-										}
-										const point = readScreenPoint(
-											event.clientX,
-											event.clientY,
-											event.currentTarget,
-											screen,
-										);
-										void tap(point.x, point.y);
-									}}
-									onPointerDown={(event) => {
-										if (!running || isBusy) return;
-										suppressClick.current = false;
-										pointerStart.current = readScreenPoint(
-											event.clientX,
-											event.clientY,
-											event.currentTarget,
-											screen,
-										);
-										event.currentTarget.setPointerCapture(event.pointerId);
-									}}
-									onPointerUp={(event) => {
-										const startPoint = pointerStart.current;
-										pointerStart.current = null;
-										if (!startPoint || !running || isBusy) return;
-										const endPoint = readScreenPoint(
-											event.clientX,
-											event.clientY,
-											event.currentTarget,
-											screen,
-										);
-										const distance = Math.hypot(
-											endPoint.x - startPoint.x,
-											endPoint.y - startPoint.y,
-										);
-										if (distance > 8) {
-											suppressClick.current = true;
-											void runAction(async () => {
-												await getTransport().request("android.emulator.swipe", {
-													x1: startPoint.x,
-													y1: startPoint.y,
-													x2: endPoint.x,
-													y2: endPoint.y,
-													durationMs: Math.max(50, Math.min(10_000, Date.now() - startPoint.at)),
+											pointerStart.current = readScreenPoint(
+												event.clientX,
+												event.clientY,
+												event.currentTarget,
+												screen,
+											);
+											event.currentTarget.setPointerCapture(event.pointerId);
+										}}
+										onPointerUp={(event) => {
+											const startPoint = pointerStart.current;
+											pointerStart.current = null;
+											if (!startPoint || !running || isBusy) return;
+											const endPoint = readScreenPoint(
+												event.clientX,
+												event.clientY,
+												event.currentTarget,
+												screen,
+											);
+											const distance = Math.hypot(
+												endPoint.x - startPoint.x,
+												endPoint.y - startPoint.y,
+											);
+											if (distance > 8) {
+												suppressClick.current = true;
+												void runAction(async () => {
+													await getTransport().request("android.emulator.swipe", {
+														x1: startPoint.x,
+														y1: startPoint.y,
+														x2: endPoint.x,
+														y2: endPoint.y,
+														durationMs: Math.max(50, Math.min(10_000, Date.now() - startPoint.at)),
+													});
+													setScreen(await getTransport().request("android.emulator.screen", {}));
 												});
-												setScreen(await getTransport().request("android.emulator.screen", {}));
-											});
-										}
-									}}
-									onPointerCancel={() => {
-										pointerStart.current = null;
-									}}
-									className="flex max-h-[60vh] w-fit min-w-0 max-w-full cursor-pointer touch-none items-center justify-center border-0 bg-transparent p-0 disabled:cursor-default"
-									data-testid="android-emulator-screen"
-								>
-									<img
-										src={`data:${screen.mimeType};base64,${screen.data}`}
-										alt=""
-										aria-hidden="true"
-										draggable={false}
-										className="h-auto max-h-[60vh] w-auto max-w-full select-none object-contain touch-none"
-									/>
-								</button>
-							) : (
-								<p className="py-24 text-center text-text-subtle tr-text-metadata">
-									{t("androidEmulator.screenUnavailable")}
-								</p>
-							)}
-						</div>
+											}
+										}}
+										onPointerCancel={() => {
+											pointerStart.current = null;
+										}}
+										className="flex max-h-[60vh] w-fit min-w-0 max-w-full cursor-pointer touch-none items-center justify-center border-0 bg-transparent p-0 disabled:cursor-default"
+										data-testid="android-emulator-screen"
+									>
+										<img
+											src={`data:${screen.mimeType};base64,${screen.data}`}
+											alt=""
+											aria-hidden="true"
+											draggable={false}
+											className="h-auto max-h-[60vh] w-auto max-w-full select-none object-contain touch-none"
+										/>
+									</button>
+								) : (
+									<p className="py-24 text-center text-text-subtle tr-text-metadata">
+										{t("androidEmulator.screenUnavailable")}
+									</p>
+								)}
+							</div>
+						)}
 
 						<form
 							onSubmit={submitTap}
@@ -978,10 +1211,21 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 					</section>
 
 					<section className="flex min-w-0 flex-col gap-8">
-						<div className="flex items-center gap-8">
+						<div className="flex flex-wrap items-center gap-8">
 							<h3 className="flex-1 tr-title-compact text-text-default">
 								{t("androidEmulator.logs")}
 							</h3>
+							<Button
+								type="button"
+								variant="ghost"
+								size="s"
+								iconLeft={RiSparklingLine}
+								disabled={!running || filteredLogs.length === 0}
+								onClick={askAiAboutLogs}
+								data-testid="android-emulator-logs-ask-ai"
+							>
+								{t("androidEmulator.logsAskAi")}
+							</Button>
 							<Button
 								type="button"
 								variant="ghost"
@@ -994,9 +1238,17 @@ export function AndroidEmulatorPane({ workspaceId }: { workspaceId: string }) {
 								{t("androidEmulator.refresh")}
 							</Button>
 						</div>
-						{supported && logs && logs.text.length > 0 ? (
+						<input
+							value={logsSearch}
+							onChange={(event) => setLogsSearch(event.currentTarget.value)}
+							placeholder={t("androidEmulator.logsSearch")}
+							aria-label={t("androidEmulator.logsSearch")}
+							disabled={!running}
+							className={INPUT_CLASS}
+						/>
+						{supported && filteredLogs.length > 0 ? (
 							<pre className="max-h-192 min-w-0 max-w-full overflow-auto whitespace-pre-wrap break-all rounded-sm border border-border-default bg-container-content-bg p-8 tr-code-text">
-								{logs.text}
+								{filteredLogs}
 							</pre>
 						) : (
 							<p className="text-text-subtle tr-text-metadata">

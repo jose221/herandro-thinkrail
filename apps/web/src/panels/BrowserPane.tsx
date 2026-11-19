@@ -5,6 +5,7 @@ import {
 	RiCloseLine,
 	RiCodeSSlashLine,
 	RiComputerLine,
+	RiEdit2Line,
 	RiExternalLinkLine,
 	RiGlobalFill,
 	RiGlobalLine,
@@ -14,9 +15,19 @@ import {
 	RiSmartphoneLine,
 	RiStopCircleLine,
 	RiTabletLine,
+	RiTerminalBoxLine,
 } from "@remixicon/react";
 import {
+	BROWSER_DEVTOOLS_PROTOCOL_VERSION,
 	BROWSER_LIMITS,
+	type BrowserConsoleEntry,
+	type BrowserConsolePush,
+	type BrowserDialogPush,
+	type BrowserDialogState,
+	type BrowserEngineStatus,
+	type BrowserFramePush,
+	type BrowserNetworkEntry,
+	type BrowserNetworkPush,
 	type BrowserPageSnapshot,
 	type BrowserSession,
 	CAPTURE_LIMITS,
@@ -45,6 +56,8 @@ import { activeChatSessionId } from "../lib/activeChatSession";
 import { announceMediaCapture } from "../lib/mediaCapture";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
+import { BrowserDevTools } from "./BrowserDevTools";
+import { CaptureAnnotator } from "./CaptureAnnotator";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 type Viewport = "desktop" | "tablet" | "mobile";
@@ -331,6 +344,37 @@ export function supportsWorkspaceTools(protocolVersion: number | null): boolean 
 	return protocolVersion !== null && protocolVersion >= WORKSPACE_TOOLS_PROTOCOL_VERSION;
 }
 
+function eventModifiers(event: {
+	altKey: boolean;
+	ctrlKey: boolean;
+	metaKey: boolean;
+	shiftKey: boolean;
+}): number {
+	return (
+		(event.altKey ? 1 : 0) |
+		(event.ctrlKey ? 2 : 0) |
+		(event.metaKey ? 4 : 0) |
+		(event.shiftKey ? 8 : 0)
+	);
+}
+
+function pointOnLiveElement(
+	clientX: number,
+	clientY: number,
+	element: HTMLImageElement | null,
+	frame: BrowserFramePush | null,
+): { x: number; y: number } | null {
+	if (!element || !frame || frame.width <= 0 || frame.height <= 0) return null;
+	const rect = element.getBoundingClientRect();
+	if (rect.width <= 0 || rect.height <= 0) return null;
+	const x = Math.round(((clientX - rect.left) / rect.width) * frame.width);
+	const y = Math.round(((clientY - rect.top) / rect.height) * frame.height);
+	return {
+		x: Math.max(0, Math.min(frame.width - 1, x)),
+		y: Math.max(0, Math.min(frame.height - 1, y)),
+	};
+}
+
 function displayUrl(url: string): string {
 	if (url === "about:blank") return "";
 	try {
@@ -352,6 +396,8 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const supported = supportsWorkspaceTools(protocolVersion);
 	const captureSupported =
 		protocolVersion !== null && protocolVersion >= MEDIA_CAPTURE_PROTOCOL_VERSION;
+	const devToolsSupported =
+		protocolVersion !== null && protocolVersion >= BROWSER_DEVTOOLS_PROTOCOL_VERSION;
 	const [session, setSession] = useState<BrowserSession | null>(null);
 	const [ports, setPorts] = useState<DevServerPort[]>([]);
 	const [urlInput, setUrlInput] = useState("");
@@ -375,8 +421,22 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const [reading, setReading] = useState(false);
 	const [readFailed, setReadFailed] = useState(false);
 	const [historyInfo, setHistoryInfo] = useState({ index: -1, length: 0 });
+	const [engineStatus, setEngineStatus] = useState<BrowserEngineStatus | null>(null);
+	const [liveFrame, setLiveFrame] = useState<BrowserFramePush | null>(null);
+	const [consoleLogs, setConsoleLogs] = useState<BrowserConsoleEntry[]>([]);
+	const [networkLogs, setNetworkLogs] = useState<BrowserNetworkEntry[]>([]);
+	const [pageDialog, setPageDialog] = useState<BrowserDialogState | null>(null);
+	const [dialogPrompt, setDialogPrompt] = useState("");
+	const [devToolsOpen, setDevToolsOpen] = useState(false);
+	const [annotatingFrame, setAnnotatingFrame] = useState<CaptureFrame | null>(null);
+	const [annotatingBusy, setAnnotatingBusy] = useState(false);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
+	const liveHostRef = useRef<HTMLDivElement>(null);
+	const liveInputRef = useRef<HTMLInputElement>(null);
+	const liveImgRef = useRef<HTMLImageElement>(null);
+	const lastMoveSentRef = useRef(0);
+	const composingRef = useRef(false);
 	const deviceFrameRef = useRef<HTMLDivElement>(null);
 	const deviceHostRef = useRef<HTMLDivElement>(null);
 	const captureVideo = useRef<HTMLVideoElement>(null);
@@ -477,6 +537,162 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
 		};
 	}, [supported]);
+
+	useEffect(() => {
+		if (!supported || !devToolsSupported) {
+			setEngineStatus(null);
+			setLiveFrame(null);
+			setConsoleLogs([]);
+			setNetworkLogs([]);
+			setPageDialog(null);
+			return;
+		}
+		const transport = getTransport();
+		const unsubFrame = transport.subscribe(WS_CHANNELS.browserFrame, (data) => {
+			const push = data as BrowserFramePush;
+			if (push?.workspaceId !== workspaceId) return;
+			setLiveFrame(push);
+		});
+		const unsubConsole = transport.subscribe(WS_CHANNELS.browserConsole, (data) => {
+			const push = data as BrowserConsolePush;
+			if (push?.workspaceId !== workspaceId || !push.entry) return;
+			setConsoleLogs((prev) => [...prev.slice(-299), push.entry]);
+		});
+		const unsubNetwork = transport.subscribe(WS_CHANNELS.browserNetwork, (data) => {
+			const push = data as BrowserNetworkPush;
+			if (push?.workspaceId !== workspaceId || !push.entry) return;
+			setNetworkLogs((prev) => {
+				const idx = prev.findIndex((item) => item.id === push.entry.id);
+				if (idx >= 0) {
+					const next = prev.slice();
+					next[idx] = push.entry;
+					return next;
+				}
+				return [...prev.slice(-299), push.entry];
+			});
+		});
+		const unsubDialog = transport.subscribe(WS_CHANNELS.browserDialog, (data) => {
+			const push = data as BrowserDialogPush;
+			if (push?.workspaceId !== workspaceId) return;
+			setPageDialog(push.dialog);
+			setDialogPrompt(push.dialog?.defaultValue ?? "");
+		});
+		return () => {
+			unsubFrame();
+			unsubConsole();
+			unsubNetwork();
+			unsubDialog();
+		};
+	}, [devToolsSupported, supported, workspaceId]);
+
+	const activeTabUrl = activeTab?.url ?? "about:blank";
+	const activeDeviceWidth = device?.width;
+	const activeDeviceHeight = device?.height;
+
+	useEffect(() => {
+		if (
+			!supported ||
+			!devToolsSupported ||
+			suspended ||
+			!panelVisible ||
+			activeTabUrl === "about:blank"
+		) {
+			return;
+		}
+		let cancelled = false;
+		const desiredWidth =
+			viewport === "desktop"
+				? Math.max(480, Math.round(liveHostRef.current?.clientWidth || 1280))
+				: (activeDeviceWidth ?? 412);
+		const desiredHeight =
+			viewport === "desktop"
+				? Math.max(360, Math.round(liveHostRef.current?.clientHeight || 800))
+				: (activeDeviceHeight ?? 732);
+
+		const start = async () => {
+			try {
+				const nextStatus = await getTransport().request("browser.stream.start", {
+					workspaceId,
+					width: desiredWidth,
+					height: desiredHeight,
+				});
+				if (cancelled) return;
+				setEngineStatus(nextStatus);
+				if (nextStatus.available) {
+					const [logs, net] = await Promise.all([
+						getTransport().request("browser.console.logs", { workspaceId, limit: 300 }),
+						getTransport().request("browser.network.logs", { workspaceId, limit: 300 }),
+					]);
+					if (cancelled) return;
+					setConsoleLogs(logs);
+					setNetworkLogs(net);
+				}
+			} catch {
+				if (!cancelled) {
+					setEngineStatus({ available: false, running: false });
+				}
+			}
+		};
+		void start();
+		return () => {
+			cancelled = true;
+			void getTransport()
+				.request("browser.stream.stop", { workspaceId })
+				.catch(() => {});
+		};
+	}, [
+		activeDeviceHeight,
+		activeDeviceWidth,
+		activeTabUrl,
+		devToolsSupported,
+		panelVisible,
+		supported,
+		suspended,
+		viewport,
+		workspaceId,
+	]);
+
+	useEffect(() => {
+		if (!devToolsSupported || !engineStatus?.available || !engineStatus.running) return;
+		if (viewport !== "desktop") {
+			if (!device) return;
+			void getTransport()
+				.request("browser.resize", {
+					workspaceId,
+					width: device.width,
+					height: device.height,
+				})
+				.catch(() => {});
+			return;
+		}
+		const host = liveHostRef.current;
+		if (!host) return;
+		let timer: number | null = null;
+		const syncSize = () => {
+			if (timer !== null) window.clearTimeout(timer);
+			timer = window.setTimeout(() => {
+				const w = Math.max(360, Math.round(host.clientWidth));
+				const h = Math.max(240, Math.round(host.clientHeight));
+				void getTransport()
+					.request("browser.resize", { workspaceId, width: w, height: h })
+					.catch(() => {});
+			}, 140);
+		};
+		syncSize();
+		const observer = new ResizeObserver(syncSize);
+		observer.observe(host);
+		return () => {
+			observer.disconnect();
+			if (timer !== null) window.clearTimeout(timer);
+		};
+	}, [
+		devToolsSupported,
+		device,
+		engineStatus?.available,
+		engineStatus?.running,
+		viewport,
+		workspaceId,
+	]);
 
 	const loadPorts = useCallback(async () => {
 		if (!supported) return;
@@ -592,6 +808,14 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		return stream;
 	}, [t]);
 
+	const cdpActive =
+		supported &&
+		devToolsSupported &&
+		!suspended &&
+		activeTab !== null &&
+		activeTab.url !== "about:blank" &&
+		engineStatus?.available === true;
+
 	const capture = async () => {
 		if (!captureSupported) return;
 		const sessionId = activeChatSessionId(workspaceId);
@@ -600,18 +824,27 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			toast.error(t("browser.captureNoChat"));
 			return;
 		}
-		const target = viewport === "desktop" ? iframeRef.current : deviceFrameRef.current;
+		const target =
+			viewport === "desktop"
+				? cdpActive
+					? liveImgRef.current
+					: iframeRef.current
+				: deviceFrameRef.current;
 		const clip = viewport === "desktop" ? null : deviceHostRef.current;
 		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
 		setCapturing(true);
 		let saved: MediaCapture | null = null;
 		let frame: CaptureFrame | null = null;
 		try {
-			await ensureCaptureStream();
-			await new Promise<void>((resolve) =>
-				requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-			);
-			frame = await captureVisibleFrame(captureVideo.current, target, clip);
+			if (cdpActive) {
+				frame = await getTransport().request("browser.screenshot", { workspaceId });
+			} else {
+				await ensureCaptureStream();
+				await new Promise<void>((resolve) =>
+					requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+				);
+				frame = await captureVisibleFrame(captureVideo.current, target, clip);
+			}
 			saved = await getTransport().request("capture.save", {
 				workspaceId,
 				kind: "image",
@@ -640,6 +873,117 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			device: deviceLabel,
 			url,
 			note,
+		});
+		toast.success(t("browser.captureSaved"));
+	};
+
+	const startAnnotate = async () => {
+		if (!activeTab || activeTab.url === "about:blank") return;
+		const target = viewport === "desktop" ? iframeRef.current : deviceFrameRef.current;
+		const clip = viewport === "desktop" ? null : deviceHostRef.current;
+		setCapturing(true);
+		try {
+			if (cdpActive) {
+				setAnnotatingFrame(await getTransport().request("browser.screenshot", { workspaceId }));
+			} else if (liveFrame) {
+				setAnnotatingFrame({
+					mimeType: liveFrame.mimeType,
+					data: liveFrame.data,
+					width: liveFrame.width,
+					height: liveFrame.height,
+				});
+			} else {
+				await ensureCaptureStream();
+				await new Promise<void>((resolve) =>
+					requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+				);
+				setAnnotatingFrame(await captureVisibleFrame(captureVideo.current, target, clip));
+			}
+			setCapturing(false);
+		} catch (error) {
+			setCapturing(false);
+			captureError(error, t("browser.captureFailed"));
+		}
+	};
+
+	const sendAnnotatedCapture = async (annotated: CaptureFrame, regionNotes: string[]) => {
+		const sessionId = activeChatSessionId(workspaceId);
+		const url = activeTab?.url ?? "about:blank";
+		if (!sessionId || !activeTab || url === "about:blank") {
+			toast.error(t("browser.captureNoChat"));
+			return;
+		}
+		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
+		const captureWidth = device?.width ?? annotated.width;
+		const captureHeight = device?.height ?? annotated.height;
+		const regionBlock = regionNotes.length > 0 ? `\n${regionNotes.join("\n")}` : "";
+		setAnnotatingBusy(true);
+		try {
+			const saved = await getTransport().request("capture.save", {
+				workspaceId,
+				kind: "image",
+				data: annotated.data,
+				mimeType: annotated.mimeType,
+				width: annotated.width,
+				height: annotated.height,
+			});
+			const baseNote = t("browser.captureNote", {
+				path: saved.path,
+				device: deviceLabel,
+				width: captureWidth,
+				height: captureHeight,
+				url,
+			});
+			const note = `${baseNote}${regionBlock}`;
+			announceMediaCapture({
+				workspaceId,
+				sessionId,
+				capture: saved,
+				image: annotated,
+				device: deviceLabel,
+				url,
+				note,
+			});
+			setAnnotatingFrame(null);
+			setAnnotatingBusy(false);
+			toast.success(t("browser.captureSaved"));
+		} catch (error) {
+			setAnnotatingBusy(false);
+			toastError(error);
+		}
+	};
+
+	const askAiFromDevTools = async (promptText: string) => {
+		const sessionId = activeChatSessionId(workspaceId);
+		const url = activeTab?.url ?? "about:blank";
+		if (!sessionId) {
+			toast.error(t("browser.captureNoChat"));
+			return;
+		}
+		const deviceLabel = device ? t(device.label) : t("browser.viewport.desktop");
+		let saved: MediaCapture | undefined;
+		let shot: CaptureFrame | undefined;
+		if (cdpActive) {
+			try {
+				shot = await getTransport().request("browser.screenshot", { workspaceId });
+				saved = await getTransport().request("capture.save", {
+					workspaceId,
+					kind: "image",
+					data: shot.data,
+					mimeType: shot.mimeType,
+					width: shot.width,
+					height: shot.height,
+				});
+			} catch {}
+		}
+		announceMediaCapture({
+			workspaceId,
+			sessionId,
+			...(saved ? { capture: saved } : {}),
+			...(shot ? { image: shot } : {}),
+			device: deviceLabel,
+			url,
+			note: promptText,
 		});
 		toast.success(t("browser.captureSaved"));
 	};
@@ -818,17 +1162,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		setRecordingBusy(false);
 	};
 
-	const requestCapture = (action: "capture" | "record") => {
-		if (!captureSupported) return;
-		if (captureStream.current) {
-			if (action === "record") void startRecording();
-			else void capture();
-			return;
-		}
-		setPendingAction(action);
-		setCaptureIntroOpen(true);
-	};
-
 	const navigate = useCallback(
 		async (value: string) => {
 			const raw = value.trim();
@@ -879,6 +1212,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const back = () => {
+		if (cdpActive) {
+			void getTransport()
+				.request("browser.back", { workspaceId })
+				.then(setSession)
+				.catch(toastError);
+			return;
+		}
 		if (historyIndex.current <= 0) return;
 		historyIndex.current -= 1;
 		const url = history.current[historyIndex.current];
@@ -886,14 +1226,76 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const forward = () => {
+		if (cdpActive) {
+			void getTransport()
+				.request("browser.forward", { workspaceId })
+				.then(setSession)
+				.catch(toastError);
+			return;
+		}
 		if (historyIndex.current >= history.current.length - 1) return;
 		historyIndex.current += 1;
 		const url = history.current[historyIndex.current];
 		if (url) void navigate(url);
 	};
 	const reload = () => {
+		if (cdpActive) {
+			void getTransport().request("browser.reload", { workspaceId }).catch(toastError);
+			setSnapshot(null);
+			return;
+		}
 		setReloadKey((value) => value + 1);
 		setSnapshot(null);
+	};
+
+	const requestCapture = (action: "capture" | "record") => {
+		if (!captureSupported) return;
+		if (action === "capture" && cdpActive) {
+			void capture();
+			return;
+		}
+		if (captureStream.current) {
+			if (action === "record") void startRecording();
+			else void capture();
+			return;
+		}
+		setPendingAction(action);
+		setCaptureIntroOpen(true);
+	};
+
+	const sendPointer = (
+		action: "down" | "up" | "move",
+		event: React.PointerEvent<HTMLImageElement>,
+	) => {
+		if (!cdpActive) return;
+		const point = pointOnLiveElement(event.clientX, event.clientY, liveImgRef.current, liveFrame);
+		if (!point) return;
+		if (action === "move") {
+			const now = Date.now();
+			if (now - lastMoveSentRef.current < 32) return;
+			lastMoveSentRef.current = now;
+		}
+		const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
+		void getTransport()
+			.request("browser.pointer", {
+				workspaceId,
+				action,
+				x: point.x,
+				y: point.y,
+				...(action === "move" ? {} : { button, clickCount: event.detail || 1 }),
+			})
+			.catch(() => {});
+	};
+
+	const replyPageDialog = (accept: boolean) => {
+		void getTransport()
+			.request("browser.dialog.reply", {
+				workspaceId,
+				accept,
+				...(pageDialog?.dialogType === "prompt" ? { promptText: dialogPrompt } : {}),
+			})
+			.then(() => setPageDialog(null))
+			.catch(toastError);
 	};
 
 	const readPage = async () => {
@@ -936,7 +1338,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 						label={t("browser.back")}
 						variant="ghost"
 						size="s"
-						disabled={historyInfo.index <= 0}
+						disabled={!cdpActive && historyInfo.index <= 0}
 						onClick={back}
 					/>
 					<IconButton
@@ -944,7 +1346,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 						label={t("browser.forward")}
 						variant="ghost"
 						size="s"
-						disabled={historyInfo.index >= historyInfo.length - 1}
+						disabled={!cdpActive && historyInfo.index >= historyInfo.length - 1}
 						onClick={forward}
 					/>
 					<IconButton
@@ -975,6 +1377,23 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 					</form>
 					{activeTab && activeTab.url !== "about:blank" ? (
 						<>
+							{cdpActive && engineStatus?.running ? (
+								<span className="flex shrink-0 items-center gap-4 rounded-sm bg-feedback-success-subtle px-8 py-2 text-feedback-success tr-text-metadata">
+									<span className="size-6 rounded-full bg-feedback-success" aria-hidden="true" />
+									{t("browser.engine.live")}
+								</span>
+							) : null}
+							{devToolsSupported ? (
+								<IconButton
+									icon={RiTerminalBoxLine}
+									label={t("browser.devtools")}
+									variant="ghost"
+									size="s"
+									selected={devToolsOpen}
+									onClick={() => setDevToolsOpen((open) => !open)}
+									data-testid="browser-devtools-toggle"
+								/>
+							) : null}
 							<IconButton
 								icon={RiCodeSSlashLine}
 								label={t("browser.inspect")}
@@ -1129,9 +1548,241 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 								<p className="text-text-subtle tr-text-metadata">{t("browser.noPorts")}</p>
 							)}
 						</div>
+					) : annotatingFrame ? (
+						<div className="flex h-full min-h-0 flex-col p-8">
+							<CaptureAnnotator
+								frame={annotatingFrame}
+								busy={annotatingBusy}
+								onCancel={() => setAnnotatingFrame(null)}
+								onSend={sendAnnotatedCapture}
+							/>
+						</div>
 					) : (
 						<div className="relative flex h-full min-h-0 flex-col">
-							{viewport === "desktop" ? (
+							{pageDialog ? (
+								<div
+									role="dialog"
+									aria-label={t("browser.dialog.title", { type: pageDialog.dialogType })}
+									className="flex shrink-0 flex-wrap items-center gap-8 border-border-default border-b bg-container-elevated-bg px-12 py-8"
+								>
+									<span className="tr-text-metadata text-text-default">
+										{t("browser.dialog.title", { type: pageDialog.dialogType })}:{" "}
+										{pageDialog.message}
+									</span>
+									{pageDialog.dialogType === "prompt" ? (
+										<input
+											value={dialogPrompt}
+											onChange={(event) => setDialogPrompt(event.currentTarget.value)}
+											placeholder={t("browser.dialog.promptPlaceholder")}
+											aria-label={t("browser.dialog.promptPlaceholder")}
+											className={cn(INPUT_CLASS, "min-h-28")}
+										/>
+									) : null}
+									<div className="ml-auto flex items-center gap-4">
+										{pageDialog.dialogType !== "alert" ? (
+											<Button variant="outline" size="s" onClick={() => replyPageDialog(false)}>
+												{t("browser.dialog.cancel")}
+											</Button>
+										) : null}
+										<Button variant="primary" size="s" onClick={() => replyPageDialog(true)}>
+											{t("browser.dialog.accept")}
+										</Button>
+									</div>
+								</div>
+							) : null}
+							{devToolsSupported && engineStatus?.available === false ? (
+								<p className="border-border-default border-b bg-container-content-bg px-12 py-4 text-text-subtle tr-text-metadata">
+									{t("browser.engine.fallbackHint")}
+								</p>
+							) : null}
+							{cdpActive ? (
+								viewport === "desktop" ? (
+									<div
+										ref={liveHostRef}
+										data-testid="browser-live-stage"
+										className="mx-auto flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-container-elevated-bg focus-within:focus-ring-inset"
+									>
+										<input
+											ref={liveInputRef}
+											type="text"
+											value=""
+											readOnly
+											aria-label={t("browser.frameTitle", { url: activeTab.url })}
+											className="sr-only"
+											onCompositionStart={() => {
+												composingRef.current = true;
+											}}
+											onCompositionEnd={(event) => {
+												composingRef.current = false;
+												if (event.data) {
+													void getTransport()
+														.request("browser.text", { workspaceId, text: event.data })
+														.catch(() => {});
+												}
+											}}
+											onKeyDown={(event) => {
+												if (composingRef.current) return;
+												if (
+													event.key.length === 1 &&
+													!event.ctrlKey &&
+													!event.metaKey &&
+													!event.altKey
+												) {
+													event.preventDefault();
+													void getTransport()
+														.request("browser.text", { workspaceId, text: event.key })
+														.catch(() => {});
+													return;
+												}
+												event.preventDefault();
+												void getTransport()
+													.request("browser.key", {
+														workspaceId,
+														action: "down",
+														key: event.key,
+														code: event.code,
+														keyCode: event.keyCode,
+														modifiers: eventModifiers(event),
+													})
+													.catch(() => {});
+											}}
+											onKeyUp={(event) => {
+												if (composingRef.current) return;
+												void getTransport()
+													.request("browser.key", {
+														workspaceId,
+														action: "up",
+														key: event.key,
+														code: event.code,
+														keyCode: event.keyCode,
+														modifiers: eventModifiers(event),
+													})
+													.catch(() => {});
+											}}
+										/>
+										{liveFrame ? (
+											<img
+												ref={liveImgRef}
+												src={`data:${liveFrame.mimeType};base64,${liveFrame.data}`}
+												alt={t("browser.frameTitle", { url: activeTab.url })}
+												data-testid="browser-live-frame"
+												draggable={false}
+												onPointerDown={(event) => {
+													liveInputRef.current?.focus();
+													sendPointer("down", event);
+												}}
+												onPointerMove={(event) => sendPointer("move", event)}
+												onPointerUp={(event) => sendPointer("up", event)}
+												onWheel={(event) => {
+													const pt = pointOnLiveElement(
+														event.clientX,
+														event.clientY,
+														liveImgRef.current,
+														liveFrame,
+													);
+													if (!pt) return;
+													void getTransport()
+														.request("browser.wheel", {
+															workspaceId,
+															x: pt.x,
+															y: pt.y,
+															deltaX: event.deltaX,
+															deltaY: event.deltaY,
+														})
+														.catch(() => {});
+												}}
+												onContextMenu={(event) => event.preventDefault()}
+												className="max-h-full max-w-full cursor-pointer select-none object-contain"
+											/>
+										) : (
+											<span className="text-text-muted tr-text-ui">
+												{t("browser.engine.starting")}
+											</span>
+										)}
+									</div>
+								) : device ? (
+									<DevicePreview device={device} frameRef={deviceFrameRef} hostRef={deviceHostRef}>
+										<div
+											ref={liveHostRef}
+											data-testid="browser-live-stage"
+											className="flex h-full w-full items-center justify-center bg-container-elevated-bg focus-within:focus-ring-inset"
+										>
+											<input
+												ref={liveInputRef}
+												type="text"
+												value=""
+												readOnly
+												aria-label={t("browser.frameTitle", { url: activeTab.url })}
+												className="sr-only"
+												onKeyDown={(event) => {
+													if (
+														event.key.length === 1 &&
+														!event.ctrlKey &&
+														!event.metaKey &&
+														!event.altKey
+													) {
+														event.preventDefault();
+														void getTransport()
+															.request("browser.text", { workspaceId, text: event.key })
+															.catch(() => {});
+														return;
+													}
+													event.preventDefault();
+													void getTransport()
+														.request("browser.key", {
+															workspaceId,
+															action: "down",
+															key: event.key,
+															code: event.code,
+															keyCode: event.keyCode,
+															modifiers: eventModifiers(event),
+														})
+														.catch(() => {});
+												}}
+											/>
+											{liveFrame ? (
+												<img
+													ref={liveImgRef}
+													src={`data:${liveFrame.mimeType};base64,${liveFrame.data}`}
+													alt={t("browser.frameTitle", { url: activeTab.url })}
+													data-testid="browser-live-frame"
+													draggable={false}
+													onPointerDown={(event) => {
+														liveInputRef.current?.focus();
+														sendPointer("down", event);
+													}}
+													onPointerMove={(event) => sendPointer("move", event)}
+													onPointerUp={(event) => sendPointer("up", event)}
+													onWheel={(event) => {
+														const pt = pointOnLiveElement(
+															event.clientX,
+															event.clientY,
+															liveImgRef.current,
+															liveFrame,
+														);
+														if (!pt) return;
+														void getTransport()
+															.request("browser.wheel", {
+																workspaceId,
+																x: pt.x,
+																y: pt.y,
+																deltaX: event.deltaX,
+																deltaY: event.deltaY,
+															})
+															.catch(() => {});
+													}}
+													onContextMenu={(event) => event.preventDefault()}
+													className="h-full w-full cursor-pointer select-none object-contain"
+												/>
+											) : (
+												<span className="text-text-muted tr-text-ui">
+													{t("browser.engine.starting")}
+												</span>
+											)}
+										</div>
+									</DevicePreview>
+								) : null
+							) : viewport === "desktop" ? (
 								<div className="mx-auto min-h-0 w-full flex-1 overflow-hidden">
 									<iframe
 										ref={iframeRef}
@@ -1194,6 +1845,16 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 											<Button
 												variant="outline"
 												size="s"
+												iconLeft={RiEdit2Line}
+												disabled={capturing || recordingBusy}
+												onClick={() => void startAnnotate()}
+												data-testid="browser-annotate"
+											>
+												{t("browser.annotate")}
+											</Button>
+											<Button
+												variant="outline"
+												size="s"
 												iconLeft={RiRecordCircleLine}
 												disabled={capturing || recordingBusy}
 												onClick={() => requestCapture("record")}
@@ -1219,6 +1880,29 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 						</div>
 					)}
 				</div>
+
+				{devToolsOpen && devToolsSupported && activeTab && activeTab.url !== "about:blank" ? (
+					<BrowserDevTools
+						workspaceId={workspaceId}
+						activeUrl={activeTab.url}
+						consoleLogs={consoleLogs}
+						networkLogs={networkLogs}
+						onClearConsole={() => {
+							setConsoleLogs([]);
+							void getTransport()
+								.request("browser.console.clear", { workspaceId })
+								.catch(() => {});
+						}}
+						onClearNetwork={() => {
+							setNetworkLogs([]);
+							void getTransport()
+								.request("browser.network.clear", { workspaceId })
+								.catch(() => {});
+						}}
+						onAskAi={(promptText) => void askAiFromDevTools(promptText)}
+						onClose={() => setDevToolsOpen(false)}
+					/>
+				) : null}
 
 				{snapshot || readFailed ? (
 					<section

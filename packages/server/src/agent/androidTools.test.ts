@@ -22,5 +22,6 @@ test("registers explicit Android emulator tools only for Pi sessions", () => {
 		"android_emulator_swipe",
 		"android_emulator_install_apk",
 		"android_emulator_logs",
+		"android_emulator_keyevent",
 	]);
 });

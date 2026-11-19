@@ -19,8 +19,8 @@ after five minutes without activity.
 
 - **Owns:** emulator process lifetime, SDK tool discovery, AVD enumeration, emulator-only ADB targeting,
   bounded screenshots/logs, bounded recordings, validated input, and APK path containment.
-- **Public surface (barrel):** `AndroidEmulatorManager`, the lazy process-local manager accessors, and the
-  default five-minute idle TTL.
+- **Public surface (barrel):** `AndroidEmulatorManager`, `AndroidToolchain`, `AndroidFramePublisher`,
+  `setAndroidFramePublisher`, the lazy process-local manager accessors, and the default five-minute idle TTL.
 - **Allowed deps:** `contracts`, `subprocess`, and Node/Bun APIs.
 - **Forbidden:** Pi session state, ACP sessions, physical-device ADB commands, arbitrary shell commands,
   SDK/AVD installation, boot-time emulator launch, and importing the web or host modules.

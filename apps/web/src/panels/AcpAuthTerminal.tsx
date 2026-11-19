@@ -174,18 +174,14 @@ export default function AcpAuthTerminal({ clientId, methodId, workspaceId, onExi
 				if (disposed) return;
 				fitTerminal(fit);
 				const startSize = { cols: term.cols, rows: term.rows };
+				const startParams = workspaceId
+					? { workspaceId, clientId, methodId, ...startSize }
+					: { clientId, methodId, ...startSize };
 				startRequestPending = true;
 				try {
-					const result = await transport.request(
-						"acp.client.authTerminal.start",
-						{
-							...(workspaceId ? { workspaceId } : {}),
-							clientId,
-							methodId,
-							...startSize,
-						},
-						{ timeoutMs: 60_000 },
-					);
+					const result = await transport.request("acp.client.authTerminal.start", startParams, {
+						timeoutMs: 60_000,
+					});
 					startRequestPending = false;
 					sizeSync.acknowledge(startSize);
 					handleStartResult(result);

@@ -22,6 +22,16 @@ const InstallSchema = Type.Object({
 const LogsSchema = Type.Object({
 	lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
 });
+const KeyeventSchema = Type.Object({
+	key: Type.Union([
+		Type.Literal("home"),
+		Type.Literal("back"),
+		Type.Literal("recents"),
+		Type.Literal("volume_up"),
+		Type.Literal("volume_down"),
+		Type.Literal("enter"),
+	]),
+});
 
 function textResult(text: string, details: unknown = null) {
 	return {
@@ -153,6 +163,17 @@ export function androidEmulatorToolsExtension(pi: ExtensionAPI): void {
 		async execute(_id, params) {
 			const logs = await manager.logs(params.lines);
 			return textResult(logs.text, { truncated: logs.truncated });
+		},
+	});
+	pi.registerTool({
+		name: "android_emulator_keyevent",
+		label: "Android Emulator Hardware Key",
+		description:
+			"Send a hardware navigation/system keyevent (home, back, recents, volume_up, volume_down, enter) to the managed emulator.",
+		parameters: KeyeventSchema,
+		async execute(_id, params) {
+			await manager.keyevent(params.key);
+			return textResult(`Sent Android keyevent: ${params.key}.`);
 		},
 	});
 }
