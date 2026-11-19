@@ -93,9 +93,11 @@ export function statusProviderIds(
 	allowlist: ReadonlySet<string>,
 	opaque: ReadonlySet<string>,
 	current: readonly string[],
+	extension: ReadonlySet<string>,
 ): string[] {
 	const added = current.filter((id) => isCustomEndpointId(id) && !opaque.has(id));
-	return [...new Set([...allowlist, ...added])];
+	const extensionAdded = [...extension].filter((id) => !opaque.has(id));
+	return [...new Set([...allowlist, ...extensionAdded, ...added])];
 }
 
 export async function getProviderStatus(): Promise<ProviderStatusReport> {
@@ -106,6 +108,7 @@ export async function getProviderStatus(): Promise<ProviderStatusReport> {
 			generation.providerStatusIds,
 			generation.opaqueProviderIds,
 			(runtime.getProviders?.() ?? []).map((provider) => provider.id),
+			generation.extensionProviderIds,
 		);
 		try {
 			await runtime.refresh({ providers: providerStatusIds });

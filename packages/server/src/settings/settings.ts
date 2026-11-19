@@ -12,18 +12,23 @@ import {
 	isFontChoice,
 	isFontWeightOffset,
 	isJbcentralQuotaRefreshSeconds,
+	isKeybindingOverrides,
 	isLineWidth,
 	isLocalePreference,
+	isQuestionPanelHeight,
 	isSettleIdleDays,
 	isSubagentMaxConcurrent,
 	isSystemThemePair,
 	isTerminalWindowsShell,
 	isThemeMode,
+	type KeybindingOverrides,
 	LINE_WIDTH_COLUMNS,
+	QUESTION_PANEL_HEIGHT_PERCENT,
 	RECENT_MODELS_LIMIT,
 	sameModel,
 	type WireModel,
 } from "@thinkrail/contracts";
+import { CodedError } from "@thinkrail/shared/codedError";
 import { loadConfig, saveConfig } from "../persistence";
 import { normalizeStoredCustomLayoutPresets, validateCustomLayoutPresets } from "./layoutPresets";
 
@@ -44,10 +49,12 @@ const ACCEPTED_UPDATE_KEYS = {
 	terminalReplayKb: true,
 	terminalWindowsShell: true,
 	composerGrowthLimit: true,
+	questionPanelHeight: true,
 	chatLineWidth: true,
 	fileLineWidth: true,
 	chatLineWidthBounded: true,
 	fileLineWidthBounded: true,
+	voiceInputEnabled: true,
 	customLayoutPresets: true,
 	favoriteModels: true,
 	defaultModel: true,
@@ -61,10 +68,12 @@ const ACCEPTED_UPDATE_KEYS = {
 	jbcentralQuotaEnabled: true,
 	jbcentralQuotaRefreshSeconds: true,
 	settleIdleDays: true,
+	disabledSubagents: true,
 	disabledExtensions: true,
 	acpClients: true,
 	acpStartTimeoutMs: true,
 	extensionSettings: true,
+	otherAgentSkills: true,
 	disabledPackages: true,
 	locale: true,
 	onboardingDismissed: true,
@@ -73,6 +82,7 @@ const ACCEPTED_UPDATE_KEYS = {
 	codeFontSize: true,
 	codeLigatures: true,
 	fontWeightOffset: true,
+	keybindings: true,
 	chatMessageOrder: true,
 	layout: true,
 	recentModels: true,
@@ -148,6 +158,18 @@ function validateNameList(value: unknown, setting: string, noun: string): string
 	return [...new Set(value as string[])];
 }
 
+function validateKeybindings(value: unknown): KeybindingOverrides {
+	if (!isKeybindingOverrides(value)) {
+		throw new CodedError(
+			"KEYBINDINGS_INVALID",
+			"keybindings must map command ids to lists of chords such as Mod+Alt+KeyS",
+		);
+	}
+	return Object.fromEntries(
+		Object.entries(value).map(([id, chords]) => [id, [...new Set(chords)]]),
+	);
+}
+
 let publishSettings: SettingsPublisher | null = null;
 
 export function setSettingsPublisher(fn: SettingsPublisher | null): void {
@@ -182,9 +204,18 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 			);
 		}
 	}
+	if (
+		runtimeUpdate.questionPanelHeight !== undefined &&
+		!isQuestionPanelHeight(runtimeUpdate.questionPanelHeight)
+	) {
+		throw new Error(
+			`questionPanelHeight must be a whole number from ${QUESTION_PANEL_HEIGHT_PERCENT.min} to ${QUESTION_PANEL_HEIGHT_PERCENT.max}`,
+		);
+	}
 	for (const [name, value] of [
 		["chatLineWidthBounded", runtimeUpdate.chatLineWidthBounded],
 		["fileLineWidthBounded", runtimeUpdate.fileLineWidthBounded],
+		["voiceInputEnabled", runtimeUpdate.voiceInputEnabled],
 		["analyticsEnabled", runtimeUpdate.analyticsEnabled],
 		["analyticsConsentConfirmed", runtimeUpdate.analyticsConsentConfirmed],
 		["notificationsEnabled", runtimeUpdate.notificationsEnabled],
@@ -192,6 +223,7 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 		["agentReviewEnabled", runtimeUpdate.agentReviewEnabled],
 		["onboardingDismissed", runtimeUpdate.onboardingDismissed],
 		["codeLigatures", runtimeUpdate.codeLigatures],
+		["otherAgentSkills", runtimeUpdate.otherAgentSkills],
 	] as const) {
 		if (value !== undefined && typeof value !== "boolean") {
 			throw new Error(`${name} must be a boolean`);
@@ -238,14 +270,21 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 		systemThemePair,
 		jbcentralQuotaEnabled,
 		jbcentralQuotaRefreshSeconds,
+		disabledSubagents,
 		disabledExtensions,
 		acpClients,
 		extensionSettings,
 		disabledPackages,
+		keybindings,
 		...rest
 	} = runtimeUpdate;
+	const nextKeybindings = keybindings === undefined ? undefined : validateKeybindings(keybindings);
 	const extensionSettingsUpdate =
 		extensionSettings === undefined ? undefined : validateExtensionSettings(extensionSettings);
+	const nextDisabledSubagents =
+		disabledSubagents === undefined
+			? undefined
+			: validateNameList(disabledSubagents, "disabledSubagents", "agent names");
 	const nextDisabledExtensions =
 		disabledExtensions === undefined
 			? undefined
@@ -354,6 +393,7 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 		...(favoriteModels === undefined
 			? {}
 			: { favoriteModels: validateFavoriteModels(favoriteModels) }),
+		...(nextDisabledSubagents === undefined ? {} : { disabledSubagents: nextDisabledSubagents }),
 		...(nextDisabledExtensions === undefined ? {} : { disabledExtensions: nextDisabledExtensions }),
 		...(acpClients === undefined
 			? {}
@@ -367,6 +407,7 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 					),
 				}),
 		...(nextDisabledPackages === undefined ? {} : { disabledPackages: nextDisabledPackages }),
+		...(nextKeybindings === undefined ? {} : { keybindings: nextKeybindings }),
 	};
 	if (defaultModel !== undefined) {
 		if (defaultModel === null) delete next.defaultModel;
@@ -388,6 +429,17 @@ export function updateConfig(partial: AppConfigUpdate): AppConfig {
 	cached = next;
 	publishSettings?.(next, runtimeUpdate);
 	return next;
+}
+
+export function setSubagentEnabled(name: string, enabled: boolean): AppConfig {
+	if (typeof name !== "string" || !name.trim()) {
+		throw new Error("subagent name must be a non-blank string");
+	}
+	if (typeof enabled !== "boolean") {
+		throw new Error("subagent enabled must be a boolean");
+	}
+	const without = getConfig().disabledSubagents.filter((candidate) => candidate !== name);
+	return updateConfig({ disabledSubagents: enabled ? without : [...without, name] });
 }
 
 /** Records an explicit model choice at the head of `recentModels` (deduped, capped), then publishes. */

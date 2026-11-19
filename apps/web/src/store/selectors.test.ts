@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	MODEL_PICKER_PROTOCOL_VERSION,
 	type Project,
+	SEARCH_PROTOCOL_VERSION,
 	type SessionState,
 	type SessionStateRecord,
 	type WireModel,
@@ -18,6 +19,8 @@ import {
 	isUserOwnedWorkspace,
 	matchesWorktreePath,
 	selectActiveEditorTab,
+	selectActiveRepoWorkspaceId,
+	selectActiveSubagentProjectTrust,
 	selectActiveWorkspace,
 	selectActiveWorkspaceProjectId,
 	selectAgentReviewCommentCount,
@@ -29,10 +32,16 @@ import {
 	selectChatAttended,
 	selectChatFirstPrompt,
 	selectChatTitle,
+	selectChatWorkspaceFirstPrompt,
 	selectCompletionMarkedUnread,
 	selectContextProject,
+	selectContextRepoProject,
 	selectFileChangeSince,
+	selectHasTextSearchScope,
 	selectHistoryTarget,
+	selectHostReachable,
+	selectHostSearchAvailable,
+	selectHostSearchReady,
 	selectKnownChatLocation,
 	selectKnownChatTitle,
 	selectLayoutResourcePlacement,
@@ -68,6 +77,26 @@ test("connection generations reject stale or disconnected read settlements", () 
 	expect(isConnectedGeneration({ status: "connected", connectionGeneration: 4 }, 4)).toBe(true);
 	expect(isConnectedGeneration({ status: "connected", connectionGeneration: 5 }, 4)).toBe(false);
 	expect(isConnectedGeneration({ status: "disconnected", connectionGeneration: 4 }, 4)).toBe(false);
+});
+
+test("host search stays available across a reconnect, but asks only a reachable host that serves it", () => {
+	const state = (
+		status: string,
+		protocolVersion: number | null,
+		welcomeProtocolVersion: number | null,
+	) => ({
+		status,
+		protocolVersion,
+		welcomeProtocolVersion,
+		welcomeGeneration: welcomeProtocolVersion === null ? 0 : 1,
+	});
+	const current = state("connected", SEARCH_PROTOCOL_VERSION, SEARCH_PROTOCOL_VERSION);
+	const blip = state("connecting", null, SEARCH_PROTOCOL_VERSION);
+	const older = state("connected", SEARCH_PROTOCOL_VERSION - 1, SEARCH_PROTOCOL_VERSION - 1);
+	expect([current, blip, older].map(selectHostSearchAvailable)).toEqual([true, true, false]);
+	expect([current, blip, older].map(selectHostReachable)).toEqual([true, false, true]);
+	expect([current, blip, older].map(selectHostSearchReady)).toEqual([true, false, false]);
+	expect(selectHostReachable(state("connected", null, null))).toBe(false);
 });
 
 test("chat rename capability follows the host protocol snapshot", () => {
@@ -535,6 +564,15 @@ test("active workspace selectors resolve the workspace and its owning project", 
 	expect(selectActiveWorkspaceProjectId(state)).toBe("p2");
 });
 
+test("a chat without a project is no repository workspace to scope to", () => {
+	expect(selectActiveRepoWorkspaceId({ activeWorkspaceId: "w2", workspaces })).toBe("w2");
+	const chats = { c: [{ ...workspace, id: "chat-1", projectId: "c", kind: "chat" as const }] };
+	expect(
+		selectActiveRepoWorkspaceId({ activeWorkspaceId: "chat-1", workspaces: chats }),
+	).toBeUndefined();
+	expect(selectActiveRepoWorkspaceId({ activeWorkspaceId: null, workspaces })).toBeUndefined();
+});
+
 test("active workspace selectors return null when the workspace is absent", () => {
 	const state = { activeWorkspaceId: "missing", workspaces };
 
@@ -551,6 +589,36 @@ test("context project prefers the active workspace owner", () => {
 			workspaces,
 		}),
 	).toBe(projectTwo);
+});
+
+test("new work goes to the context repository, never the Chats container", () => {
+	const chats: Project = { ...projectOne, id: "c", name: "Chats", kind: "chats" };
+	const chat: Workspace = { ...workspace, id: "chat-1", projectId: "c", kind: "chat" };
+	const state = (selectedProjectId: string | null) => ({
+		activeWorkspaceId: "chat-1",
+		selectedProjectId,
+		projects: [chats, projectOne, projectTwo],
+		workspaces: { c: [chat], p1: [], p2: [workspace] },
+	});
+	expect(selectContextRepoProject(state("p2"))).toBe(projectTwo);
+	expect(selectContextRepoProject(state("c"))).toBe(projectOne);
+	expect(selectContextRepoProject({ ...state(null), activeWorkspaceId: "w2" })).toBe(projectTwo);
+	expect(selectContextRepoProject({ ...state(null), projects: [chats] })).toBeNull();
+});
+
+test("Find in Files has a root in a workspace or a repository's Home, never the Chats container's", () => {
+	const chats: Project = { ...projectOne, id: "c", name: "Chats", kind: "chats" };
+	const chat: Workspace = { ...workspace, id: "chat-1", projectId: "c", kind: "chat" };
+	const state = (activeWorkspaceId: string | null, selectedProjectId: string | null) => ({
+		activeWorkspaceId,
+		selectedProjectId,
+		projects: [chats, projectOne],
+		workspaces: { c: [chat], p1: [] },
+	});
+	expect(selectHasTextSearchScope(state("chat-1", "c"))).toBe(true);
+	expect(selectHasTextSearchScope(state(null, "p1"))).toBe(true);
+	expect(selectHasTextSearchScope(state(null, "c"))).toBe(false);
+	expect(selectHasTextSearchScope(state(null, null))).toBe(false);
 });
 
 test("context project falls back to the selected Project Home", () => {
@@ -798,15 +866,15 @@ describe("file change signal", () => {
 	});
 });
 
-test("the host-named default workspace shows in the interface language until it is renamed", () => {
-	applyLocale("de", { de: { "store.workspace.defaultName": "Standard" } });
+test("the host-named default workspace shows in the interface language until it is renamed", async () => {
+	await applyLocale("de", { de: { "store.workspace.defaultName": "Standard" } });
 	try {
 		const t = currentTranslator();
 		expect(workspaceName(t, { kind: "default", name: "Default" })).toBe("Standard");
 		expect(workspaceName(t, { kind: "default", name: "Main checkout" })).toBe("Main checkout");
 		expect(workspaceName(t, { name: "Default" })).toBe("Default");
 	} finally {
-		applyLocale("en", {});
+		await applyLocale("en", {});
 	}
 });
 
@@ -949,6 +1017,21 @@ describe("the first prompt of an unnamed chat", () => {
 		expect(selectChatFirstPrompt(state, "w1", "unknown")).toBeUndefined();
 	});
 
+	test("a chat workspace reads its conversation's first prompt", () => {
+		const state = {
+			sessions: {},
+			sessionStateByWorkspace: { chat1: { s1: { ...record("s1"), workspaceId: "chat1" } } },
+			closedChatsByWorkspace: {},
+		};
+		expect(selectChatWorkspaceFirstPrompt(state, "chat1")).toBeUndefined();
+		state.sessionStateByWorkspace.chat1.s1 = {
+			...record("s1", "Plan the trip"),
+			workspaceId: "chat1",
+		};
+		expect(selectChatWorkspaceFirstPrompt(state, "chat1")).toBe("Plan the trip");
+		expect(selectChatWorkspaceFirstPrompt(state, "missing")).toBeUndefined();
+	});
+
 	test("titles and tab labels fall back to the prompt only while the chat has no name", () => {
 		const t = currentTranslator();
 		const planTab: EditorTab = {
@@ -980,4 +1063,27 @@ describe("the first prompt of an unnamed chat", () => {
 			s4: "Plan this one",
 		});
 	});
+});
+
+test("agent catalog trust follows only the active repository workspace, never Chats or project Home", () => {
+	const state = {
+		projects: [{ ...projectTwo, piResourceTrust: "granted" as const }],
+		workspaces,
+		activeWorkspaceId: workspace.id,
+		selectedProjectId: projectTwo.id,
+	};
+	expect(selectActiveSubagentProjectTrust(state)).toBe("granted");
+	expect(
+		selectActiveSubagentProjectTrust({
+			...state,
+			projects: [{ ...projectTwo, piResourceTrust: "untrusted" }],
+		}),
+	).toBe("untrusted");
+	expect(selectActiveSubagentProjectTrust({ ...state, activeWorkspaceId: null })).toBeUndefined();
+	expect(
+		selectActiveSubagentProjectTrust({
+			...state,
+			workspaces: { p2: [{ ...workspace, kind: "chat" }] },
+		}),
+	).toBeUndefined();
 });

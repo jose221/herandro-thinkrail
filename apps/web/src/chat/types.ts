@@ -2,11 +2,13 @@ import type {
 	AssistantMessage,
 	BackgroundCommandCompletionDetails,
 	CaptureFrame,
+	ChatHandoffDetails,
+	ContinueInWorkspaceRequestDetails,
 	ExtUiRequest,
 	ImageContent,
 	ReviewFixDetails,
 	SubagentCompletionDetails,
-	UserMessage,
+	WireUserMessage,
 } from "@thinkrail/contracts";
 import type { ToolStatus } from "@thinkrail/extension-api/web";
 import type { AssistantFailure } from "./assistantFailure";
@@ -38,7 +40,7 @@ export type ExtUiDialogRequest = Extract<
 export type FailureRecovery = "try-again";
 
 export type ChatTurn =
-	| { kind: "user"; id: string; message: UserMessage; attachmentNames?: string[] }
+	| { kind: "user"; id: string; message: WireUserMessage; attachmentNames?: string[] }
 	| { kind: "assistant"; id: string; message: AssistantMessage; streaming: boolean }
 	| { kind: "system"; id: string; text?: string; endedAt?: number }
 	| ({ kind: "compaction"; id: string } & CompactionState)
@@ -63,6 +65,13 @@ export type ChatTurn =
 			timestamp: number;
 	  }
 	| { kind: "reviewFix"; id: string; details: ReviewFixDetails; text: string; timestamp: number }
+	| {
+			kind: "continuationRequest";
+			id: string;
+			details: ContinueInWorkspaceRequestDetails;
+			timestamp: number;
+	  }
+	| { kind: "handoff"; id: string; details: ChatHandoffDetails; timestamp: number }
 	| {
 			kind: "retry";
 			id: string;

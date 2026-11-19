@@ -21,8 +21,11 @@ function readResponse(
 
 export class E2eWire {
 	private sequence = 0;
+	private readonly socket: WebSocket;
 
-	private constructor(private readonly socket: WebSocket) {}
+	private constructor(socket: WebSocket) {
+		this.socket = socket;
+	}
 
 	static async connect(port = E2E_PORT, timeoutMs = 10_000): Promise<E2eWire> {
 		const socket = new WebSocket(`ws://localhost:${port}/ws?protocol=${PROTOCOL_VERSION}`);

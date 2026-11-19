@@ -240,6 +240,7 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 		[
 			"tool-rail-specs",
 			"tool-rail-files",
+			"tool-rail-artifacts",
 			"tool-rail-emulator",
 			"tool-rail-browser",
 			"tool-rail-git",
@@ -255,7 +256,13 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await finishDrag(page, page.locator('[data-drop-label="New right pane here"]').nth(1));
 	await expect(page.locator('[data-side="right"][data-group-id]')).toHaveCount(3);
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
+		[
+			"tool-rail-specs",
+			"tool-rail-artifacts",
+			"tool-rail-emulator",
+			"tool-rail-browser",
+			"tool-rail-git",
+		],
 		["tool-rail-files"],
 		["tool-rail-plan", "tool-rail-review", "tool-rail-requests", "tool-rail-memory"],
 	]);
@@ -264,7 +271,13 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await expect(page.locator('[data-drop-label="New right pane here"]')).toHaveCount(2);
 	await finishDrag(page, page.locator('[data-drop-label="Insert after Review"]'));
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
+		[
+			"tool-rail-specs",
+			"tool-rail-artifacts",
+			"tool-rail-emulator",
+			"tool-rail-browser",
+			"tool-rail-git",
+		],
 		["empty-rail-group"],
 		[
 			"tool-rail-plan",
@@ -288,7 +301,13 @@ test("rail clusters include unplaced tools, boundary drops create panes, and too
 	await page.getByTestId("tab-review").click({ button: "right" });
 	await page.getByRole("menuitem", { name: "Remove tool from group", exact: true }).click();
 	expect(await railClusters(page, "right-layout-rail")).toEqual([
-		["tool-rail-specs", "tool-rail-emulator", "tool-rail-browser", "tool-rail-git"],
+		[
+			"tool-rail-specs",
+			"tool-rail-artifacts",
+			"tool-rail-emulator",
+			"tool-rail-browser",
+			"tool-rail-git",
+		],
 		["empty-rail-group"],
 		["tool-rail-plan", "tool-rail-requests", "tool-rail-memory"],
 		["tool-rail-review"],
@@ -390,7 +409,7 @@ test("a workspace switch cancels a singleton drag even though its frame placemen
 	await openDefaultWorkbench(page);
 	const other = await createWorkspaceViaDialog(page);
 	await waitTerminalReady(page);
-	await defaultWorkspaceRow(page).getByRole("button").first().click();
+	await defaultWorkspaceRow(page).getByRole("treeitem").click();
 	await waitTerminalReady(page);
 	await startDrag(page, page.getByTestId("tool-rail-files"));
 	const target = page.locator('[data-drop-label="Create bottom group to the right"]');
@@ -406,7 +425,7 @@ test("a workspace switch cancels a singleton drag even though its frame placemen
 	await expect(page.getByTestId("bottom-group")).toHaveCount(1);
 	await expect(page.getByTestId("right-layout-rail").getByTestId("tool-rail-files")).toBeVisible();
 	await expect(page.getByTestId("toast")).toContainText("Your drag was canceled");
-	await defaultWorkspaceRow(page).getByRole("button").first().click();
+	await defaultWorkspaceRow(page).getByRole("treeitem").click();
 	await expect(page.getByTestId("bottom-group")).toHaveCount(1);
 	await expect(page.getByTestId("right-layout-rail").getByTestId("tool-rail-files")).toBeVisible();
 });

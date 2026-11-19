@@ -61,22 +61,25 @@ Body.`,
 	expect(parsed?.tools).toEqual(["read", "grep"]);
 });
 
-test.each([
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-] as const)("definition thinking %s is preserved independently of a quoted model suffix", (thinking) => {
-	const parsed = parseAgentDefinition(
-		definitionFile("effort", `model: "openai/gpt-5:xhigh"\nthinking: ${thinking}\n`),
-		"personal",
-	);
-	expect(parsed?.model).toBe("openai/gpt-5:xhigh");
-	expect(parsed?.thinking).toBe(thinking);
+test("a blank model field leaves the definition unpinned", () => {
+	for (const extra of ["model:\n", 'model: ""\n', "model: '  '\n"]) {
+		const parsed = parseAgentDefinition(definitionFile("blank", extra), "personal");
+		expect(parsed?.name).toBe("blank");
+		expect(parsed).not.toHaveProperty("model");
+	}
 });
+
+test.each(["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const)(
+	"definition thinking %s is preserved independently of a quoted model suffix",
+	(thinking) => {
+		const parsed = parseAgentDefinition(
+			definitionFile("effort", `model: "openai/gpt-5:xhigh"\nthinking: ${thinking}\n`),
+			"personal",
+		);
+		expect(parsed?.model).toBe("openai/gpt-5:xhigh");
+		expect(parsed?.thinking).toBe(thinking);
+	},
+);
 
 test("malformed definitions are skipped, never fatal", () => {
 	expect(parseAgentDefinition("just a body", "personal")).toBeUndefined();
@@ -88,6 +91,16 @@ test("malformed definitions are skipped, never fatal", () => {
 	);
 	expect(parsed?.thinking).toBeUndefined();
 	expect(parsed?.maxTurns).toBeUndefined();
+});
+
+test("max_turns accepts only plain positive decimal integers", () => {
+	const maxTurns = (value: string) =>
+		parseAgentDefinition(`---\nname: x\ndescription: y\nmax_turns: ${value}\n---\nbody`, "project")
+			?.maxTurns;
+	expect(maxTurns("12")).toBe(12);
+	for (const bad of ["3abc", "1.5", "1e3", "0x10", "-2", "0"]) {
+		expect(maxTurns(bad)).toBeUndefined();
+	}
 });
 
 test("discovery precedence: builtins > personal > project, first-name-wins (trust posture)", () => {

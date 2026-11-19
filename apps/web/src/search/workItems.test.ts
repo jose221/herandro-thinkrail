@@ -57,17 +57,20 @@ function items(
 	records: SessionStateRecord[],
 	knownTitles: Record<string, string> = {},
 	firstPrompts: Record<string, string> = {},
+	extra: Partial<WorkItemsState> & { transcriptPreviews?: boolean } = {},
 ) {
 	const closed = Object.entries(knownTitles).map(([sessionId, title]) => ({
 		sessionId,
 		title,
 		closedAt: 0,
 	}));
+	const { transcriptPreviews = false, ...stateExtra } = extra;
 	return buildWorkItems({
 		t: currentTranslator(),
-		state: state(records, { closedChatsByWorkspace: { w1: closed } }),
+		state: state(records, { closedChatsByWorkspace: { w1: closed }, ...stateExtra }),
 		contextProjectId: null,
 		firstPrompts,
+		transcriptPreviews,
 		navigateToProject: () => {},
 		navigateToWorkspace: () => {},
 	});
@@ -87,6 +90,47 @@ describe("buildWorkItems", () => {
 		expect(failedChat?.title).toBe("Broken build");
 		expect(failedChat?.attention).toBeUndefined();
 		expect(result.find((item) => item.id === "workspace:w1")?.attention).toBe("needs-input");
+	});
+
+	test("a chat without a project whose deletion is pending is never offered as a destination", () => {
+		const chatRecord = (pending: boolean) =>
+			items(
+				[waiting],
+				{},
+				{ "s-waiting": "Draft the release notes" },
+				{
+					workspaces: {
+						p1: [{ ...workspace, kind: "chat", ...(pending ? { deletionPending: true } : {}) }],
+					},
+				},
+			).filter((item) => item.kind === "chat");
+		expect(chatRecord(false)).toHaveLength(1);
+		expect(chatRecord(true)).toEqual([]);
+	});
+
+	test("a row names where it lives as its emphasized location, and a chat without a project reads No project", () => {
+		const spans = (item: {
+			subtitle?: string;
+			subtitleEmphasis?: readonly (readonly [number, number])[];
+		}) => (item.subtitleEmphasis ?? []).map(([start, end]) => item.subtitle?.slice(start, end));
+		const inWorkspace = items([waiting]);
+		const chat = inWorkspace.find((item) => item.id === "chat:s-waiting");
+		expect(chat?.subtitle).toBe("Project One › Auth refresh");
+		expect(spans(chat ?? {})).toEqual(["Project One", "Auth refresh"]);
+		const row = inWorkspace.find((item) => item.id === "workspace:w1");
+		expect(row?.subtitle).toBe("Project One · auth-refresh");
+		expect(spans(row ?? {})).toEqual(["Project One"]);
+
+		const container: Project = { ...project, name: "Chats", kind: "chats" };
+		const projectless = items(
+			[waiting],
+			{},
+			{},
+			{ projects: [container], workspaces: { p1: [{ ...workspace, kind: "chat" }] } },
+		).find((item) => item.id === "chat:s-waiting");
+		expect(projectless?.subtitle).toBe("No project");
+		expect(spans(projectless ?? {})).toEqual(["No project"]);
+		expect(projectless?.preview?.()?.subtitle).toBe("No project");
 	});
 
 	test("an idle chat is listed only once its title is known", () => {
@@ -115,6 +159,23 @@ describe("buildWorkItems", () => {
 			title: "Chat",
 			titleSource: "default",
 		});
+	});
+
+	test("a chat previews its transcript only against a host that searches, and the project folder is found by its branch", () => {
+		const titles = { "s-idle": "Spec review" };
+		const plain = items([record("s-idle")], titles);
+		expect(plain.find((item) => item.id === "chat:s-idle")?.previewTarget).toBeUndefined();
+		const searching = items([record("s-idle")], titles, {}, { transcriptPreviews: true });
+		expect(searching.find((item) => item.id === "chat:s-idle")?.previewTarget).toEqual({
+			kind: "chat",
+			sessionId: "s-idle",
+		});
+		const folder: Workspace = { ...workspace, id: "w-def", kind: "default", branch: "release-zqx" };
+		const withFolder = items([], {}, {}, { workspaces: { p1: [workspace, folder] } });
+		expect(withFolder.find((item) => item.id === "workspace:w-def")?.keywords).toEqual([
+			"release-zqx",
+		]);
+		expect(withFolder.find((item) => item.id === "workspace:w1")?.keywords).toEqual([]);
 	});
 
 	test("Waiting lists chats that need you by urgency, leaving running and quiet chats out", () => {
@@ -174,6 +235,7 @@ describe("buildWorkItems", () => {
 			},
 			contextProjectId: null,
 			firstPrompts: {},
+			transcriptPreviews: false,
 			navigateToProject: () => {},
 			navigateToWorkspace: () => {},
 		});
@@ -183,6 +245,82 @@ describe("buildWorkItems", () => {
 			"chat:u2",
 			"chat:u3",
 			"chat:u-p2",
+		]);
+	});
+
+	test("within an urgency the newest activity leads, a chat without a project competing equally, and equal stamps follow the rail", () => {
+		const second: Project = { ...project, id: "p2", name: "Project Two", slug: "p2" };
+		const chats: Project = { ...project, id: "chats", name: "Chats", slug: "chats", kind: "chats" };
+		const row = (
+			id: string,
+			projectId: string,
+			lastActiveAt: number,
+			extra: Partial<Workspace> = {},
+		) => ({ ...workspace, id, projectId, lastActiveAt, ...extra }) satisfies Workspace;
+		const unreadIn = (sessionId: string, workspaceId: string, projectId: string) => ({
+			[sessionId]: {
+				...record(sessionId, {
+					completionUnread: true,
+					completion: { completionId: `c-${sessionId}`, outcome: "succeeded" },
+				}),
+				workspaceId,
+				projectId,
+			},
+		});
+		const result = buildWorkItems({
+			t: currentTranslator(),
+			state: {
+				...state([]),
+				projects: [project, chats, second],
+				workspaces: {
+					p1: [row("w-def", "p1", 100, { kind: "default" }), row("w1", "p1", 300)],
+					chats: [
+						row("c-old", "chats", 300, { kind: "chat" }),
+						row("c-new", "chats", 500, { kind: "chat" }),
+					],
+					p2: [row("w2", "p2", 300)],
+				},
+				sessionStateByWorkspace: {
+					"w-def": {
+						...unreadIn("u-def", "w-def", "p1"),
+						"s-waiting": { ...waiting, workspaceId: "w-def" },
+					},
+					w2: unreadIn("u-w2", "w2", "p2"),
+					w1: unreadIn("u-w1", "w1", "p1"),
+					"c-old": unreadIn("u-c-old", "c-old", "chats"),
+					"c-new": unreadIn("u-c-new", "c-new", "chats"),
+				},
+			},
+			contextProjectId: null,
+			firstPrompts: {},
+			transcriptPreviews: false,
+			navigateToProject: () => {},
+			navigateToWorkspace: () => {},
+		});
+		expect(waitingItems(result).map((item) => item.id)).toEqual([
+			"chat:s-waiting",
+			"chat:u-c-new",
+			"chat:u-c-old",
+			"chat:u-w1",
+			"chat:u-w2",
+			"chat:u-def",
+		]);
+		expect(result.filter((item) => item.kind === "workspace").map((item) => item.id)).toEqual([
+			"workspace:w1",
+			"workspace:w2",
+			"workspace:w-def",
+		]);
+	});
+
+	test("without activity stamps the order is the rail's: Default first, then the newest created", () => {
+		const older: Workspace = { ...workspace, id: "w-old" };
+		const newer: Workspace = { ...workspace, id: "w-new" };
+		const folder: Workspace = { ...workspace, id: "w-def", kind: "default" };
+		const result = items([], {}, {}, { workspaces: { p1: [folder, older, newer] } });
+		expect(result.filter((item) => item.kind === "workspace").map((item) => item.id)).toEqual([
+			"workspace:w-def",
+			"workspace:w-new",
+			"workspace:w-old",
 		]);
 	});
 });

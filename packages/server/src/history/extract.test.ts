@@ -10,7 +10,7 @@ const header = (cwd = "/tmp/x") =>
 const entriesOf = (jsonl: string) => {
 	const session = extractSession(jsonl);
 	expect(session).not.toBeNull();
-	return session?.entries;
+	return session?.entries.map(({ entryId: _, ...entry }) => entry);
 };
 
 describe("extractSession", () => {
@@ -61,6 +61,7 @@ describe("extractSession", () => {
 			}),
 			"not json at all",
 		].join("\n");
+		expect(extractSession(jsonl)?.entries.map((entry) => entry.entryId)).toEqual(["b", "c", "f"]);
 		expect(entriesOf(jsonl)).toEqual([
 			{ text: "fix the flaky test", role: "user", timestamp: 100, messageIndex: 0 },
 			{
@@ -109,6 +110,30 @@ describe("extractSession", () => {
 			line({ type: "session_info", id: "i1", parentId: "i0", name: "" }),
 		].join("\n");
 		expect(extractSession(cleared)?.title).toBeUndefined();
+	});
+
+	test("strips terminal escapes from the latest session name without the write cap", () => {
+		const named = [
+			header(),
+			line({ type: "session_info", id: "i0", parentId: null, name: "\u001b[31mred\u001b[0m name" }),
+		].join("\n");
+		expect(extractSession(named)?.title).toBe("red name");
+
+		const visible = "x".repeat(100);
+		const raw = `\u001b[31m${visible}\u001b[0m`;
+		const long = [
+			header(),
+			line({ type: "session_info", id: "i0", parentId: null, name: raw }),
+		].join("\n");
+		expect(raw.length).toBeGreaterThan(80);
+		expect(extractSession(long)?.title).toBe(visible);
+
+		const onlyEscapes = [
+			header(),
+			line({ type: "session_info", id: "i0", parentId: null, name: "Named" }),
+			line({ type: "session_info", id: "i1", parentId: "i0", name: "\u001b[31m\u001b[0m" }),
+		].join("\n");
+		expect(extractSession(onlyEscapes)?.title).toBeUndefined();
 	});
 
 	test("rejects a file whose first parseable entry is not a session header (pi's own rule)", () => {
@@ -259,7 +284,7 @@ describe("extractSession", () => {
 		]);
 	});
 
-	test("respects compaction — summarized-away messages are dropped and the summary isn't a hit", () => {
+	test("keeps summarized turns for review; the compaction summary still isn't a hit", () => {
 		const jsonl = [
 			header(),
 			line({
@@ -305,8 +330,10 @@ describe("extractSession", () => {
 			}),
 		].join("\n");
 		expect(entriesOf(jsonl)).toEqual([
-			{ text: "kept question", role: "user", timestamp: 300, messageIndex: 1 },
-			{ text: "post-compaction answer", role: "assistant", timestamp: 400, messageIndex: 2 },
+			{ text: "dropped question", role: "user", timestamp: 100, messageIndex: 0 },
+			{ text: "dropped answer", role: "assistant", timestamp: 200, messageIndex: 1 },
+			{ text: "kept question", role: "user", timestamp: 300, messageIndex: 3 },
+			{ text: "post-compaction answer", role: "assistant", timestamp: 400, messageIndex: 4 },
 		]);
 	});
 

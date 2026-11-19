@@ -26,7 +26,7 @@ import { errorText, getTransport } from "../transport";
 import { PatchLinesView, PatchView, parsePatch } from "./GitPatch";
 
 const INPUT_CLASS =
-	"min-h-28 min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text";
+	"min-h-28 min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default placeholder:text-text-muted focus-visible:border-control-border-active focus-visible:focus-ring disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text";
 
 const STATUS_LABEL: Record<GitControlFile["status"], string> = {
 	added: "A",

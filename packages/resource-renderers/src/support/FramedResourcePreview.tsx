@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@thinkrail/ui/
 import { cn } from "@thinkrail/ui/utils";
 import { useState } from "react";
 import { useOptionalResourceHost, useResourceScope } from "../host";
+import type { FrameFocus } from "../registry";
 import { ResourcePreview, type ResourcePreviewLayout } from "./ResourcePreview";
 
 export interface FramedResourcePreviewProps {
@@ -13,7 +14,9 @@ export interface FramedResourcePreviewProps {
 	title: string;
 	frameClassName: string;
 	compact?: boolean | undefined;
+	frameFocus?: FrameFocus | undefined;
 	testIdPrefix: string;
+	onFullscreen?: (() => void) | undefined;
 }
 
 export function FramedResourcePreview({
@@ -22,7 +25,9 @@ export function FramedResourcePreview({
 	title,
 	frameClassName,
 	compact,
+	frameFocus,
 	testIdPrefix,
+	onFullscreen,
 }: FramedResourcePreviewProps) {
 	const t = useT();
 	const host = useOptionalResourceHost();
@@ -58,6 +63,7 @@ export function FramedResourcePreview({
 			<ResourcePreview
 				{...shared}
 				compact={compact}
+				frameFocus={frameFocus}
 				className={cn("rounded-sm border border-border-default", frameClassName)}
 				actions={
 					<>
@@ -67,7 +73,7 @@ export function FramedResourcePreview({
 							label={t("viewer.preview.fullScreen")}
 							data-testid={`${testIdPrefix}-fullscreen`}
 							tabIndex={0}
-							onClick={() => setFullscreen(true)}
+							onClick={onFullscreen ?? (() => setFullscreen(true))}
 						/>
 					</>
 				}
@@ -75,7 +81,7 @@ export function FramedResourcePreview({
 			<Dialog open={fullscreen} onOpenChange={setFullscreen}>
 				<DialogContent
 					data-testid={`${testIdPrefix}-fullscreen-dialog`}
-					className="flex h-[90vh] w-[95vw] max-w-[95vw] flex-col gap-8"
+					className="h-[90vh] w-[95vw] max-w-[95vw] gap-8"
 				>
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>

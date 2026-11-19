@@ -11,8 +11,8 @@ references: [submodule-web-panels, submodule-web-chat]
 ## Responsibility
 
 Everything that turns a workspace resource into a viewable, reviewable surface: the engine-neutral resource
-description and renderer registry, the eleven bundled file/diff renderers (code, markdown, binary, LFS,
-image, SVG, CSV, JSON, notebook, PDF, HTML) with their review composers, thread cards and region surfaces,
+description and renderer registry, the twelve bundled file/diff renderers (code, markdown, binary, LFS,
+image, SVG, CSV, JSON, notebook, PDF, HTML, interactive HTML) with their review composers, thread cards and region surfaces,
 and the shared Monaco, Pierre and markdown-document machinery they run on. It is presentation: it owns no
 content loading, review persistence, tabs or navigation — a host supplies those.
 
@@ -29,7 +29,10 @@ One barrel, `@thinkrail/resource-renderers` (`src/index.ts`):
   rules every surface shares: `resourceContent(text, meta, url)` (no metadata yet is provisional text, a
   missing hash is an absent side, a binary side without a byte URL is absent), `diffResourceMeta(original,
   modified)` (a diff is described by its modified side unless that side is absent, and is text only when
-  both present sides are) and `PENDING_TEXT_META` — plus `registerBundledResourceRenderers()` (idempotent).
+  both present sides are) and `PENDING_TEXT_META` — plus `registerBundledResourceRenderers(options?)`
+  (idempotent; the first call's options win). `BundledRendererOptions.interactiveHtml` lists the path globs
+  whose HTML gets the Interactive candidate (below); the host passes them because only it knows where its
+  agents write mockups.
   `diffRendererCapabilities` returns, from a path alone (before content loads), the capabilities of the
   diff renderer it would resolve to — inferring the text/binary split from the path's MIME so known image
   and PDF paths resolve to their layout-less renderers; MIME inference itself stays module-internal. A pane
@@ -37,6 +40,7 @@ One barrel, `@thinkrail/resource-renderers` (`src/index.ts`):
 - the host seam — `ResourceHostProvider`, `ResourcePreferencesProvider`, `ResourceEnvironmentProvider`,
   `ResourceScopeProvider`, `useOptionalResourceHost`, `useResourceScope` and the `ResourceHost`,
   `ResourcePreferences`, `ResourceScope`, `ResourceFileReviewProps`, `ResourceReviewSendProps`,
+  `ResourceOpenInBrowserProps`,
   `ResourceMarkdown`, `ResourceCodeHost`, `ResourceCodeLanguage`, `ResourceMarkdownProps`,
   `MarkdownRehypePlugins` types;
 - `canonicalWorkspacePath` — the package's copy of the app's workspace-relative path identity (`lib`'s
@@ -46,17 +50,48 @@ One barrel, `@thinkrail/resource-renderers` (`src/index.ts`):
   host's fs events, the review store and an opened tab use;
 - **`ResourcePreview`** — a self-loading file view, or with `before` (another file) a before/after diff of two
   workspace files, with the registry's toggle, the unplaced strip, review commenting and Send review, and
-  caller slots (`leading`, `actions`, controlled `rendererId` / `layout`, and an opaque `viewState` it tags
+  caller slots (`leading`, `actions`, controlled `rendererId` / `layout`, an opaque `viewState` it tags
   with the renderer implementation that wrote it, so a renderer switch never restores another renderer's
-  state and a caller needs no reset). Its `compact` flag (carried to the lazy views as
+  state and a caller needs no reset, and a `reveal` it forwards to the view renderer). Its `compact` flag (carried to the lazy views as
   `ResourceEnvironment.compact`, and reset by an explicit `compact={false}`) drops the renderer toggles,
-  Send review and the HTML notice with its viewport presets — the chrome a small embedded frame cannot
-  afford; the views themselves are unchanged;
+  Send review, the HTML notice with its viewport presets and the Markdown outline — the chrome a small
+  embedded frame cannot afford; the views themselves are unchanged, and a compact preview given neither
+  `leading` nor `actions` draws no toolbar at all rather than an empty row. `reviewable={false}` skips the
+  host's review surfaces — no commenting, no unplaced strip — for a surface whose purpose is looking, not
+  reviewing (the questionnaire's compare overlay). `htmlViewport` (carried the same way as
+  `ResourceEnvironment.htmlViewport`) fixes the preview width of every HTML view and diff beneath it and
+  hides their own presets, for a caller that shows one width control for several frames — it renders
+  **`HtmlViewportSwitch`** (typed by `HtmlViewport`), the same segments the notice uses. `frameFocus`
+  (`FrameFocus`, carried the same way as `ResourceEnvironment.frameFocus`; also a `FramedResourcePreview`
+  prop, never applied to its full-screen dialog) set to `"manual"` takes every HTML frame beneath it out of
+  the Tab order (`tabIndex=-1`): a sandboxed frame keeps Tab and every key once entered, so a host that
+  embeds one among its own controls (the questionnaire) enters it explicitly;
+  `sideLabels` (`DiffSideLabels`, also `ResourceDiffProps.sideLabels`) names a diff's two sides where "Old" /
+  "New" would mislead, as when two alternatives are compared: the visual diffs (HTML, image, SVG) use them
+  for the 2-up headings and captions, the rest ignore them;
 - **`FramedResourcePreview`** — `ResourcePreview` in a caller-sized frame with **Open in tab** (the file, or
   the comparison for a diff) and **Full screen** (a dialog with the full chrome, sharing renderer and view
-  state), every action an explicit tab stop; nothing without a host and a workspace scope. It is the one
+  state; an `onFullscreen` handler replaces that dialog with the caller's own), every action an explicit tab
+  stop; nothing without a host and a workspace scope. It is the one
   framed preview of visualize's file card and the questionnaire's previews ([[module-ext-visualize]],
   [[module-ext-ask-user-question]]) — lifted from visualize when the second consumer arrived;
+- **`ResourceReveal`** and **`SOURCE_RENDERER_ID`** (`thinkrail/code`) — the open-at-a-line contract: a
+  text view that receives `ResourceViewProps.reveal` (`{ line, column?, length?, tick }`) scrolls that line
+  into view and marks it (the Pierre file view through its virtualizer's `revealLine`, retried over a few
+  frames until the line is laid out, then `selectedLines`; the desktop Monaco view through
+  `revealLineNow`, an immediate scroll on a fresh mount and later alike — a smooth scroll to a far line is
+  cut short by the next layout — selecting `column`..`column + length`) and then reports the applied `tick`
+  through `ResourceViewProps.onRevealHandled`, so a caller that keeps the reveal (a tab) can drop it and a
+  remount restores the saved view state rather than the old hit; a caller repeats a reveal of the same line
+  by bumping `tick`, and names the source renderer by id so a Markdown or HTML file opens at a line rather
+  than as its rendered document. The rendered Markdown view honours `reveal` too, without a mark:
+  it scrolls the block whose source-line stamp (`data-md-line-start`, frontmatter offset applied — both
+  of its branches stamp) is the last one at or before `line` to the top — the first block when `line`
+  precedes them all (a preamble hit on the blank line after the frontmatter), opening any closed
+  `<details>` around it first — waiting for the document to
+  render if it has not yet, and reports the tick through `onRevealHandled` like the code views, so a spec
+  opens at a heading and a remount keeps the reading position; the other rich renderers ignore `reveal`,
+  so a reveal through them is a plain open;
 - the pieces every surface composes a renderer from, so a file tab, a diff tab, a Changes section and
   `ResourcePreview` run one sequence:
   - `useRendererSelection(resource, intent, rendererId)` — candidates for the environment's phone class, the
@@ -71,8 +106,10 @@ One barrel, `@thinkrail/resource-renderers` (`src/index.ts`):
   - **`RendererToggles`** — the renderer candidate segments, plus Split/Inline when the caller passes a diff
     `layout`, the renderer supports layout and the viewport is not phone-class (one rule, so a phone never
     shows a layout the diff refuses and a single-file view never shows diff layout);
-  - `UnplacedReviewStrip`, `ReviewThreadCard`, `ReviewDraftContext`/`ReviewDraftPersistence`, and
-    `createAskAgentRequest`;
+  - `UnplacedReviewStrip`, `ReviewThreadCard`, `ReviewDraftContext`/`ReviewDraftPersistence`,
+    `createAskAgentRequest`, and `focusReviewCard` (a card's keyboard landing, for the app's own reveals);
+- **`REVIEW_SURFACE_COMMANDS`** and **`REVIEW_SURFACE_SCOPE`** (`review.surface`) — the review surfaces'
+  rebindable local keys (*Keyboard review surfaces*), which the app adds to its resolved local key sets;
 - `useScrollViewState` — the one scroll view-state hook (restores a saved offset once the content is tall
   enough, gives way to user input, reports the offset on detach, and adopts a newer saved offset — one a
   sibling instance of the same slot reported on its detach, as the Changes review's Stacked handoff does —
@@ -92,12 +129,12 @@ A host wraps renderers in `ResourceHostProvider` with one static `ResourceHost` 
 
 - `markdown` — the component that renders markdown (`ResourceMarkdownProps`); the document preview, rendered
   diff and notebook cells pass their plugins and components through it.
-- `code` — the code-highlighting host (`languages` with grammar loaders, `languageId` canonicalization, and
-  the code `theme` resolved from CSS variables). Monaco is page-global: the first preload `warm` or
+- `code` — the code-highlighting host (the `languages` catalog, `languageId` canonicalization, `editorTheme`
+  with Monaco rules and colors from CSS variables, and `pierreTheme`). Monaco is page-global: the first preload `warm` or
   `MonacoEditor` initializes it from its host's `code` once (`ensureMonaco`, synchronous after the Monaco
   chunk loads), and every later editor reuses that setup. `ensureMonaco` owns the one page-lifetime theme
   watch, so a swap between a preload and the first editor still re-themes, and N open editors cost one
-  refresh per swap. A grammar loads on its language's first model or on a warm for its path.
+  refresh per swap. The Pierre tokenizer loads on the first model of a registered language, never on a preload.
 - `bytesUrl(workspaceId, path, oid?)` — the host byte route for images, PDFs and relative markdown assets.
 - `openFile(workspaceId, path, { keep? })` and `openComparison(workspaceId, before, path)` — navigation for
   relative document links (preview) and explicit Open-in-tab actions (keep).
@@ -105,15 +142,24 @@ A host wraps renderers in `ResourceHostProvider` with one static `ResourceHost` 
   content and live refresh (`null` paths mean "anything may have changed": a truncated batch or a new
   connection, whose missed pushes are never replayed). A read may come back without `meta` from a host that
   predates resource metadata; the preview shows it as provisional text, exactly as the file and diff panes do.
-- `FileReview` (a render-prop component: `{ workspaceId, path, kind, sessionId?, children(review) }`) and
+- `FileReview` (a render-prop component: `{ workspaceId, path, kind, sessionId?, children(review) }`, where
+  `review` is `undefined` when the host keeps no review for that file — no threads, no commenting, and the
+  preview renders without both) and
   `ReviewSend` — the host's review surface and Send review control; the optional session routes sends. The
   seam is a component, not a hook on the host object: passing hooks around as values breaks React's rules and
   made the React Compiler bail out of the preview; a before/after nests two `FileReview`s.
+- `OpenInBrowser?` (`ResourceOpenInBrowserProps`: `{ workspaceId, path }`) — the host's "Open in browser"
+  control, a component for the same reason as `ReviewSend`; `ResourcePreview`'s toolbar renders it for a
+  single file (never a before/after) just before the caller's `actions`, so every framed preview, compare
+  pane and palette preview gets it. The host decides which files qualify and whether its own host can serve
+  them (ThinkRail: HTML/XHTML, from `BROWSER_VIEW_PROTOCOL_VERSION`), and how to open them.
 Build the value once (the app does at module scope). Its functions are memo inputs: `documentComponents`
 defines its link and image components per call, so a new `bytesUrl`/`openFile` identity would remount every
 link and image in open previews and notebook cells. The reader's line-width preference
-(`fileLineWidth` / `fileLineWidthBounded`) arrives separately through `ResourcePreferencesProvider`; only
-`MonacoEditor` reads it, so a width change re-renders nothing else. The phone class arrives the same way
+(`fileLineWidth` / `fileLineWidthBounded`) arrives separately through `ResourcePreferencesProvider`;
+`MonacoEditor` reads those fields. The Markdown preview reads the outline's `markdownOutlineVisible`
+(`null` until the reader chooses) / `setMarkdownOutlineVisible` and `markdownOutlineSide` from the same
+value; the host persists them. A preference object identity change re-renders both consumers. The phone class arrives the same way
 through `ResourceEnvironmentProvider` (the registry's `ResourceEnvironment`, `{ mobile }`); only
 `ResourcePreview` reads it — panes resolve with their own viewport reading — so a viewport flip re-renders
 only the previews that must re-resolve their renderer. A subtree that belongs to one workspace and chat
@@ -121,9 +167,12 @@ sets `ResourceScopeProvider` (`{ workspaceId, sessionId? }`, read with `useResou
 its transcript list): `ResourcePreview` falls back to its workspace when no `workspaceId` prop is given and
 routes review sends to its session. The scope is its own context rather than a host field because a host
 spread per chat made every preview's reads and subscriptions restart whenever the chat's actions changed.
-`ResourcePreview` depends only on the host's stable `readFile` / `subscribeFileChanges` / `bytesUrl`; it
-applies reads in the order it issued them (a newer change event never discards the read in flight, so a
-burst of events cannot starve the first load), keeps the loaded file when a re-read returns the same hash —
+`ResourcePreview` depends only on the host's stable `readFile` / `subscribeFileChanges` / `bytesUrl`; its
+reads are **single-flight** per file: change events during a read fold into one follow-up read sent after
+it settles, like the web panels' live reads, because a stalled host otherwise collected one `fs.readFile`
+per event until the transport's replay cap refused every request. It applies reads in the order it issued
+them (a newer change event never discards the read in flight, so a burst of events cannot starve the first
+load), keeps the loaded file when a re-read returns the same hash —
 as the same state object, like a re-read that fails the same way, so React bails out instead of scheduling
 a render that would interrupt an unfinished mount below it, such as a large diff's — and keeps the last
 good content when a re-read fails, like a file tab, but marked stale: the failure is named above it
@@ -136,10 +185,9 @@ own render and passes them to `MarkdownDocument` explicitly — a context read i
 `ResourceRenderer.loadView(environment)` receives the same `ResourceEnvironment` (`{ mobile }`) used for
 resolution, so the code renderer picks Pierre `File` on phone-class viewports and Monaco otherwise without
 reading a viewport global. The loaded module (`ResourceViewModule`, exported from the root) may export
-`warm(host, resource)`; a preload calls it after every request, one task after the module resolves, so
+`warm(host)`; a preload calls it after every request, one task after the module resolves, so
 the chunk's evaluation and the warm are separate long tasks. It must be cheap and idempotent. Monaco's
-`warm` runs `ensureMonaco` and, one task later, starts the highlighter (engine and theme) and the grammar
-for the resource's path (an empty path loads no grammar). `usePreloadResourceView` preloads only a
+`warm` runs `ensureMonaco`; the highlighter loads when the first model opens. `usePreloadResourceView` preloads only a
 renderer whose `capabilities.preload` is set, which only the code view sets: a host warming every row it
 hovers would otherwise load the PDF, notebook or CSV chunk of the row's top candidate.
 Once the chunk has loaded, a Monaco mount is
@@ -155,9 +203,11 @@ stored a `lazy` there, and the first `RendererView` without a stored component s
 the in-flight load. That choice is stored once and never switched: a lazy and a direct component are
 different types, and swapping them would remount a live editor. A lazy made while a load was in flight is
 resolved for every later mount, so it does not suspend again. A failed preload, in the load or in `warm`,
-logs a warning instead of rejecting. A failed load is forgotten, together with a `lazy` a mount stored for
-it while it was in flight, so the next mount retries and a real failure reaches the pane's error
-boundary.
+logs a warning instead of rejecting. A failed load is forgotten so the next load retries it. A `lazy` that a
+mount stored while the load was in flight stays stored and failed, so every re-render of that mount throws
+to the pane's error boundary instead of making a fresh `lazy`. React retries a failed render, and an engine
+that refetches failed module imports (Chromium 156+) would otherwise loop on the chunk request. The next
+load, such as a hover or idle preload, replaces the failed `lazy` with the loaded component.
 
 **Review-draft scratch is read per slot.** A pane that keeps transient authoring across remounts provides
 `ReviewDraftContext` with a `ReviewDraftPersistence` (`rendererId`, `read(key)`, `subscribe`, `update(key,
@@ -177,8 +227,8 @@ keeps it.
   once extensions render files. The package therefore owns only the props contract; its tests render through
   a test-only react-markdown + GFM helper.
 - **Host values are plain and static.** The extraction first resolved markdown and code through lazy loaders
-  read with `use`, to keep chat's markdown and the Shiki catalog out of the entry graph. Both were already in
-  it — chat imports its markdown statically, and that pulls `lib/highlighter` and `@shikijs/core` — so the
+  read with `use`, to keep chat's markdown and the language catalog out of the entry graph. Both were already in
+  it — chat imports its markdown statically, and that pulls `lib/codeLanguages` — so the
   loaders deferred nothing (rolldown reported the markdown import as ineffective) while costing a suspended
   render on first mount and a loader-identity contract a host could break. Plain values removed both, and the
   web eager graph shrank by about 1.5 kB. Preferences got their own context for the same reason the values are
@@ -201,8 +251,8 @@ keeps it.
 ## Boundary
 
 - **Allowed deps:** `@thinkrail/contracts` (types), `@thinkrail/locales` (the `MessageKey` type and
-  `./react` for its UI strings — `useT`, `<T>`, `localeOf`), `@thinkrail/ui` primitives, React, and the renderer
-  engines (`monaco-editor`, `@shikijs/monaco`, `shiki`, `@pierre/diffs`, `pdfjs-dist`,
+  `./react` for its UI strings — `useT`, `<T>`, `localeOf`), `@thinkrail/ui` primitives (`./local-keys` for the review surfaces' rebindable keys), React, and the renderer
+  engines (`monaco-editor`, `@pierre/diffs`, `@pierre/highlights`, `pdfjs-dist`,
   `react-markdown`, `rehype-raw`, `rehype-sanitize`, `diff`, `jsondiffpatch`, `react-virtuoso`,
   `node-htmldiff`).
 - **Forbidden:** the web app (store, transport, panels, chat, shell, lib, themes), extensions, the server, and
@@ -229,6 +279,20 @@ own viewport (virtualized table, paged PDF, sandboxed HTML frame) and therefore 
 is large; a host passes `virtualize` only for a diff large enough to need it. Every other diff lays out at its natural height, which is what lets the continuous Changes review stack sections
 in one scroll. `HunkActions.triage` is optional: a surface that tracks kept hunks supplies the kept keys,
 a setter, and a sink for the renderer's hunk content keys; a renderer without it shows no Keep control.
+
+Renderers speak the web shell's focus-recovery markup ([[module-web]], *Get right*) without importing it: a
+Pierre diff's scroller is the `hunks:<path>` list and each hunk toolbar a row keyed by its content key
+(`data-block-id` carries `changeBlockId`), with Revert as its primary, so a reverted hunk hands focus to the
+next one. A review focus always scrolls the revealed thread card (or notebook cell) into view; it moves
+keyboard focus to the card's first control only when `SurfaceReview.focus.moveFocus` asks — **Show in file**
+and the review's keyboard jumps do, a guide's Prev / Next button does not, so its next Enter advances the
+guide instead of sending the draft. Every renderer goes through `support/revealFocus.ts`'s
+`revealReviewCard`, whose `focusReviewCard` lands on the card's `data-focus-row-primary` — a draft's text,
+caret at its end — or on a sent card itself (`tabIndex=-1`), never on Send: the next Enter after
+**Show in file** used to send the draft. A container that holds no card falls back to
+`@thinkrail/ui/focus`'s `focusFirstControl`. Monaco, whose cards mount in view zones after the line
+reveal, polls a bounded number of frames for the card. Each card is a `data-focus-row` (its comment id);
+in a Pierre diff its list is the scroller's `hunks:<path>`, so recovery stays inside the file.
 
 `ResourceContent` keeps text, retrievable bytes, and an absent diff side distinct. In particular, absence
 is never represented by a byte payload without a URL. `SurfaceReview` carries authoritative anchors; a
@@ -308,6 +372,11 @@ mounted document that the next text change keeps on screen), but advertises no d
 pane's unplaced strip, **Show in Source** selects the code renderer, and diff authoring is available only
 in Source. It is selected by registry match rather than a path branch in the pane. Scopes whose modified
 side is historical receive no review surface or mutation actions.
+When a review surface is available but the selected renderer has no anchors for the current intent,
+the unplaced strip explains how to start a comment and offers a renderer with anchor support, even
+before the first thread exists. The action uses the same renderer selection as **Show in Source**;
+supported previews and historical scopes do not show this fallback.
+
 
 **The rendered diff focuses on its changes the way Pierre does.** The merged document is parsed once
 and a prose-root block is *changed* when it is or contains `ins`, `del`, or a `[data-diff-node]`
@@ -351,7 +420,7 @@ and both diff frames; the difference blend keeps a flat canvas so the checker ca
 subtraction), because on a solid dark canvas a dark logo on a transparent PNG is indistinguishable from
 an image that failed to load. A drag over the rendered intrinsic box produces one normalized `region`
 selector; placed threads project that selector back to outlined rectangles and numbered markers, with
-cards below the image. Its diff defaults to 2-up and also offers swipe, onion-skin, and difference-blend
+cards below the image. The same selector has a keyboard path (*Keyboard review surfaces*). Its diff defaults to 2-up and also offers swipe, onion-skin, and difference-blend
 modes. Two-up anchors directly to the side drawn on; overlaid modes expose the active old/new anchor space
 explicitly, so base and worktree coordinates are never translated. An absent side is a labelled empty
 frame. Image zoom, rendered intrinsic aspect bounds, region rectangles, swipe clipping/divider position,
@@ -407,9 +476,18 @@ its mandatory `lineRange` plus `structural { scheme: "json-pointer", ref }`; a p
 or one now naming a node outside the host-reanchored line range, is reported unplaced. The collapsible
 unified diff comes from a `jsondiffpatch` instance with move detection
 and stable object hashes, tinting added/removed/changed/moved nodes and showing primitive replacements as
-old → new. Removed nodes and comments stay on `review.base` with base scanner lines; all other selections
-use the modified document and `review.worktree`. Invalid source renders no tree, leaving Source as the
-alternate candidate.
+old → new. A branch whose subtree holds changes carries a dot, and every changed or change-holding row
+shows a hover tooltip naming its own change and listing the leaf changes beneath it (accessor-style
+relative path, kind, value or old → new — a replacement drops the redundant "Changed" word; capped at
+eight, then "…and N more"). Classification walks base and rendered paths together, so a removal keeps
+its true base pointer (what the Removed section and base threads resolve against) and attaches to its
+rendered parent even inside reordered or shifted array items. Paths render accessor-style from typed
+segments — `[n]` only for array indexes, `.key` only for identifier-safe keys, `["…"]` otherwise — so
+distinct pointers never share a label. The derivation attaches each change once to its holder and folds
+holders into parents deepest-first, so every ancestor keeps only a total and its first eight changes —
+linear in touched nodes, never changes × depth. Removed nodes and comments stay on `review.base` with
+base scanner lines; all other selections use the modified document and `review.worktree`. Invalid
+source renders no tree, leaving Source as the alternate candidate.
 
 `thinkrail/notebook` accepts nbformat-4 JSON and reuses the tolerant positional JSON scanner to bind every
 rendered cell to its raw cell-object line range. Nbformat 4.5 ids are the `ipynb-cell` structural ref;
@@ -420,7 +498,7 @@ images in the app document, routes SVG data images through the empty-sandbox `No
 **relative** images from the host `/files` route through the same injected byte-URL composer the
 markdown preview uses (a traversal above the worktree is inert text, never a request), and renders
 links plus every remote image URL as inert text — a notebook's `![plot](figures/x.png)` is repository
-content, a third-party URL is not. Notebook language metadata must resolve through the shared Shiki catalog; missing
+content, a third-party URL is not. Notebook language metadata must resolve through the shared language catalog; missing
 metadata defaults to Python and unknown values render as plain text. ANSI is removed from stream and error
 output. MIME bundles choose image (PNG, JPEG, GIF, SVG), HTML, JSON, then plain text. SVG output stays a
 data image inside the inert frame document.
@@ -442,28 +520,111 @@ current page is the first visible page (the navigation target until any page rep
 follows scrolling as well as navigation; that page and the zoom are written to tab view state when the
 view unmounts, like the other scroll-restoring renderers. PDF diffs use one synchronized page sequence: each page pair
 starts in 2-up and can switch among the shared swipe, onion, and difference modes, with an absent side
-represented by an explicit empty page frame.
+represented by an explicit empty page frame. Only the toolbar's current page carries the region surface's
+Tab stop (the others are `tabIndex=-1`), so Tab reaches the page in view rather than one two pages above it.
 
 `thinkrail/html` parses source into a document before previewing it in an empty-capability `sandbox=""`
 iframe. The sanitizer removes active, navigational, embedding, and form elements; strips event handlers and
 non-`data:` resource URLs; and turns anchors into inert text-bearing elements. Styles remain. Notebook HTML
 output uses this same sanitizer. The injected CSP is exactly `default-src 'none'; img-src data: blob:;
 style-src 'unsafe-inline'; font-src data:; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src
-'none'; child-src 'none'`. The diff is the shared visual frame constrained to 2-up sandboxed documents only.
-It advertises no anchor geometry, so HTML threads remain in the pane-owned unplaced strip and Source is the
-only authoring candidate. View and diff share a **preview width** switch in the notice bar — Desktop 1280 /
+'none'; child-src 'none'`. The diff is the shared visual frame with all four modes (2-up, swipe, onion,
+difference), and its two documents **scroll together** in every mode: a per-diff `ScrollLink` mirrors the
+absolute scroll offset of whichever document the user scrolls onto the other, ignores the echo of its own
+write (read back after the write, so a shorter document's clamped offset never drags the longer one back;
+the write is an explicitly `instant` `scrollTo`, since a mockup's `scroll-behavior: smooth` would otherwise
+turn it into an animation whose intermediate offsets read as user scrolls and leave the pair apart),
+and re-applies the last offset to a frame that reloads, so a mode switch keeps the position. WebKit
+delivers no events into a document whose sandbox lacks `allow-scripts` — not even to a listener the host
+attached — so the link cannot rely on `scroll`: it also polls both offsets every 100 ms while attached and,
+once one moves, follows it frame by frame until 20 frames pass unchanged. A delivered `scroll` event
+(Chromium, Firefox) only triggers the same check at once. Reading and writing the offsets from the host
+works in every engine. Only these
+paired static frames carry `sandbox="allow-same-origin"`, which lets the host attach the scroll listener and read
+the offset; they still have no `allow-scripts`, so nothing in the document runs (the sanitizer strips
+scripts and handlers too, and the CSP has no script source) — the dangerous pair is `allow-scripts` with
+`allow-same-origin`, never granted. A single HTML view keeps `sandbox=""`. The link talks to each frame
+through a `ScrollEndpoint`: a static frame's window directly, an interactive frame (below) through messages. The layered modes drop the
+"comment on old/new" side picker when neither side carries a review surface: it only chooses whose regions
+a drag authors. The diff advertises no anchor geometry, so HTML threads remain in the pane-owned unplaced
+strip and Source is the only authoring candidate. Known limitation: the comparison still mounts through
+`GuardedRendererDiff`, so two large *unrelated* documents (two alternatives rather than two revisions) can
+wait behind the expensive-diff notice although the rendered comparison computes no text diff. View and diff share a **preview width** switch in the notice bar — Desktop 1280 /
 Tablet 768 / Phone 390 / Fill, default Desktop, persisted as `{ viewport }` view state and adopted whenever the
 caller's view state changes (`useHtmlViewport`, so a chat card follows a width chosen in its full screen): the frame renders at
 the design width and is CSS-scaled down to its box (never up), keeping its own vertical scroll, so a narrow
 pane, a 2-up half or a chat card shows the true layout shrunk rather than an accidental mobile reflow; Fill
-is the old reflow. Scaling is pure geometry on the wrapper — the iframe keeps `sandbox=""` and nothing
-measures the document (no `allow-same-origin`); the wrapper's box is measured in a layout effect (the package's
+is the old reflow. The frame's box fills its host; a full-size view keeps a 360 px floor, but a compact
+one (a chat card, a questionnaire pane, the compare overlay's cells) takes exactly the height it is given,
+because the floor inside a shorter fixed frame clipped the document's end out of reach. Scaling is pure geometry on the wrapper — nothing measures the document's size; the wrapper's box is measured in a layout effect (the package's
 one `useElementSize`, shared with the SVG view and the region surfaces), so the first paint is already fitted
-instead of reflowing the document at the pane width for a frame. The sanitizer also strips form controls, so mockups draw
-buttons and inputs with styled elements; spot (region) comments on HTML are not offered yet.
+instead of reflowing the document at the pane width for a frame. The sanitizer also strips form controls, so a static
+preview shows buttons and inputs only as styled elements (interactive mockups keep them); spot (region)
+comments on HTML are not offered yet.
+
+`thinkrail/html-interactive` ("Interactive") is the candidate for HTML matching the host's
+`interactiveHtml` globs — ThinkRail passes its agents' mockup directory (`WORKSPACE_MOCKUP_DIR`,
+`.thinkrail/context/mockups/`) in a browser and **nothing inside the desktop window** (below) — ranked above
+`thinkrail/html`, so a mockup opens interactive while tabs keep **Preview** (static) and **Source** as
+toggles. Any other HTML never runs script. The point is clickable prototypes (tabs, toggles, form controls)
+for comparing alternatives. Because the host has no auth ([[architecture]] Decision 7), a script that could
+reach it over WebSocket would control the agent, so the property that matters is **no network**:
+- **The document** keeps scripts, handlers, forms and controls, drops `<base>`, every `<link>` and `<meta
+  http-equiv>`, makes every non-`#` link target inert, and gets, first in `<head>`, a CSP meta
+  (`interactiveDocumentPolicy`): `default-src 'none'`, `script-src` listing only the SHA-256 of each inline
+  script and event handler (plus `'unsafe-hashes'`) — **never `'unsafe-inline'`** — and `style-src
+  'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action
+  'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'` — no fetch, XHR,
+  WebSocket, external script, style, image or frame — then `x-dns-prefetch-control: off`, then the frame
+  bridge. Before hashing, every script that runs as JavaScript (no `src`; no type, `module`, or a JavaScript
+  MIME essence) and every `on*` attribute gets the WebRTC-neutering prefix (`WEBRTC_NEUTER`); other script
+  types keep their text. A script or handler that code inserts at runtime has no hash and does not run — the
+  agent guidance says to attach behaviour with `addEventListener`. Hashes are computed synchronously by the
+  package's own `sha256` (`crypto.subtle` is async and exists only in secure contexts, and plain-HTTP remote
+  clients are supported); the frame token comes from `crypto.getRandomValues` for the same reason, never
+  `randomUUID`.
+- **WebRTC is neutered, because no policy covers it.** `connect-src` does not govern ICE, CSP `webrtc
+  'block'` is enforced by no engine, and a sandbox has no flag for it: a scripted frame sent STUN to any
+  server (an IP leak and an exfiltration channel; it cannot speak to the host's wire). The bridge, the
+  document's first script, redefines `RTCPeerConnection` and its prefixed aliases as non-configurable
+  `undefined` before any mockup script runs, and every allowed script and handler starts with the same
+  neutering. No pristine copy is reachable: every frame the mockup creates gets its own opaque origin
+  (`SecurityError` in all three engines), and popups and workers are closed. A document the mockup replaces
+  itself with (`data:`, `blob:`) inherits the hash-only policy, so its own inline scripts and handlers do not
+  run — in Chromium, WebKit and Firefox not even a byte-identical copy of an allowed script does — and were an
+  engine to run such a copy, its prefix would neuter WebRTC first. Post-mortem: with `'unsafe-inline'`, a
+  replacement document's script got a fresh `RTCPeerConnection` and sent STUN before the frame was stopped.
+- **The frame** is `sandbox="allow-scripts"` and nothing else: an opaque origin with no access to the app,
+  no popups, no top navigation, no form submission. It is never also `allow-same-origin`, paired or not. Its
+  `csp` attribute carries `HTML_INTERACTIVE_FRAME_CSP` — the same no-network policy with `'unsafe-inline'`
+  in place of the per-document hashes, enforced together with the document's own — so Chromium and WebView2
+  (CSP Embedded Enforcement) refuse any foreign document the frame is navigated to.
+- **Never inside the desktop window.** Electrobun's message bridges (`webkit.messageHandlers.bunBridge` /
+  `internalBridge`, WebView2's `chrome.webview`) answer every frame, opaque or not, and its internal RPC
+  runs JavaScript in a view the caller names — a mockup script there would escape to the trusted page. So
+  the app registers no interactive globs when its page has a native message bridge
+  (`hasNativeMessageBridge`); desktop mockups stay static until that gate in [[electrobun-compatibility]]
+  lifts.
+- **Leaving is stopped.** The bridge removes its own `<script>` on start and carries a random per-document
+  token (`buildInteractiveHtmlDocument` returns it), so the mockup can neither read nor forge it. It posts
+  `loaded` on its document's `load` and `left` on `pagehide`; the frame accepts them only from its own window
+  with that token. A frame whose first `load` brings no `loaded` within a second (the document replaced
+  itself while still loading — `pagehide` never fires before a page shows), a second `load`, or a `left`
+  unmounts the frame and shows a notice with **Reload** — no automatic reload loop.
+- **Residual risk, accepted and recorded.** In a WebKit or Firefox browser tab, a script can navigate its
+  frame to an outside page: the request is sent and that page runs until it is stopped — with the reach of
+  any page the user visits (Decision 7), no more (Chromium sends the request but refuses the document).
+  WebKit also opens a bare TCP connection for a `preconnect` hint a script adds (no request); resource hints
+  can leak a hostname through DNS.
+- **Scroll sync without same-origin.** The bridge posts its offset on scroll and applies a posted `scrollTo`
+  instantly, answering with the applied (possibly clamped) offset; the link's message endpoint accepts
+  messages only from that frame's window and only finite numbers, writes optimistically so a pending answer
+  never reads as a user scroll, and takes the answer as the echo. A comparison decides per side: a side runs
+  script only if its own path matches.
+- The notice says scripts run sandboxed without network (`viewer.html.interactiveNotice`).
 
 Pierre parses the two complete text sides (`absent` → `null`) with the current ignore-whitespace value,
-uses the `thinkrail` CSS-variable Shiki theme, word-level inline changes, collapsed unchanged regions with
+uses the host's `pierreTheme` (registered as `thinkrail`, CSS variables only, highlighted by `@pierre/highlights`), word-level inline changes, collapsed unchanged regions with
 line-info hunk separators, and split/unified layout; phone-class viewports force unified and hide the
 Split/Inline segments, so no control promises a layout the viewport refuses. The collapse threshold
 (`COLLAPSED_CONTEXT_THRESHOLD`, 3 lines) is git's own default hunk context (`-U3`), so what Pierre
@@ -488,6 +649,17 @@ only when both sides carry one; `PierreDiff` keys a one-sided (added or deleted)
 present side's hash, so a remount — a Stacked/One-file switch, or a section scrolling back in — paints
 highlighted on its first frame instead of plain text followed by a colour pop. The phone code-file implementation is Pierre `File` with the same theme and
 review grammar; desktop files alone load Monaco.
+
+**Without WebAssembly the Pierre surfaces show plain text.** `@pierre/highlights` is WebAssembly only,
+and Pierre paints nothing — not even its own plain-text pass — until a main-thread highlighter loads; it
+has no highlighter-free mode, and Shiki stays out of the build. `PierreProvider` therefore reports
+`usePierrePlain()`: true from the first frame when `canUseWASM()` fails (the pool is then never built),
+or once `preloadHighlighter` for the `thinkrail` theme rejects, which latches for the page. `PierreDiff`,
+`PierreFile` and the notebook source diff then swap Pierre for `PlainCode`: uncolored runs from
+`plainRuns.ts` — the whole file, or each hunk's `@@` header, context and `-`/`+` lines — inside the
+same scroller. Review annotations, line selection, the line cursor and hunk toolbars need Pierre's rows
+and are absent in this mode. Each run of one kind is one text node rather than an element per line, so a 100k-line file
+stays a handful of nodes without a virtualizer, which the mirrored `PierreScroller` would have to feed.
 
 **Pierre surfaces are virtualized.** Unvirtualized Pierre puts every line in the DOM (≈400k nodes for a
 100k-line file), which WebKit — the desktop shell's engine — cannot style or lay out, hanging the app.
@@ -520,7 +692,7 @@ row, as before virtualization. Virtualizing small diffs bought nothing and cost 
 virtualized instance's hydrate measures its offset (forcing layout) while its container is still
 empty; in the stacked list, whose end sits at maximum scroll so the last header can reach the top,
 that collapsed layout clamps `scrollTop`, and Virtuoso's size correction compounds the jump until the
-reviewed section leaves the render window. And `@pierre/diffs` 1.5.1's virtualized in-place column
+reviewed section leaves the render window. And `@pierre/diffs`'s virtualized in-place column
 re-render can drop annotation rows that the instance still records, leaving a just-opened composer
 slotted nowhere until something forces a `rerender()`. Large diffs still carry that annotation risk.
 
@@ -581,6 +753,25 @@ content's own height.
   (through `resourcePane.resourceBytesUrl`, injected into `documentComponents` so the markdown layer never
   reaches for the transport itself). A cross-file link's `#fragment` is not yet followed (opens the
   file only).
+- **The Markdown preview has a heading outline.** It is read from the rendered document, not a second
+  parse: the stamped `h1`–`h6` elements (`stampedHeadings`, through a MutationObserver on the preview
+  scroller, so a file change, a spliced review card or an opened `<details>` refreshes it) — so the outline
+  lists exactly the headings GFM, alerts and raw HTML produce, CJK or duplicate titles included, and names
+  each by its source-line stamp, the anchor the line reveal and review comments already use; it never
+  coordinates slug ids across review segments. Entries nest under the nearest shallower heading (a skipped
+  level still nests) as nested lists. Selecting one opens any closed `<details>` around the heading,
+  scrolls only the preview scroller to it, smoothly unless the reader prefers reduced motion, and moves
+  focus to the heading (`tabIndex=-1` if it has none, `preventScroll`). The current
+  section — the last laid-out heading at or
+  above the scroller top, else the first — is `aria-current="location"`; scroll events are coalesced to
+  one binary search per animation frame, so a long document reads O(log n) heading rects per frame, and
+  headings inside closed `<details>` are skipped from the search rather than measured. The active entry
+  stays visible by adjusting only the outline list's own scroll, never an ancestor's (an enclosing
+  transcript must not jump). The outline shows with two or more headings; a toggle (`aria-pressed`, drawn
+  in the outline header and, closed, over the preview — one `data-focus-slot`, so focus stays on it) hides it, and `markdownOutlineVisible` keeps that choice; before any choice it starts open only when
+  the preview frame is at least `MARKDOWN_OUTLINE_NARROW_WIDTH` (720px) wide. `markdownOutlineSide`
+  places it left or right, in DOM order matching the visual order. A `compact` frame drops it with the
+  rest of the chrome. Rendered diffs and source view have no outline.
 - **Document markdown renders sanitized raw HTML; chat markdown does not.** READMEs place logos and
   banners with `<p align="center"><img src width>`, float images with `<img align="right">`, fold
   sections in `<details>`, and ship theme-aware logos as `<picture><source media srcset>`; shown as
@@ -632,8 +823,9 @@ content's own height.
   diagnostics by construction. Each editor mount owns its model: the model id is a per-mount `useId` scope
   ahead of the path, so the same file on screen twice (a chat card and its full screen, a card and the
   file's tab) never shares a model that one unmount disposes under the other.
-- **`MonacoEditor` mounts Monaco itself.** A layout effect creates the editor and its model in the commit
-  that mounts the view, with no loading state, then restores the view state and attaches review commenting
+- **`MonacoEditor` mounts Monaco itself.** Its container carries `data-focus-default`, the web shell's
+  keyboard landing marker, so a region focus chord lands in the editor's input. A layout effect creates
+  the editor and its model in the commit that mounts the view, with no loading state, then restores the view state and attaches review commenting
   (review attaches only at mount). Its layout cleanup saves the view state before it disposes the editor
   and the model, in that order. A path change on a live editor swaps the model in place, and the language
   follows the path, because `RendererView` is keyed by implementation, not path. New text calls `setValue`
@@ -647,65 +839,58 @@ content's own height.
   before the editor's first frame never lands (found by the far-off worktree comment e2e). A later focus on
   a live editor scrolls smoothly.
 - **Code surfaces re-theme from generic tokens, resiliently.** `monacoSetup` owns the sole `EDITOR_THEME`:
-  `createFileEditor` applies it and the theme refresh defines it.
-  Themes own one TextMate scope definition: chat uses its live CSS-variable form, while Monaco resolves that
-  same definition plus its complete editor/widget/menu/input colour map to hex and defines the Monaco theme from
-  it directly. Token colours come from `shikiTokens.ts`, a Monaco-free owner of one Shiki highlighter, its
-  per-language grammar loads and the colour→scope map. Its curated language catalog is shared with the chat
-  highlighter and extended for the desktop file formats; missing Monaco language ids are registered with their
-  file associations, then each catalog id gets a `registerTokensProviderFactory` entry. A swap loads the
-  highlighter theme under the other of two names and rebuilds the scope map from the same converted Monaco rules it
-  defines, redefines Monaco, and selects `EDITOR_THEME`. The normal/high-contrast base comes from manifest
+  `createFileEditor` applies it and the theme refresh defines it. The host's `code.editorTheme` resolves the
+  Pierre color table chat uses, plus the complete editor/widget/menu/input colour map, to hex; Monaco defines
+  its theme from that. Token scopes are Pierre's token names. A swap redefines Monaco and
+  selects `EDITOR_THEME`, with no new tokenizing. `support/editorLanguages.ts` merges the curated catalog with
+  the `@pierre/diffs` extension table and a short override list (`.m` Objective-C, `.pl` Perl, file types the
+  table lacks), and catalog files keep their language. `diffsFileTypes` hands every editor choice the table
+  disagrees with to `replaceCustomExtensions` when the diffs worker pool starts (only ids the diffs table knows),
+  so a file gets the same language in the editor and in diffs; the pool ships the map to its workers. A
+  descriptor's explicit `language` (`describeResource`) bypasses that map, so it must agree too: `.mdx` is
+  `mdx`, while the Markdown MIME and preview renderer still match it.
+  Monaco matches file names without case, so the table keys `BUCK`, `BUILD`, `PACKAGE` and `WORKSPACE` stay out: otherwise a file named `build` opens as Python. A real Bazel or Buck file is plain in the editor and Python in diffs.
+  Missing Monaco language ids are registered with their file associations, then each id gets a
+  `registerTokensProviderFactory` entry. A table language Pierre has no lexer for stays plain. The normal/high-contrast base comes from manifest
   appearance/contrast metadata—never a known id—and remains inherited for specialist colours outside the
   explicit map. Reads pass through `lib.cssColorToHex`; an absent or unparseable token is
-  omitted so the selected base palette wins rather than crashing the panel. Pierre's one registered
-  `thinkrail` CSS-variable Shiki theme emits variable references instead of catalog colours; inherited
-  `--diffs-*` properties map foreground/syntax to `--code-*`, canvases to the workspace/content roles, and
+  omitted so the selected base palette wins rather than crashing the panel. Pierre diffs emit `--code-*`
+  variable references; inherited `--diffs-*` properties map canvases to the workspace/content roles and
   addition/deletion paint to feedback roles, so a theme swap needs no re-highlight. `TerminalInstance`
   similarly rebuilds from the complete 16-slot ANSI variable set. Monaco and xterm consume the nullable
   editor selection-foreground override when provided.
-- **Monaco loads one grammar per language and tokenizes on Oniguruma WASM.** Compiling all 35 catalog
-  grammars up front was a 210-250 ms main-thread task (about 870 ms at 4x CPU) before the first coloured
-  line, and the JS regex engine tokenized about 4.5x slower than Oniguruma (a 2,861-line TS file: about
-  1,715 ms against 380 ms). The factory's `create()` loads the grammar when Monaco first meets a model of
-  that language; the `languageForPath` probe model starts it before the editor mounts. Concurrent
-  requests share one load, and an unknown id stays plain. Monaco asks a language's factory for a provider
-  only once, so a failed load answers plain text and marks the language missing; a failed highlighter or
-  engine start is not cached, so a later request retries it. The next model of that language whose load
-  succeeds installs the provider directly with `setTokensProvider`. `create()` never throws. Each provider binds the grammar object current when it is made, because loading an embed
-  rebuilds every grammar that lists it, and Monaco's saved line states only fit the old one. Embeds load
-  per model: a regex scan of fence info strings (including fences inside blockquotes and list items) and
-  `lang=` attributes (spaces around `=` allowed) picks the in-catalog `embeddedLangsLazy` the text names
-  (markdown 26, vue 8, svelte 2 otherwise) and follows an embed's own lazy embeds transitively
-  (vue -> markdown -> shellscript); they load after the first colour, then the provider is re-registered
-  so Monaco re-tokenizes. Each scan reports the embeds it loaded that the installed provider lacks, so two
-  models scanning at once each re-register for what they finished, not only the first.
-  A leading `---` adds `yaml`. A tag at a line start, a closing tag, a comment, or a common inline element
-  such as `<img …>`, `<br>` or `<kbd>` adds `html` (front matter and inline HTML embed them with no fence).
-  A generic such as `Array<T>` or `Map<K, V>` inside a fence does not count. Fence names the markdown grammar embeds under another language (`jsx` and `es6` as
-  `javascript`, `golang` as `go`, `h` as `c`) map through `FENCE_EMBEDS` before the host's `languageId`.
-  The `html` catalog entry loads `html-derivative`, the grammar markdown includes for inline HTML.
-  The scan reruns on content and language changes. Nothing suspends on the engine or a grammar: a Suspense
-  fallback is held for at least 300 ms. The JS regex engine runs only where `WebAssembly` does not exist
-  (WebKit Lockdown Mode). A failed `.wasm` fetch or compile fails that highlighter start instead: files stay
-  plain and the next file retries, so one transient failure (a dev-server restart, an SPA fallback serving
-  HTML) neither pins the 4.5x slower engine for the page nor hides a broken asset behind it. The asset is
-  fetched and compiled here and Shiki only instantiates the compiled module, because Shiki's `loadWasm`
-  keeps a rejected start for the whole page. A theme that fails to load costs only the colours: the
-  highlighter is kept and the next theme swap retries. Shiki's `setTheme` is a no-op for the name it last
-  selected, so each swap loads the theme under the other of two names to get the new colour map. The raw
-  `shiki/onig.wasm` asset is used because `shiki/wasm` inlines it as base64 and decodes it byte by byte on
-  the main thread (about 22 ms at 1x CPU) before the first coloured line. Every shipped host serves `.wasm` as
-  `application/wasm`: Vite in dev, `Bun.file` in `serveStatic` for the desktop app and the staged CLI binary.
-  Cost: the first open of a new language waits for its grammar chunk (about one frame at 1x CPU), and the
-  engine fetches a 466 kB `.wasm` asset; Pierre's newer Shiki ships its own copy.
-- **The code view preloads before the first open.** Loading the Monaco chunk, initializing Monaco and
-  building the engine only after the tab mounted, behind a fallback held for at least 300 ms, made the
+- **Monaco tokenizes through one Pierre `LiveTokenizer` per model.** `pierreTokens.ts` is Monaco-free apart from
+  types. `@pierre/highlights` compiles its WASM on import, so the factory's `create()` imports it when Monaco
+  first meets a model of a registered language, never during a preload. On a 5,000-line TS file the first open's
+  largest long task is 72 ms in Chromium, about the same as tokenizing with a grammar engine, and all lines are
+  ready in 212 ms (Chromium) and 337 ms (WebKit). Each tokenizer holds its own WASM instance: about 0.5 MB for
+  1,000 lines. Only the visible file of each editor group has a model (split groups show up to four), and a
+  disposed model frees its tokenizer.
+  Pierre cannot save or restore lexer state, so a tokenizer owns a whole document and tokenizes it at once.
+  The Monaco line state only names that document, the line number and its revision (the model's version id).
+  Every `tokenize` first resets each document whose model version moved, rather than waiting for
+  `onDidChangeContent`: Monaco recolors the visible lines inside the change, before public listeners run, and a
+  stale document there would leave them plain for good. The reset is not incremental: the models here change
+  only through `setValue`, and the new revision makes Monaco retokenize every line. Monaco's `tokenize`
+  receives no model, so a state starts with no document and picks one by line text. Two files can share
+  lines: when a document no longer holds the current line, the state moves to another document of that
+  language that holds it, preferring one with the same earlier lines, whose tokens so far are the same. When
+  none has them — the borrowed document changed or closed mid-pass — any holder takes over, so the file
+  recovers its own document by the next line instead of staying plain. Fences and inline HTML color inside Pierre's own lexers, with no per-language
+  loading. Monaco asks a factory for a provider only once, so a failed load answers plain text and marks the
+  language missing, and the next model of that language installs the provider with `setTokensProvider` if a
+  retried load succeeds. `create()` never throws, and nothing suspends on the highlighter: a Suspense fallback
+  is held for at least 300 ms. Without `WebAssembly` (WebKit Lockdown Mode) the import fails and files stay
+  plain. Lines of 20,000 characters or more stay plain. A model over 20 MB or 300,000 lines builds no tokenizer:
+  Monaco never colors one (limits read through `getValueLength` and `getLineCount`). `.v` opens as Verilog: Coq
+  shares the extension and has no way in by file name. `.m` opens as Objective-C, not the table's Wolfram.
+- **The code view preloads before the first open.** Loading the Monaco chunk and initializing Monaco only
+  after the tab mounted, behind a fallback held for at least 300 ms, made the
   first open about 420 ms at 1x CPU (840 ms at 4x) against 65 ms for a warm one. With the app's idle
   preload and row-hover warm (`usePreloadResourceView`), the first open is about 120 ms at 1x (430 ms at
-  4x, where the rest is Oniguruma compiling the grammar's scanners on the first tokenize). The package
+  4x). The package
   only offers the mechanism; the host decides when to call it. Cost: every desktop session loads the
-  Monaco chunk and the engine (about 3.9 MB decoded, about 7 MB more heap) and a 70 ms evaluation task at
+  Monaco chunk (about 3.9 MB decoded) and a 70 ms evaluation task at
   4x CPU after boot. A click while the preload is still loading suspends as before. A preload that fails
   while the network is down costs the rest of the session: Chromium caches the failed module fetch, so
   every later import of that chunk rejects without a request, and a statically split chunk has no URL to
@@ -720,3 +905,97 @@ content's own height.
   70 ms at 4x. Click to highlighted is no later. Cost: create and first render now run in one task, so the
   longest task after the click grows at 4x CPU (cold open 120 to 145 ms, warm large open 0 to 55 ms). The
   `MonacoEditor` chunk shrinks by 12.1 kB (3.10 MB to 3.09 MB; 3.5 kB gzip).
+
+## Keyboard review surfaces
+
+Every comment a pointer can author also has a keyboard path. Each surface is one Tab stop marked `data-review-surface`, which the
+app's cheatsheet maps to its Changes review section. Key interpretation is one module,
+`support/cursorKeys.ts` (`cursorCommand(event, keys)`: arrows and the arrow twins, Shift extends, Home/End,
+Enter or `review.surface.comment` comments, Esc; Alt, other Mod chords, another local command's chord
+and an IME composition pass through, and the diff cursor walks its own Tab targets on a plain Tab only; `composerSubmit(event, keys)`; `swipeDividerValue(value, event, keys)` takes the same matcher).
+It declares `REVIEW_SURFACE_COMMANDS` in scope `review.surface` — `review.surface.comment`
+(`Shift+Mod+M`), `review.surface.saveDraft` (`Mod+Enter`, the composer and a draft card's edit) and
+`review.surface.sendNow` (`Shift+Mod+Enter`), each Enter chord paired with the numpad Enter — and every surface matches them plus `@thinkrail/ui`'s
+shared arrow twins (H/J/K/L by physical `code`; an exact match wins, and only a shifted press of an
+unshifted twin falls back through `ignoreShift` and extends — a twin bound with Shift moves without
+extending, and on the swipe divider it steps rather than pages) through
+`useReviewSurfaceKeys()`, i.e. `useLocalKeys` over the keymap the app provides. The package never
+imports the app: the app adds the set to its resolver ([[submodule-web-keybindings]], *Local keys*), so
+a rebind in Settings → Keyboard reaches the surfaces, and with no provider they match these defaults.
+Enter, the arrows, Shift+arrows, Home/End, PgUp/PgDn, Tab and Esc stay locked. Monaco's
+`Shift+Mod+M` caret-line action is Monaco's own keybinding and stays fixed.
+
+- **Cursor proxy** (`support/CursorProxy.tsx`), shared by the diff line cursor and the Markdown block
+  cursor. Their stops cannot be honest ARIA children — Pierre's lines live in a shadow root, and a
+  preview's blocks are real headings, paragraphs and links — so the content container keeps no role and
+  no tabindex (links, cards and hunk controls keep their own semantics and Tab order) and a visually
+  hidden `role="listbox"` as its first child is the Tab stop (`data-review-surface`, `review-cursor`). It
+  owns exactly one `role="option"`, `aria-selected`, whose `aria-posinset` / `aria-setsize` place the
+  cursor among the surface's stops and whose name says what the cursor is on (side, line and line text;
+  source lines and block text) with a range's extent appended. The name is an `aria-label`, not text:
+  text there would turn up in find-in-page, in a copied selection and in text locators. The option's id
+  changes with every move, so `aria-activedescendant` changes and a screen reader announces it — no live
+  region. It is not multiselectable: a range is one stop described in the name. The proxy takes the
+  cursor keys and the focus / blur that light the cursor; it is sticky, zero-height and clipped, so Tab
+  never scrolls the content to it, it never shifts layout and its own outline never shows. The container
+  draws the ring (`focus-ring-inset` while its proxy has `:focus-visible`). A surface with no stop (an
+  empty diff or document) has no proxy. Marking the content itself `role="listbox"` satisfied the a11y
+  lint (a tabbable key handler needs an interactive role) but was untrue: a listbox must own options and
+  must not own headings or links.
+- **Pierre diff line cursor** (`renderers/code/diffCursor.ts`, pure, and `useDiffCursor`). The proxy
+  holds a logical `{ cursor: { line, side }, anchor }`; its stops are the rows of the cursor's side. Rows
+  come from the parsed diff, not the DOM, so the cursor walks lines a virtualized diff has not rendered:
+  the same initially-collapsed layout `renderedDiffLineNumbers` places threads on (git-style context,
+  unchanged runs within `COLLAPSED_CONTEXT_THRESHOLD` shown). Context the reader expands with the mouse is
+  not on its path. Split: ↑/↓ skip rows without the cursor's side,
+  ←/→ switch side where the row has the other. Unified: every row is a stop on its own side (context is
+  the new side) and ←/→ do nothing. It starts on the first changed line; a cursor whose line is no longer a stop first keeps its
+  row (an old-side context line in the inline layout is that row's new-side stop), and only a line that left
+  the diff snaps to the nearest line of its side. Enter / Shift+Mod+M sends the range to the mouse selection's
+  own `openSelection` → `selectionComposer`, so anchors are identical and a cross-side range is blocked as
+  before; Esc clears a range (and a blocked notice), then leaves to the enclosing `data-focus-row`'s
+  primary — the section's collapse toggle, or the file header itself in the single-file layout, never a
+  generic first control (there that is Revert file) — or the control before the diff. Tab goes to the nearest card or
+  composer at or below the cursor row (revealing it first in a virtualized diff); with none, the browser's
+  own order continues into the hunk toolbars, so Keep / Revert / Ask agent stay reachable. A mouse
+  selection, the gutter button and Ask agent move the cursor to their line. Only keys the cursor owns are
+  `preventDefault`ed, which is how the review tab's plain `J` stays outside the cursor while `V`, `N`, `P`
+  and Alt+↑/↓ pass through.
+  **Drawing.** The cursor and its range are Pierre's controlled `selectedLines` (its selection skin),
+  shown only while the proxy holds focus that `:focus-visible` (a click into code does not light a
+  line; the first cursor key does). The value is applied one animation frame after the state change:
+  Pierre's `setSelection` moves the gutter utility's `<slot>`, and a slot must never move synchronously from
+  an input handler (the WebKit crash guard). In split view the host carries `review-cursor-<side>` and the
+  static `unsafeCSS` cancels the selection paint on the other column — Pierre otherwise paints both columns
+  of a selected row, and h/l would change nothing visible. A line moves into view with the
+  virtualizer's `revealLine(line, side, "nearest")` when virtualized, else by adjusting the nearest
+  scrolling ancestor directly (a row inside the mirrored scroller's transform would
+  confuse `scrollIntoView`). The gutter `+` is `tabIndex=-1`: Enter does its job.
+- **Focus return.** `ReviewComposer` takes Shift+Mod+Enter as Send now (Mod+Enter Save draft, Esc cancel,
+  unchanged) and, when it closes with focus still inside it or lost, calls `onReturnFocus` — the diff
+  and the preview focus their cursor proxy (the diff on the line it was opened from), a region surface
+  its frame button, Monaco its editor; the preview's cursor block and the frame button are scrolled into view
+  (nearest) as focus returns, so a draft edited far below its anchor never leaves the cursor off screen. A draft card's Mod+Enter (save), Esc (discard), Send and Delete do
+  the same at the card's own line; a surface without a cursor gets the closest control before the card that is not inside
+  another card. A Send that opens its chat keeps the chat's focus: the composer returns focus only when
+  nothing else took it.
+- **Markdown preview block cursor** (`support/blockCursor.ts`). The proxy is the Tab stop and links
+  follow it in Tab order. Blocks are the stamped `p`, `li`, headings, `pre`,
+  `blockquote` and `tr`, leaf-most unless a nested block starts on a later line (a parent bullet stays a
+  stop). ↑/↓ step blocks, Shift extends over whole blocks, Home/End, Enter / Shift+Mod+M opens the composer
+  on the blocks' source lines (the same `lineRange` a stamped text selection resolves to), Esc clears the
+  range. The cursor and range are attributes the surface re-applies after each render (deriving the
+  proxy's option from the same blocks), drawn with
+  `focus-ring` and `bg-primary-subtle` (a table row also takes the background: Chromium draws no outline on a
+  `tr`); keyboard focus without a cursor starts on the first visible block.
+- **Regions** (image, SVG, PDF page, visual-diff sides). A transparent `<button>` over the media (pointer
+  events pass to the drag overlay) is the Tab stop: Enter draws a centred frame (30%), arrows / hjkl move it
+  2% within the media, Shift+arrows resize it from its corner (→/← width, ↓/↑ height, 4% minimum), Enter /
+  Shift+Mod+M opens the composer and Esc removes the frame (`frameCommand`, pure). The frame lives in the
+  same normalized space a drag produces, through the same stamped selection, so `regionDraft` /
+  `pdfRegionDraft` anchor it identically.
+- **Swipe divider** is `role="slider"` (0–100, `aria-valuenow`): ←/→ and the h/l twins move 2%, Shift 10%,
+  PageUp/PageDown 10%, Home/End to the edges (`swipeDividerValue`, pure).
+- **Monaco** Shift+Mod+M with an empty selection comments the caret line (`commentLines`): a second,
+  keybinding-only action holds `!editorHasSelection`, so the context menu still offers commenting only on
+  a selection.

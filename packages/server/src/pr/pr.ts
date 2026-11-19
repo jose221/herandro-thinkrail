@@ -1,6 +1,12 @@
 import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { join, sep } from "node:path";
-import type { GhSetupProblem, OpenPrResult, PrBodySource, PrPreview } from "@thinkrail/contracts";
+import type {
+	GhSetupProblem,
+	OpenPrResult,
+	PrBodySource,
+	PrPreview,
+	Workspace,
+} from "@thinkrail/contracts";
 import { CodedError } from "@thinkrail/shared/codedError";
 import {
 	forgetOpenBranchReview,
@@ -22,10 +28,10 @@ import {
 } from "../git";
 import { ghSetupProblem } from "../github";
 import { generateTodoSummary, listTodos } from "../todos";
-import { getWorkspace, refreshUserOwnedWorkspace } from "../workspaces";
+import { getWorkspace, syncWorkspaceBranch } from "../workspaces";
 import { flatItems, renderPrBody } from "./prBody";
 
-const COMPARE_BODY_LIMIT = 4_000;
+const COMPARE_URL_LIMIT = 4_000;
 
 export type PrCommandRunner = (
 	cwd: string,
@@ -251,6 +257,20 @@ export function gitlabProject(remoteUrl: string): string | null {
 	return match?.[1] ?? null;
 }
 
+function withBody(url: string, key: string, body: string): string {
+	const chars = Array.from(body);
+	const urlWith = (count: number) =>
+		count ? `${url}&${new URLSearchParams({ [key]: chars.slice(0, count).join("") })}` : url;
+	let low = 0;
+	let high = chars.length;
+	while (low < high) {
+		const mid = Math.ceil((low + high) / 2);
+		if (urlWith(mid).length <= COMPARE_URL_LIMIT) low = mid;
+		else high = mid - 1;
+	}
+	return urlWith(low);
+}
+
 export function gitlabNewMrUrl(
 	project: string,
 	baseBranch: string,
@@ -263,16 +283,24 @@ export function gitlabNewMrUrl(
 		"merge_request[target_branch]": baseRef(baseBranch),
 		"merge_request[title]": title,
 	});
-	if (body) query.set("merge_request[description]", body.slice(0, COMPARE_BODY_LIMIT));
-	return `https://gitlab.com/${project}/-/merge_requests/new?${query}`;
+	return withBody(
+		`https://gitlab.com/${project}/-/merge_requests/new?${query}`,
+		"merge_request[description]",
+		body,
+	);
 }
 
 export function baseRef(baseBranch: string): string {
 	return baseBranch.replace(/^origin\//, "");
 }
 
-export function onBaseBranch(ws: { branch: string; baseBranch: string }): boolean {
-	return ws.branch === baseRef(ws.baseBranch);
+export function onBaseBranch(
+	ws: Pick<Workspace, "worktreePath" | "branch" | "baseBranch">,
+): boolean {
+	if (ws.branch === baseRef(ws.baseBranch)) return true;
+	if (!ws.baseBranch.endsWith(`/${ws.branch}`)) return false;
+	const remote = remoteNameOf(ws.baseBranch, listRemotes(ws.worktreePath));
+	return remote !== null && ws.baseBranch === `${remote}/${ws.branch}`;
 }
 
 export function compareQuickPullUrl(
@@ -284,8 +312,11 @@ export function compareQuickPullUrl(
 ): string {
 	const base = baseRef(baseBranch);
 	const query = new URLSearchParams({ quick_pull: "1", title });
-	if (body) query.set("body", body.slice(0, COMPARE_BODY_LIMIT));
-	return `https://github.com/${slug}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?${query}`;
+	return withBody(
+		`https://github.com/${slug}/compare/${encodeURIComponent(base)}...${encodeURIComponent(branch)}?${query}`,
+		"body",
+		body,
+	);
 }
 
 export async function ghPrFlow(
@@ -417,7 +448,7 @@ async function pushToOrigin(cwd: string, branch: string): Promise<string> {
 }
 
 export function refreshedWorkspace(workspaceId: string, expectedBranch: string | undefined) {
-	refreshUserOwnedWorkspace(workspaceId, { strict: true });
+	syncWorkspaceBranch(workspaceId, { strict: true });
 	const ws = getWorkspace(workspaceId);
 	assertSafeRef(ws.branch);
 	if (expectedBranch !== undefined && ws.branch !== expectedBranch) {
@@ -477,10 +508,6 @@ export async function openPr(
 	run: PrCommandRunner = runProviderCommand,
 	ghProblem: () => Promise<GhSetupProblem | null> = ghSetupProblem,
 ): Promise<OpenPrHostResult> {
-	// Default/external workspaces are user-owned checkouts the fs watcher re-syncs asynchronously —
-	// resolve the live branch synchronously here so a switch made in a terminal just before Open PR
-	// can never push/open/compare against a stale one (see SPEC). A no-op for created workspaces,
-	// whose branch is ThinkRail-owned and never drifts externally.
 	prWorkspace(params.workspaceId, params.branch);
 	const dirtyFiles = (await gitStatus(params.workspaceId, { kind: "uncommitted" })).changes.length;
 	const ws = prWorkspace(params.workspaceId, params.branch);

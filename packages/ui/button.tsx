@@ -15,7 +15,7 @@ export type ButtonIcon = React.ElementType<{
 const variantClasses = cva(
 	[
 		"relative inline-flex select-none items-center justify-center whitespace-nowrap rounded-sm border tr-text-button",
-		"outline-none transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary focus-visible:outline-solid",
+		"transition-colors focus-visible:focus-ring",
 		"button-disabled:pointer-events-none data-[loading=true]:cursor-progress",
 		"[&_svg]:pointer-events-none [&_svg]:shrink-0",
 	],
@@ -57,7 +57,7 @@ const variantClasses = cva(
 			{ shape: "icon", size: "s", className: "size-20" },
 			{ shape: "icon", size: "m", className: "size-24" },
 			{ shape: "icon", size: "l", className: "size-32" },
-			{ variant: "ghost", shape: "icon", className: "focus-visible:-outline-offset-2" },
+			{ variant: "ghost", shape: "icon", className: "focus-visible:focus-ring-inset" },
 			{
 				variant: "ghost",
 				tone: "warning",
@@ -138,6 +138,7 @@ interface SharedProps {
 
 interface TooltipProps {
 	tooltip?: React.ReactNode;
+	tooltipShortcut?: readonly string[] | undefined;
 	tooltipSide?: React.ComponentProps<typeof IconTooltip>["side"];
 	tooltipAlign?: React.ComponentProps<typeof IconTooltip>["align"];
 	wrapTrigger?: boolean;
@@ -154,6 +155,7 @@ export interface ButtonProps
 function withTooltip(
 	trigger: React.ReactElement,
 	label: React.ReactNode,
+	shortcut: readonly string[] | undefined,
 	side: TooltipProps["tooltipSide"] | undefined,
 	align: TooltipProps["tooltipAlign"] | undefined,
 	wrap: boolean,
@@ -161,6 +163,7 @@ function withTooltip(
 	return (
 		<IconTooltip
 			label={label}
+			shortcut={shortcut}
 			{...(side ? { side } : {})}
 			{...(align ? { align } : {})}
 			{...(wrap ? { wrapTrigger: true } : {})}
@@ -171,7 +174,11 @@ function withTooltip(
 }
 
 function stateProps(
-	props: { disabled?: boolean | undefined; "data-state"?: unknown },
+	props: {
+		disabled?: boolean | undefined;
+		"data-state"?: unknown;
+		"aria-busy"?: React.AriaAttributes["aria-busy"];
+	},
 	selected: boolean | undefined,
 	loading: boolean | undefined,
 ) {
@@ -181,7 +188,7 @@ function stateProps(
 		"data-disabled": props.disabled && !loading ? true : undefined,
 		"data-loading": loading ? true : undefined,
 		"data-selected": selected || open ? true : undefined,
-		"aria-busy": loading ? true : undefined,
+		"aria-busy": loading ? true : props["aria-busy"],
 	};
 }
 
@@ -196,6 +203,7 @@ export function Button({
 	loading,
 	spinIcon,
 	tooltip,
+	tooltipShortcut,
 	tooltipSide,
 	tooltipAlign,
 	wrapTrigger,
@@ -252,6 +260,7 @@ export function Button({
 	return withTooltip(
 		button,
 		tooltip,
+		tooltipShortcut,
 		tooltipSide,
 		tooltipAlign,
 		wrapTrigger ?? props.disabled === true,
@@ -274,6 +283,7 @@ export function IconButton({
 	icon: Icon,
 	label,
 	tooltip,
+	tooltipShortcut,
 	tooltipSide,
 	tooltipAlign,
 	wrapTrigger,
@@ -305,6 +315,7 @@ export function IconButton({
 			)}
 		</button>,
 		tooltip ?? label,
+		tooltipShortcut,
 		tooltipSide,
 		tooltipAlign,
 		wrapTrigger ?? props.disabled === true,

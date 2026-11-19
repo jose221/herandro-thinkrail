@@ -96,9 +96,15 @@ import type {
 	ReviewFixDetails,
 	ReviewSnapshot,
 	SavedHttpRequest,
+	SearchContext,
+	SearchKind,
+	SearchPreviewResult,
+	SearchPreviewTarget,
+	SearchQueryResult,
 	SessionResources,
 	SessionStateRecord,
 	SpecGraphSnapshot,
+	SubagentCatalogEntry,
 	SubagentCompletionDetails,
 	SubagentOverride,
 	SurveyInvitationResponse,
@@ -114,8 +120,10 @@ import type {
 	UserFontsSnapshot,
 	UserThemesSnapshot,
 	Workspace,
+	WorkspaceArtifactsSnapshot,
+	WorkspacePathMatch,
 } from "./domain";
-import { isDelegationRunDetails } from "./domain";
+import { isControlMessage, isDelegationRunDetails } from "./domain";
 import type {
 	ExtUiResponse,
 	ImageContent,
@@ -134,6 +142,7 @@ import type {
 	WireCustomMessage,
 	WireModel,
 } from "./piProtocol";
+import type { SpeechErrorCode, SpeechModel, SpeechStatus } from "./speech";
 
 export interface TerminalDataPush {
 	id: string;
@@ -168,7 +177,30 @@ export type TemplateReadLocation =
 	| { projectId: string; workspaceId?: never }
 	| { workspaceId?: never; projectId?: never };
 
-export const PROTOCOL_VERSION = 110;
+export const PROTOCOL_VERSION = 127;
+export const SUBAGENT_CATALOG_PROTOCOL_VERSION = 127;
+export const SERVER_FALLBACK_PROTOCOL_VERSION = 126;
+export const MCP_USER_SERVERS_PROTOCOL_VERSION = 125;
+export const ARTIFACT_ROLES_PROTOCOL_VERSION = 124;
+export const KEYBINDINGS_PROTOCOL_VERSION = 123;
+export const BROWSER_VIEW_PROTOCOL_VERSION = 122;
+export const ARTIFACTS_PROTOCOL_VERSION = 121;
+export const IMAGE_REFS_PROTOCOL_VERSION = 120;
+export const IMAGES_ROUTE = "/images/";
+export const WORKSPACE_PATH_RESOLVE_PROTOCOL_VERSION = 119;
+export const FS_MUTATIONS_PROTOCOL_VERSION = 118;
+export const EXTENSION_EDITOR_TEXT_PROTOCOL_VERSION = 115;
+export const CUSTOM_MODEL_CONTEXT_PROTOCOL_VERSION = 116;
+export const PROJECT_ORDER_PROTOCOL_VERSION = 117;
+export const QUESTION_PANEL_PROTOCOL_VERSION = 114;
+export const SPEC_SECTIONS_PROTOCOL_VERSION = 113;
+export const TEXT_SEARCH_PROTOCOL_VERSION = 112;
+export const CACHE_WARMING_SETTINGS_PROTOCOL_VERSION = 111;
+export const CONTINUATION_PROTOCOL_VERSION = 110;
+export const CHATS_PROTOCOL_VERSION = 109;
+export const OTHER_AGENT_SKILLS_PROTOCOL_VERSION = 108;
+export const SPEECH_PROTOCOL_VERSION = 107;
+export const SEARCH_PROTOCOL_VERSION = 106;
 export const ACP_PROTOCOL_VERSION = 96;
 export const ACP_CONFIG_OPTIONS_PROTOCOL_VERSION = 98;
 export const ACP_MODEL_CATALOG_PROTOCOL_VERSION = 99;
@@ -260,7 +292,112 @@ export interface ServerWelcome {
 	projects: Project[];
 	recentProjects: Project[];
 	config: AppConfig;
+	/** Voice input state, from `SPEECH_PROTOCOL_VERSION`; later changes arrive on `speech.changed`. */
+	speech?: SpeechStatus;
 }
+
+/** A projectless chat: its `kind: "chat"` workspace in the Chats container plus the one session it owns. */
+export interface ChatCreateResult {
+	workspace: Workspace;
+	sessionId: string;
+	model: WireModel | null;
+	thinkingLevel: ThinkingLevel;
+}
+
+/** What deleting a chat would trash besides its transcripts: the files its folder holds (bounded count). */
+export interface ChatInspection {
+	files: number;
+	/** The walk stopped at its entry or time budget; the folder may hold more. */
+	truncated: boolean;
+}
+
+export type ChatContinuationPhase =
+	| "requested"
+	| "summarizing"
+	| "creating"
+	| "started"
+	| "failed"
+	| "lost";
+
+/**
+ * Continue in workspace: one in-memory operation per user gesture. The source chat's agent writes the
+ * summary and calls `continue_in_workspace`; the host creates the workspace, its chat and the handoff.
+ */
+export interface ChatContinuation {
+	operationId: string;
+	sourceWorkspaceId: string;
+	sourceSessionId: string;
+	projectId: string;
+	phase: ChatContinuationPhase;
+	workspaceId?: string;
+	sessionId?: string;
+	/** Reported apart from the phase: the handoff reached the new chat, or it did not. */
+	firstMessage?: "sent" | "failed";
+	reason?: string;
+}
+
+export const CONTINUE_IN_WORKSPACE_REQUEST_CUSTOM_TYPE = "continue-in-workspace-request";
+
+export interface ContinueInWorkspaceRequestDetails {
+	operationId: string;
+	projectId: string;
+	projectName: string;
+}
+
+/** The host's request to the source chat's agent: write the summary and hand over — a card, never a user turn. */
+export interface ContinueInWorkspaceRequestMessage
+	extends WireCustomMessage<ContinueInWorkspaceRequestDetails> {
+	customType: typeof CONTINUE_IN_WORKSPACE_REQUEST_CUSTOM_TYPE;
+	display: true;
+	details: ContinueInWorkspaceRequestDetails;
+}
+
+export function isContinueInWorkspaceRequestMessage(
+	message: unknown,
+): message is ContinueInWorkspaceRequestMessage {
+	if (!message || typeof message !== "object") return false;
+	const m = message as { role?: unknown; customType?: unknown; details?: unknown };
+	if (m.role !== "custom" || m.customType !== CONTINUE_IN_WORKSPACE_REQUEST_CUSTOM_TYPE)
+		return false;
+	const d = m.details as Partial<ContinueInWorkspaceRequestDetails> | undefined;
+	return (
+		typeof d?.operationId === "string" &&
+		typeof d.projectId === "string" &&
+		typeof d.projectName === "string"
+	);
+}
+
+export const CHAT_HANDOFF_CUSTOM_TYPE = "chat-handoff";
+
+export interface ChatHandoffDetails {
+	operationId: string;
+	sourceWorkspaceId: string;
+	sourceSessionId: string;
+	sourceTitle?: string;
+	summary: string;
+}
+
+/** The new workspace chat's first message: the summary plus a link back to the chat it continues. */
+export interface ChatHandoffMessage extends WireCustomMessage<ChatHandoffDetails> {
+	customType: typeof CHAT_HANDOFF_CUSTOM_TYPE;
+	display: true;
+	details: ChatHandoffDetails;
+}
+
+export function isChatHandoffMessage(message: unknown): message is ChatHandoffMessage {
+	if (!message || typeof message !== "object") return false;
+	const m = message as { role?: unknown; customType?: unknown; details?: unknown };
+	if (m.role !== "custom" || m.customType !== CHAT_HANDOFF_CUSTOM_TYPE) return false;
+	const d = m.details as Partial<ChatHandoffDetails> | undefined;
+	return (
+		typeof d?.operationId === "string" &&
+		typeof d.sourceWorkspaceId === "string" &&
+		typeof d.sourceSessionId === "string" &&
+		typeof d.summary === "string"
+	);
+}
+
+export const CHAT_HANDOFF_SUMMARY_MAX_LENGTH = 4000;
 
 export interface WorkspaceRemoved {
 	projectId: string;
@@ -311,6 +448,7 @@ export const WS_METHODS = {
 	projectList: "project.list",
 	projectClose: "project.close",
 	projectRename: "project.rename",
+	projectMove: "project.move",
 	projectInspect: "project.inspect",
 	projectInit: "project.init",
 	projectCreate: "project.create",
@@ -333,6 +471,7 @@ export const WS_METHODS = {
 	workspaceRename: "workspace.rename",
 	workspaceListExisting: "workspace.listExisting",
 	workspaceOpenExisting: "workspace.openExisting",
+	workspaceResolvePath: "workspace.resolvePath",
 	workspaceList: "workspace.list",
 	workspaceOpenReview: "workspace.openReview",
 	workspaceBranchStatus: "workspace.branchStatus",
@@ -344,6 +483,11 @@ export const WS_METHODS = {
 	workspaceSetSubagentsOverride: "workspace.setSubagentsOverride",
 	workspaceSetSubagentMaxConcurrent: "workspace.setSubagentMaxConcurrent",
 	workspaceSetDiffBase: "workspace.setDiffBase",
+	chatCreate: "chat.create",
+	chatDelete: "chat.delete",
+	chatInspect: "chat.inspect",
+	chatContinue: "chat.continue",
+	chatContinuationStatus: "chat.continuationStatus",
 	workspaceSettle: "workspace.settle",
 	workspaceUnsettle: "workspace.unsettle",
 	workspaceMarkUnread: "workspace.markUnread",
@@ -364,6 +508,13 @@ export const WS_METHODS = {
 	prReopen: "pr.reopen",
 	fsReadDir: "fs.readDir",
 	fsReadFile: "fs.readFile",
+	fsCopy: "fs.copy",
+	fsDelete: "fs.delete",
+	fsRename: "fs.rename",
+	fsMove: "fs.move",
+	artifactsList: "artifacts.list",
+	artifactsRestore: "artifacts.restore",
+	artifactsDiscard: "artifacts.discard",
 	specGraph: "spec.graph",
 	todoList: "todo.list",
 	todoAdd: "todo.add",
@@ -404,6 +555,9 @@ export const WS_METHODS = {
 	fontsList: "fonts.list",
 	fontsInstalled: "fonts.installed",
 	fontsReveal: "fonts.reveal",
+	speechInstall: "speech.install",
+	speechCancelInstall: "speech.cancelInstall",
+	speechRemove: "speech.remove",
 	sessionCreate: "session.create",
 	sessionPrompt: "session.prompt",
 	sessionSteer: "session.steer",
@@ -415,6 +569,7 @@ export const WS_METHODS = {
 	sessionDelete: "session.delete",
 	sessionRename: "session.rename",
 	sessionSetModel: "session.setModel",
+	sessionDisableServerFallback: "session.disableServerFallback",
 	sessionSetThinkingLevel: "session.setThinkingLevel",
 	sessionCompact: "session.compact",
 	sessionGetStats: "session.getStats",
@@ -429,6 +584,8 @@ export const WS_METHODS = {
 	sessionNudge: "session.nudge",
 	sessionActivityList: "session.activityList",
 	sessionGetMessages: "session.getMessages",
+	subagentList: "subagent.list",
+	subagentSetEnabled: "subagent.setEnabled",
 	subagentGetTranscript: "subagent.getTranscript",
 	sessionResources: "session.resources",
 	sessionResourceHistory: "session.resourceHistory",
@@ -441,6 +598,8 @@ export const WS_METHODS = {
 	modelDefault: "model.default",
 	modelContextSettings: "model.contextSettings",
 	modelSetContextWindow: "model.setContextWindow",
+	cacheWarmingGet: "cacheWarming.get",
+	cacheWarmingSet: "cacheWarming.set",
 	customEndpointsList: "customEndpoints.list",
 	customEndpointsProbe: "customEndpoints.probe",
 	customEndpointsSave: "customEndpoints.save",
@@ -473,6 +632,9 @@ export const WS_METHODS = {
 	feedbackSurveySubmit: "feedback.survey.submit",
 	clientReportError: "client.reportError",
 	historySearch: "history.search",
+	searchQuery: "search.query",
+	searchPreview: "search.preview",
+	searchText: "search.text",
 	reviewGet: "review.get",
 	reviewCommentAdd: "review.commentAdd",
 	reviewCommentUpdate: "review.commentUpdate",
@@ -494,6 +656,7 @@ export const WS_METHODS = {
 	mcpApprove: "mcp.approve",
 	mcpRevokeToolGrant: "mcp.revokeToolGrant",
 	mcpShareWithRepo: "mcp.shareWithRepo",
+	mcpSetUserServer: "mcp.setUserServer",
 	mcpLogin: "mcp.login",
 	mcpLogout: "mcp.logout",
 	mcpTestConnection: "mcp.testConnection",
@@ -588,8 +751,11 @@ export const WS_CHANNELS = {
 	workspaceUpdated: "workspace.updated",
 	workspaceRemoved: "workspace.removed",
 	workspaceFsChanged: "workspace.fsChanged",
+	workspaceArtifactsChanged: "workspace.artifactsChanged",
 	workspaceCreationChanged: "workspace.creationChanged",
 	workspaceCreationRemoved: "workspace.creationRemoved",
+	chatContinuation: "chat.continuation",
+	searchTextResults: "search.textResults",
 	settingsChanged: "settings.changed",
 	hostUpdateAvailable: "host.updateAvailable",
 	feedbackInterview: "feedback.interview",
@@ -605,6 +771,7 @@ export const WS_CHANNELS = {
 	acpAuthTerminalExit: "acp.authTerminal.exit",
 	packagesChanged: "packages.changed",
 	fontsChanged: "fonts.changed",
+	speechChanged: "speech.changed",
 } as const;
 
 type SameUnion<A extends B, B extends C, C = A> = A;
@@ -729,6 +896,36 @@ export function isBackgroundCommandCompletionMessage(
 	return !!d.output && typeof d.output.text === "string" && typeof d.output.truncated === "boolean";
 }
 
+function plainText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.map((block: unknown) =>
+			block &&
+			typeof block === "object" &&
+			"type" in block &&
+			block.type === "text" &&
+			"text" in block &&
+			typeof block.text === "string"
+				? block.text
+				: "",
+		)
+		.join("");
+}
+
+export function opensChatRound(message: unknown): boolean {
+	if (!message || typeof message !== "object") return false;
+	const { role, content } = message as { role?: unknown; content?: unknown };
+	if (role === "user") return !isControlMessage(plainText(content));
+	if (isBackgroundCommandCompletionMessage(message) || isSubagentCompletionMessage(message))
+		return completionDelivery(message.details) !== "run";
+	return (
+		isTodoReviewFixMessage(message) ||
+		isContinueInWorkspaceRequestMessage(message) ||
+		isChatHandoffMessage(message)
+	);
+}
+
 export function customMessageText(content: WireCustomMessage["content"]): string {
 	if (typeof content === "string") return content;
 	return content
@@ -767,14 +964,23 @@ export interface ModelDefault {
 	thinkingLevel: ThinkingLevel;
 }
 
-export const MODEL_CONTEXT_WINDOW_LIMITS = { min: 272_000, max: 1_000_000 } as const;
+export interface ModelContextWindowLimits {
+	readonly min: number;
+	readonly max: number;
+}
 
-export function isModelContextWindow(value: unknown): value is number {
+export const MODEL_CONTEXT_WINDOW_LIMITS = { min: 272_000, max: 1_000_000 } as const;
+export const CUSTOM_MODEL_CONTEXT_WINDOW_LIMITS = { min: 1_024, max: 10_000_000 } as const;
+
+export function isModelContextWindow(
+	value: unknown,
+	limits: ModelContextWindowLimits = MODEL_CONTEXT_WINDOW_LIMITS,
+): value is number {
 	return (
 		typeof value === "number" &&
 		Number.isSafeInteger(value) &&
-		value >= MODEL_CONTEXT_WINDOW_LIMITS.min &&
-		value <= MODEL_CONTEXT_WINDOW_LIMITS.max
+		value >= limits.min &&
+		value <= limits.max
 	);
 }
 
@@ -783,6 +989,23 @@ export type ModelContextTarget = "available" | Pick<WireModel, "provider" | "id"
 export interface ModelContextSetting
 	extends Pick<WireModel, "provider" | "id" | "name" | "contextWindow"> {
 	override: number | null;
+}
+
+/** Pi's `cacheWarming` setting: `off`, `streaming` (only while a run is active) or `idle` (also between runs). */
+export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const;
+export type CacheWarmingMode = (typeof CACHE_WARMING_MODES)[number];
+
+/** ThinkRail's mode while pi's `settings.json` names none. */
+export const DEFAULT_CACHE_WARMING_MODE: CacheWarmingMode = "streaming";
+
+export function isCacheWarmingMode(value: unknown): value is CacheWarmingMode {
+	return typeof value === "string" && (CACHE_WARMING_MODES as readonly string[]).includes(value);
+}
+
+/** The effective mode and whether pi's `settings.json` names it (`user`) or ThinkRail's default applies. */
+export interface CacheWarmingSetting {
+	mode: CacheWarmingMode;
+	source: "user" | "default";
 }
 
 /** Provider ids the custom-endpoint form owns in pi's `models.json`; every other provider is left alone. */
@@ -801,6 +1024,8 @@ export interface CustomEndpointModel {
 	vision: boolean | null;
 	/** Whether the server says the model takes tool calls; never saved, so a listed endpoint reports null. */
 	tools: boolean | null;
+	/** The chat template turns thinking on and off through `enable_thinking` (llama.cpp reports it). */
+	chatTemplateThinking: boolean | null;
 }
 
 /** An OpenAI-compatible `custom-*` provider in pi's `models.json`. The key itself never crosses the wire. */
@@ -841,10 +1066,19 @@ export interface CustomEndpointDraft {
 	models: CustomEndpointModel[];
 }
 
+export function modelContextWindowLimits(provider: string): ModelContextWindowLimits {
+	return isCustomEndpointId(provider)
+		? CUSTOM_MODEL_CONTEXT_WINDOW_LIMITS
+		: MODEL_CONTEXT_WINDOW_LIMITS;
+}
+
 export function isSharedModelContextTarget(
-	setting: Pick<ModelContextSetting, "override">,
+	setting: Pick<ModelContextSetting, "provider" | "override">,
 ): boolean {
-	return setting.override === null || isModelContextWindow(setting.override);
+	return (
+		!isCustomEndpointId(setting.provider) &&
+		(setting.override === null || isModelContextWindow(setting.override))
+	);
 }
 
 /**
@@ -856,11 +1090,23 @@ export interface McpRenderedTarget {
 	expectedFingerprint: string;
 }
 
+/**
+ * Whose configuration a request edits: a workspace's (its `.pi/mcp.json` at project scope, the global
+ * `mcp.json` at user scope), or with no workspace the global file alone.
+ */
+export type McpScopeTarget =
+	| { workspaceId: string; scope: McpServerScope }
+	| { workspaceId?: never; scope: "user" };
+
 export interface WsMethodMap {
 	"project.open": { params: { path: string }; result: Project };
 	"project.list": { params: Record<string, never>; result: Project[] };
 	"project.close": { params: { id: string }; result: Ack };
 	"project.rename": { params: { id: string; name: string }; result: Project };
+	"project.move": {
+		params: { id: string; targetId: string; placement: "before" | "after" };
+		result: Project;
+	};
 	"project.inspect": { params: { path: string }; result: ProjectPathStatus };
 	"project.init": { params: { path: string }; result: Project };
 	"project.create": {
@@ -916,6 +1162,7 @@ export interface WsMethodMap {
 		params: { projectId: string; path: string };
 		result: Workspace;
 	};
+	"workspace.resolvePath": { params: { path: string }; result: WorkspacePathMatch | null };
 	"workspace.list": {
 		params: { projectId: string; includeDiffStats?: boolean };
 		result: Workspace[];
@@ -937,6 +1184,17 @@ export interface WsMethodMap {
 		result: Ack;
 	};
 	"workspace.remove": { params: { id: string }; result: Ack };
+	"chat.create": {
+		params: { model?: WireModel; thinkingLevel?: ThinkingLevel };
+		result: ChatCreateResult;
+	};
+	"chat.delete": { params: { workspaceId: string }; result: Ack };
+	"chat.inspect": { params: { workspaceId: string }; result: ChatInspection };
+	"chat.continue": {
+		params: { workspaceId: string; projectId: string };
+		result: { operationId: string };
+	};
+	"chat.continuationStatus": { params: { operationId: string }; result: ChatContinuation };
 	"workspace.diffStats": { params: { id: string }; result: DiffStats };
 	"workspace.setSkillOverride": {
 		params: { id: string; name: string; override: "on" | "off" | null };
@@ -1013,9 +1271,35 @@ export interface WsMethodMap {
 	};
 	"fs.readDir": { params: { workspaceId: string; path: string }; result: FileNode[] };
 	"fs.readFile": {
-		params: { workspaceId: string; path: string };
+		params: { workspaceId: string; path: string; maxBytes?: number };
 		result: { content: string; meta: ResourceMeta };
 	};
+	"fs.copy": {
+		params: {
+			sourceWorkspaceId: string;
+			sourcePath: string;
+			destinationWorkspaceId: string;
+			destinationDirectory: string;
+		};
+		result: { path: string };
+	};
+	"fs.delete": { params: { workspaceId: string; path: string }; result: Ack };
+	"fs.rename": {
+		params: { workspaceId: string; path: string; name: string };
+		result: { path: string };
+	};
+	"fs.move": {
+		params: {
+			sourceWorkspaceId: string;
+			sourcePath: string;
+			destinationWorkspaceId: string;
+			destinationDirectory: string;
+		};
+		result: { path: string };
+	};
+	"artifacts.list": { params: { workspaceId: string }; result: WorkspaceArtifactsSnapshot };
+	"artifacts.restore": { params: { workspaceId: string; path: string }; result: Ack };
+	"artifacts.discard": { params: { workspaceId: string; path: string }; result: Ack };
 	"spec.graph": { params: { workspaceId: string }; result: SpecGraphSnapshot };
 	"todo.list": {
 		params: { workspaceId: string; sessionId: string; opened?: "page" | "rail" };
@@ -1108,7 +1392,7 @@ export interface WsMethodMap {
 	"skill.list": { params: { projectId: string }; result: SlashCommandInfo[] };
 	"skills.state": { params: { workspaceId: string }; result: SkillCatalogEntry[] };
 	"extension.list": { params: Record<string, never>; result: ExtensionCatalogEntry[] };
-	"packages.list": { params: { workspaceId?: string }; result: PiPackagesCatalog };
+	"packages.list": { params: { workspaceId?: string; force?: boolean }; result: PiPackagesCatalog };
 	"packages.install": {
 		params: { source: string; scope: PiPackageScope; workspaceId?: string };
 		result: PiPackageSummary;
@@ -1143,6 +1427,9 @@ export interface WsMethodMap {
 	"fonts.list": { params: Record<string, never>; result: UserFontsSnapshot };
 	"fonts.installed": { params: Record<string, never>; result: InstalledFontsResult };
 	"fonts.reveal": { params: Record<string, never>; result: Ack };
+	"speech.install": { params: { model: SpeechModel }; result: Ack };
+	"speech.cancelInstall": { params: Record<string, never>; result: Ack };
+	"speech.remove": { params: Record<string, never>; result: Ack };
 	"session.create": {
 		params: { workspaceId: string; model?: WireModel; thinkingLevel?: ThinkingLevel };
 		result: { sessionId: string; model: WireModel | null; thinkingLevel: ThinkingLevel };
@@ -1178,6 +1465,7 @@ export interface WsMethodMap {
 		result: Ack;
 	};
 	"session.setModel": { params: { sessionId: string; model: WireModel }; result: Ack };
+	"session.disableServerFallback": { params: { sessionId: string }; result: WireModel };
 	"session.setThinkingLevel": { params: { sessionId: string; level: ThinkingLevel }; result: Ack };
 	"session.compact": { params: { sessionId: string; instructions?: string }; result: Ack };
 	"session.getStats": { params: { sessionId: string }; result: SessionStats };
@@ -1237,6 +1525,14 @@ export interface WsMethodMap {
 		params: { workspaceId: string; parentSessionId: string };
 		result: Ack & { targeted: number };
 	};
+	"subagent.setEnabled": {
+		params: { name: string; enabled: boolean };
+		result: Ack;
+	};
+	"subagent.list": {
+		params: { workspaceId?: string };
+		result: SubagentCatalogEntry[];
+	};
 	"subagent.getTranscript": {
 		params: { workspaceId: string; parentSessionId: string; childSessionId: string };
 		result: { messages: TranscriptMessage[]; status?: DelegationRunStatus };
@@ -1253,6 +1549,8 @@ export interface WsMethodMap {
 		params: { target: ModelContextTarget; contextWindow: number | null };
 		result: ModelContextSetting[];
 	};
+	"cacheWarming.get": { params: Record<string, never>; result: CacheWarmingSetting };
+	"cacheWarming.set": { params: { mode: CacheWarmingMode }; result: CacheWarmingSetting };
 	"customEndpoints.list": { params: Record<string, never>; result: CustomEndpoint[] };
 	"customEndpoints.probe": { params: CustomEndpointProbeRequest; result: CustomEndpointProbe };
 	"customEndpoints.save": { params: CustomEndpointDraft; result: CustomEndpoint[] };
@@ -1310,6 +1608,26 @@ export interface WsMethodMap {
 	"history.search": {
 		params: { query: string; scope: HistoryScope; limit?: number };
 		result: HistorySearchResult;
+	};
+	"search.query": {
+		params: {
+			query: string;
+			kinds?: SearchKind[];
+			context: SearchContext;
+			limit?: number;
+		};
+		result: SearchQueryResult;
+	};
+	"search.preview": { params: SearchPreviewTarget; result: SearchPreviewResult };
+	"search.text": {
+		params: {
+			seq: number;
+			query: string;
+			context: SearchContext;
+			caseSensitive: boolean;
+			wholeWord: boolean;
+		};
+		result: { seq: number; superseded?: true };
 	};
 	"review.get": { params: { workspaceId: string }; result: ReviewSnapshot };
 	"review.commentAdd": {
@@ -1370,22 +1688,26 @@ export interface WsMethodMap {
 		params: { workspaceId?: string; scope: TemplateScope; name: string };
 		result: Ack;
 	};
-	"mcp.list": { params: { workspaceId: string }; result: McpListResult };
+	"mcp.list": { params: { workspaceId?: string }; result: McpListResult };
 	"mcp.add": {
-		params: {
-			workspaceId: string;
-			scope: McpServerScope;
-			name: string;
-			entry: McpServerEntryInput;
-		};
+		params: McpScopeTarget & { name: string; entry: McpServerEntryInput };
 		result: McpListResult;
 	};
 	"mcp.update": {
-		params: { workspaceId: string; name: string; entry: McpServerEntryInput } & McpRenderedTarget;
+		params: McpScopeTarget & McpRenderedTarget & { name: string; entry: McpServerEntryInput };
 		result: McpListResult;
 	};
 	"mcp.remove": {
-		params: { workspaceId: string; name: string } & McpRenderedTarget;
+		params: McpScopeTarget & McpRenderedTarget & { name: string };
+		result: McpListResult;
+	};
+	"mcp.setUserServer": {
+		params: {
+			name: string;
+			expectedFingerprint: string;
+			enabled?: boolean;
+			exposure?: Exclude<McpExposure, "codemode">;
+		};
 		result: McpListResult;
 	};
 	"mcp.setProjectOverride": {
@@ -1410,10 +1732,10 @@ export interface WsMethodMap {
 		result: McpListResult;
 	};
 	"mcp.shareWithRepo": { params: { workspaceId: string; name: string }; result: McpListResult };
-	"mcp.login": { params: { workspaceId: string; name: string }; result: { loginId: string } };
-	"mcp.logout": { params: { workspaceId: string; name: string }; result: Ack };
+	"mcp.login": { params: { workspaceId?: string; name: string }; result: { loginId: string } };
+	"mcp.logout": { params: { workspaceId?: string; name: string }; result: Ack };
 	"mcp.testConnection": {
-		params: { workspaceId: string; name: string };
+		params: { workspaceId?: string; name: string };
 		result: { loginId: string };
 	};
 	"mcp.reconnect": {
@@ -1424,7 +1746,7 @@ export interface WsMethodMap {
 		params: { workspaceId: string; sessionId: string; toolCallId: string };
 		result: McpReadOutputResult;
 	};
-	"mcp.readLog": { params: { workspaceId: string; name: string }; result: McpServerLog };
+	"mcp.readLog": { params: { workspaceId?: string; name: string }; result: McpServerLog };
 	"acp.client.check": { params: { clientId: string }; result: AcpClientCheckResult };
 	"acp.client.models": {
 		params: { workspaceId: string; clientId: string };
@@ -1697,11 +2019,14 @@ export interface WsResume {
 
 export type WsClientMessage = WsRequest | WsAck | WsResume;
 
+export const WS_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+
 export type WsErrorCode =
 	| "UNKNOWN_COMMIT"
 	| "PUSH_AUTH_FAILED"
 	| "NOT_GIT"
 	| "ALREADY_OPEN"
+	| "PROJECT_BOOTSTRAPPING"
 	| "PROJECT_CLONE_INVALID"
 	| "PROJECT_CLONE_FAILED"
 	| "PROJECT_CLONE_CLEANUP_FAILED"
@@ -1729,13 +2054,36 @@ export type WsErrorCode =
 	| "PACKAGE_REMOVE_FAILED"
 	| "PACKAGE_UPDATE_FAILED"
 	| "PACKAGE_SETTINGS_WRITE_FAILED"
+	| "CACHE_WARMING_WRITE_FAILED"
 	| "REQUEST_REPLAY_OVERFLOW"
 	| "INSTALLED_FONTS_UNAVAILABLE"
 	| "GIT_TIMEOUT"
 	| "WORKTREE_ADD_FAILED"
 	| "WORKTREE_CHECKOUT_FAILED"
 	| "WORKTREE_CHECKOUT_STALLED"
-	| "WORKSPACE_PATH_TAKEN";
+	| "WORKSPACE_PATH_TAKEN"
+	| "FILE_TOO_LARGE"
+	| "COPY_TOO_LARGE"
+	| "ENTRY_CHANGED"
+	| "ENTRY_EXISTS"
+	| "MOVE_ACROSS_DEVICES"
+	| "ARTIFACT_UNKNOWN"
+	| "CHATS_CONTAINER"
+	| "CHAT_WORKSPACE"
+	| "CHATS_STORE_UNAVAILABLE"
+	| "NOT_A_CHAT"
+	| "CHAT_HAS_SESSION"
+	| "CHAT_DELETING"
+	| "CHAT_DELETION_PENDING"
+	| "CONTINUATION_UNKNOWN"
+	| "CONTINUATION_IN_FLIGHT"
+	| "TEXT_SEARCH_TIMEOUT"
+	| "TEXT_SEARCH_FAILED"
+	| "FRAME_TOO_LARGE"
+	| "KEYBINDINGS_INVALID"
+	| "SERVER_FALLBACK_NOT_USED"
+	| "SERVER_FALLBACK_STILL_ON"
+	| SpeechErrorCode;
 
 export interface WsResponse {
 	id: string;

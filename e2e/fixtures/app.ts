@@ -1,4 +1,12 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
@@ -51,6 +59,7 @@ function resetState(): void {
 	rmSync(join(E2E_DATA_DIR, "projects.json"), { force: true });
 	rmSync(join(E2E_DATA_DIR, "turns.json"), { force: true });
 	removeTree(join(E2E_DATA_DIR, "reviews"));
+	removeTree(join(E2E_DATA_DIR, "artifacts"));
 	removeTree(join(E2E_DATA_DIR, "resource-history"));
 	removeTree(join(E2E_DATA_DIR, "worktrees"));
 	removeTree(join(E2E_PI_AGENT_DIR, "sessions"));
@@ -108,8 +117,26 @@ function resetState(): void {
 	}
 
 	rmSync(join(E2E_DATA_DIR, "workspaces.json"), { force: true });
+	resetChats();
 
 	writeFileSync(E2E_PICK_DIR_POINTER, E2E_FIXTURE_REPO);
+}
+
+function resetChats(): void {
+	const file = join(E2E_DATA_DIR, "chats.json");
+	let container: unknown = null;
+	try {
+		container = JSON.parse(readFileSync(file, "utf8")).container ?? null;
+	} catch {}
+	removeTree(join(E2E_DATA_DIR, "chats"));
+	if (!container) {
+		rmSync(file, { force: true });
+		return;
+	}
+	mkdirSync(join(E2E_DATA_DIR, "chats"), { recursive: true });
+	const staged = `${file}.reset`;
+	writeFileSync(staged, `${JSON.stringify({ version: 1, container, chats: [] })}\n`);
+	renameSync(staged, file);
 }
 
 export async function stagePlainFolder(page: Page): Promise<string> {
@@ -122,7 +149,7 @@ export async function stagePlainFolder(page: Page): Promise<string> {
 	return E2E_PLAIN_DIR;
 }
 
-function loadPersistedWorkspaces(): Workspace[] {
+export function loadPersistedWorkspaces(): Workspace[] {
 	try {
 		return JSON.parse(readFileSync(join(E2E_DATA_DIR, "workspaces.json"), "utf8")) as Workspace[];
 	} catch {
@@ -135,7 +162,7 @@ async function disposeLiveSessions(page: Page): Promise<void> {
 	if (workspaces.length === 0) return;
 	const health = await page.request.get("/health");
 	const hostUrl = new URL(health.url());
-	health.dispose();
+	await health.dispose();
 	const port = Number(hostUrl.port) || (hostUrl.protocol === "https:" ? 443 : 80);
 	const wire = await E2eWire.connect(port);
 	try {
@@ -200,7 +227,7 @@ export async function enterDefaultWorkspace(page: Page): Promise<void> {
 // Use this helper when a pane must be visible; rail controls toggle on each click. "files" means Files in All mode, "changes" Files in Changed mode.
 export async function revealWorkbenchTool(
 	page: Page,
-	tool: "projects" | "specs" | "files" | "changes" | "review" | "plan",
+	tool: "projects" | "specs" | "files" | "changes" | "review" | "plan" | "artifacts",
 ): Promise<void> {
 	const railTool = tool === "changes" ? "files" : tool;
 	const control = page.getByTestId(`tool-rail-${railTool}`);
@@ -295,7 +322,7 @@ export async function openWorkspaceChat(page: Page): Promise<Workspace> {
 		if ((await worktreeRows(page).count()) === 0) {
 			workspace = await createWorkspaceViaDialog(page);
 		}
-		await worktreeRows(page).first().getByRole("button").first().click();
+		await worktreeRows(page).first().getByRole("treeitem").click();
 		await expect(activeWorktreeRow(page)).toHaveCount(1, {
 			timeout: 5_000,
 		});
@@ -347,6 +374,27 @@ export async function expandActivityStep(page: Page, tool: string): Promise<Loca
 		await expect(step).toHaveAttribute("data-expanded", "true");
 	}
 	return step;
+}
+
+export function settingsDialog(page: Page): Locator {
+	return page.getByTestId("settings-dialog");
+}
+
+export async function openSettingsSection(page: Page, section: string): Promise<Locator> {
+	const dialog = settingsDialog(page);
+	if (!(await dialog.isVisible())) await page.getByTestId("open-settings").click();
+	const tab = page.getByTestId(`settings-nav-${section}`);
+	await tab.click();
+	await expect(tab).toHaveAttribute("data-active", "true");
+	return dialog;
+}
+
+/** Closes Settings with its Close button: Esc steps back through the field and section list first. */
+export async function closeSettings(page: Page): Promise<void> {
+	const dialog = settingsDialog(page);
+	if (!(await dialog.isVisible())) return;
+	await dialog.getByRole("button", { name: "Close", exact: true }).click();
+	await expect(dialog).toBeHidden();
 }
 
 /** Opens an `aria-expanded` disclosure (a Settings theme list, layout Advanced, …) unless it is already open. */

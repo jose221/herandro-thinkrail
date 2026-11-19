@@ -8,7 +8,7 @@ import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebFontsAddon } from "@xterm/addon-web-fonts";
-import { Terminal as XTerm } from "@xterm/xterm";
+import { type ITheme, Terminal as XTerm } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import "@xterm/xterm/css/xterm.css";
@@ -17,16 +17,14 @@ import { Button } from "@thinkrail/ui/button";
 import { type ResolvedFont, resolveFont, watchFont } from "@thinkrail/ui/fonts";
 import { onThemeSwap } from "@thinkrail/ui/theme";
 import { type QuietScrollEdges, QuietScrollFrame } from "@/components/QuietScrollArea";
+import { copyText, cssColorToHex, platformFamily } from "@/lib";
 import { SettingsSection, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { createPtySizeSync, runAfterTerminalRelayout } from "./ptySizeSync";
-import { stripAnsiDim } from "./terminalContrast";
+import { stripAnsiDim, terminalContrastFloor } from "./terminalContrast";
+import { createTerminalImeBridge } from "./terminalImeBridge";
+import { terminalKeyDecision } from "./terminalKeys";
 import { createTerminalPrebindBuffer } from "./terminalPrebindBuffer";
-import {
-	readTerminalTheme,
-	terminalHighContrastEnabled,
-	terminalMinimumContrastRatio,
-} from "./terminalPresentation";
 
 const RESIZE_DEBOUNCE_MS = 60;
 
@@ -36,15 +34,58 @@ function sendTerminalWrite(send: Promise<unknown>): void {
 	void send.catch(() => {});
 }
 
-const IME_SENTINEL_KEYCODE = 229;
+function cssVar(name: string): string | undefined {
+	return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || undefined;
+}
 
-// xterm #6065: an active IME reports keyCode 229, so xterm's chord table drops Ctrl+<letter>/Escape — see panels/SPEC.md.
-function imeControlBytes(event: KeyboardEvent): string | null {
-	if (event.altKey || event.metaKey) return null;
-	if (event.code === "Escape") return "\x1b";
-	if (!event.ctrlKey) return null;
-	const letter = /^Key([A-Z])$/.exec(event.code)?.[1];
-	return letter ? String.fromCharCode(letter.charCodeAt(0) - 64) : null;
+function cssColorVar(name: string): string | undefined {
+	return cssColorToHex(cssVar(name) ?? "") || undefined;
+}
+
+const ANSI_TOKENS = [
+	["black", "--ansi-black"],
+	["red", "--ansi-red"],
+	["green", "--ansi-green"],
+	["yellow", "--ansi-yellow"],
+	["blue", "--ansi-blue"],
+	["magenta", "--ansi-magenta"],
+	["cyan", "--ansi-cyan"],
+	["white", "--ansi-white"],
+	["brightBlack", "--ansi-bright-black"],
+	["brightRed", "--ansi-bright-red"],
+	["brightGreen", "--ansi-bright-green"],
+	["brightYellow", "--ansi-bright-yellow"],
+	["brightBlue", "--ansi-bright-blue"],
+	["brightMagenta", "--ansi-bright-magenta"],
+	["brightCyan", "--ansi-bright-cyan"],
+	["brightWhite", "--ansi-bright-white"],
+] as const;
+
+function isHighContrast(): boolean {
+	return document.documentElement.dataset.themeContrast === "high";
+}
+
+function contrastFloor(): number {
+	return terminalContrastFloor(isHighContrast());
+}
+
+function readTheme(): ITheme {
+	const theme: ITheme = {};
+	const bg = cssColorVar("--container-terminal-bg");
+	if (bg) theme.background = bg;
+	const fg = cssColorVar("--text-default");
+	if (fg) theme.foreground = fg;
+	const cursor = cssColorVar("--primary");
+	if (cursor) theme.cursor = cursor;
+	const sel = cssColorVar("--editor-selection-bg");
+	if (sel) theme.selectionBackground = sel;
+	const selFg = cssColorVar("--editor-selection-text");
+	if (selFg) theme.selectionForeground = selFg;
+	for (const [slot, name] of ANSI_TOKENS) {
+		const color = cssColorVar(name);
+		if (color) theme[slot] = color;
+	}
+	return theme;
 }
 
 function tryLoad(fn: () => void): void {
@@ -95,8 +136,8 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 			fontSize: font.size || 13,
 			fontFamily: font.family || "monospace",
 			fontWeight: font.weight || "normal",
-			theme: readTerminalTheme(),
-			minimumContrastRatio: terminalMinimumContrastRatio(),
+			theme: readTheme(),
+			minimumContrastRatio: contrastFloor(),
 			scrollback: 5000,
 		});
 		const fit = new FitAddon();
@@ -110,6 +151,20 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 		tryLoad(() => term.loadAddon(webFonts));
 		termRef.current = term;
 		term.open(host);
+		// WebKit feeds the macOS Korean IME to xterm as insertText + insertReplacementText (upstream #5704) — see panels/SPEC.md.
+		const imeBridge = createTerminalImeBridge((data) => term.input(data, true));
+		const onImeInput = (event: Event): void => {
+			if (event instanceof InputEvent) imeBridge.input(event);
+		};
+		const onImeKeydown = (event: Event): void => {
+			if (event instanceof KeyboardEvent) imeBridge.keydown(event);
+		};
+		const onImeHandover = (): void => imeBridge.flush();
+		host.addEventListener("input", onImeInput, true);
+		host.addEventListener("keydown", onImeKeydown, true);
+		host.addEventListener("compositionstart", onImeHandover, true);
+		host.addEventListener("paste", onImeHandover, true);
+		host.addEventListener("focusout", onImeHandover);
 		const updateScrollEdges = () => {
 			const buffer = term.buffer.active;
 			const next = {
@@ -128,12 +183,16 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 		updateScrollEdges();
 
 		term.attachCustomKeyEventHandler((event) => {
-			if (event.type !== "keydown" || event.keyCode !== IME_SENTINEL_KEYCODE) return true;
-			if (event.isComposing) return true;
-			const bytes = imeControlBytes(event);
-			if (bytes === null) return true;
-			const id = serverIdRef.current;
-			if (id) sendTerminalWrite(getTransport().request("terminal.write", { id, data: bytes }));
+			const decision = terminalKeyDecision(event, platformFamily(), term.hasSelection());
+			if (decision === null) return true;
+			if (typeof decision === "object") {
+				const id = serverIdRef.current;
+				const data = decision.write;
+				if (id) sendTerminalWrite(getTransport().request("terminal.write", { id, data }));
+				return false;
+			}
+			event.preventDefault();
+			if (decision === "copy") void copyText(term.getSelection());
 			return false;
 		});
 
@@ -161,7 +220,7 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 
 		let prebind = createTerminalPrebindBuffer();
 		const writeOutput = (data: string, cb?: () => void): void =>
-			term.write(terminalHighContrastEnabled() ? stripAnsiDim(data) : data, cb);
+			term.write(isHighContrast() ? stripAnsiDim(data) : data, cb);
 		const writeTruncation = (): void =>
 			term.write(`\r\n${i18n.t("panels.terminalInstance.outputTruncated")}\r\n`);
 		const writeFrame = (ev: TerminalDataPush): void => {
@@ -313,8 +372,8 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 		resizeObserver.observe(host);
 
 		const stopThemeWatch = onThemeSwap(() => {
-			term.options.theme = readTerminalTheme();
-			term.options.minimumContrastRatio = terminalMinimumContrastRatio();
+			term.options.theme = readTheme();
+			term.options.minimumContrastRatio = contrastFloor();
 		});
 		const stopFontsWatch = watchFont("tr-code-block", ["family", "size", "weight"], (next) => {
 			if (disposed) return;
@@ -338,6 +397,11 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 			unsubscribe();
 			unsubscribeExit();
 			unsubscribeDetached();
+			host.removeEventListener("input", onImeInput, true);
+			host.removeEventListener("keydown", onImeKeydown, true);
+			host.removeEventListener("compositionstart", onImeHandover, true);
+			host.removeEventListener("paste", onImeHandover, true);
+			host.removeEventListener("focusout", onImeHandover);
 			serverIdRef.current = null;
 			term.dispose();
 		};
@@ -376,7 +440,7 @@ export default function TerminalInstance({ tabKey, workspaceId, initialCommand }
 				inert={failureMessage !== null && !ready}
 				className="absolute inset-12"
 			>
-				<div ref={hostRef} className="absolute inset-0" />
+				<div ref={hostRef} data-focus-default className="absolute inset-0" />
 			</QuietScrollFrame>
 			{detached ? (
 				<div

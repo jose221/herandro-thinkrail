@@ -22,6 +22,7 @@ import {
 	BRANCH_STATUS_PROTOCOL_VERSION,
 	HTTP_REQUEST_LIMITS,
 	isControlMessage,
+	isSpeechModel,
 	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
@@ -39,9 +40,9 @@ import {
 	clampThinkingForModel,
 	clearQueueSession,
 	compactSession,
-	createSession,
 	deleteSession,
 	disableAnthropicExtraUsageWarning,
+	disableSessionServerFallback,
 	ensureSessionAttached,
 	followUpSession,
 	getProviderConfig,
@@ -64,6 +65,7 @@ import {
 	listSessions,
 	listSkillCatalog,
 	listSkillCommands,
+	listSubagentCatalog,
 	markWorkspaceRead,
 	markWorkspaceUnread,
 	notifyExtUi,
@@ -73,6 +75,7 @@ import {
 	projectTrustSummary,
 	promptSession,
 	readBackgroundCommandOutput,
+	readCacheWarmingSetting,
 	readChildTranscript,
 	refreshAvailableModels,
 	refreshSubagentConcurrency,
@@ -97,6 +100,7 @@ import {
 	stopAllSubagents,
 	stopBackgroundCommand,
 	stopSubagent,
+	writeCacheWarmingMode,
 } from "../agent";
 import {
 	type AdditionalAnalyticsCapture,
@@ -107,6 +111,14 @@ import {
 	track,
 } from "../analytics";
 import { getAndroidEmulatorManager } from "../android";
+import {
+	discardArtifact,
+	listArtifacts,
+	prepareArtifactsDestination,
+	removeWorkspaceArtifacts,
+	restoreArtifact,
+	withUserRemoval,
+} from "../artifacts";
 import { suggestPrDescription } from "../assist";
 import {
 	cancelLogin,
@@ -122,7 +134,7 @@ import {
 	startProxyJbcentral,
 	updateJbcentral,
 } from "../auth";
-import { findBranchReviewOutcome, providerFromRemoteUrl } from "../branch-review";
+import { providerFromRemoteUrl } from "../branch-review";
 import {
 	activeBrowserUrl,
 	browserSession,
@@ -153,7 +165,14 @@ import {
 	surveyResponse,
 } from "../feedback";
 import { fontsDir, listInstalledFonts, readUserFonts } from "../fonts";
-import { readDir, readFile } from "../fs";
+import {
+	copyWorktreeEntry,
+	deleteWorktreeEntry,
+	moveWorktreeEntry,
+	readDir,
+	readFile,
+	renameWorktreeEntry,
+} from "../fs";
 import {
 	commitsAheadOf,
 	countPushDivergence,
@@ -214,6 +233,7 @@ import {
 	inspectCloneDestination,
 	inspectProjectPath,
 	listProjects,
+	moveProject,
 	openProject,
 	renameProject,
 	setProjectGroupEnabled,
@@ -238,8 +258,9 @@ import {
 	sendableComments,
 	updateComment,
 } from "../reviews";
-import { getConfig, noteRecentModel, updateConfig } from "../settings";
-import { evictSpecIndex, projectHasSpecs, specGraph } from "../spec";
+import { getConfig, noteRecentModel, setSubagentEnabled, updateConfig } from "../settings";
+import { evictSpecIndex, evictSpecRoot, projectHasSpecs, specGraph } from "../spec";
+import { cancelSpeechInstall, installSpeech, removeSpeech } from "../speech";
 import {
 	analyzeMemory,
 	captureMemoryCheckpoint,
@@ -279,15 +300,20 @@ import {
 	updateTodo,
 } from "../todos";
 import { forgetWorkspaceTurns, listTurns } from "../turns";
-import { ensureWatch, stopWatch } from "../watch";
+import { ensureWatch, notifyWorkspacePathsChanged, stopWatch } from "../watch";
 import {
+	assertNotChatsContainer,
+	assertNotChatWorkspace,
 	awaitWorkspaceCreation,
 	type CreationHandoff,
 	createWorkspace,
 	dismissWorkspaceCreation,
-	ensureWorkspaceScratchDir,
 	forgetWorkspace,
 	getWorkspace,
+	isChatsContainer,
+	isChatsContainerId,
+	isChatWorkspace,
+	isChatWorkspaceId,
 	listAllWorkspaceRecords,
 	listExistingWorktrees,
 	listWorkspaceCreations,
@@ -296,8 +322,8 @@ import {
 	openExistingWorktree,
 	reclaimWorktree,
 	recordWorkspaceActivity,
-	refreshUserOwnedWorkspace,
 	renameWorkspace,
+	resolveWorkspacePath,
 	retryWorkspaceCreation,
 	settleWorkspace,
 	setWorkspaceDiffBase,
@@ -310,7 +336,19 @@ import {
 	workspaceDiffStats,
 } from "../workspaces";
 import { ackSend } from "./ackSend";
-import { sessionProviderAnalytics, trackChatStarted } from "./authAnalytics";
+import { sessionProviderAnalytics } from "./authAnalytics";
+import { startChatSession } from "./chatSession";
+import {
+	assertChatOpen,
+	assertSessionDeletable,
+	createChat,
+	deleteChat,
+	historyHiddenCwd,
+	inspectChat,
+	recoverChatSession,
+	seesChats,
+} from "./chats";
+import { continuationStatus, startContinuation } from "./continuations";
 import { nudgeBaseRefWorkspaces } from "./fsNudge";
 import { buildHistoryScope } from "./historyScope";
 import { provisionInitialTerminal } from "./initialTerminal";
@@ -328,6 +366,7 @@ import {
 	mcpRevokeToolGrant,
 	mcpSetProjectOverride,
 	mcpSetSessionOverride,
+	mcpSetUserServer,
 	mcpShareWithRepo,
 	mcpTestConnection,
 	mcpUpdate,
@@ -359,7 +398,9 @@ import {
 import { startPlanReview } from "./requestReview";
 import { withChangeLock, withReviewLock } from "./reviewLock";
 import { runObservation } from "./runAnalytics";
-import { scheduleLifecyclePass } from "./settledLifecycle";
+import { hostSearch, publishSearchText } from "./search";
+import { trailingSingleFlight } from "./sessionStateList";
+import { findWorkspaceReviewOutcome, scheduleLifecyclePass } from "./settledLifecycle";
 import { taskObservation } from "./taskAnalytics";
 import {
 	claimItemFix,
@@ -419,53 +460,40 @@ async function sendUserMessage(
 	return { ok: true };
 }
 
-async function startChat(
-	workspaceId: string,
-	choice: { model?: WireModel; thinkingLevel?: ThinkingLevel },
-): Promise<WsResult<"session.create">> {
-	const ws = getWorkspace(workspaceId);
-	ensureWorkspaceScratchDir(ws);
-	const defaults = await resolveNewChatModel(choice);
-	const created = await createSession({
-		cwd: ws.worktreePath,
-		workspaceId,
-		...(defaults.model ? { model: defaults.model } : {}),
-		thinkingLevel: defaults.thinkingLevel,
-	});
-	if (choice.model && created.model) noteRecentModel(created.model);
-	trackChatStarted({
-		sessionId: created.sessionId,
-		model: defaults.model ? created.model : null,
-	});
-	return created;
-}
-
 const creationClients = new Map<string, string>();
 
-export const workspaceCreationHandoff: CreationHandoff = async (workspace, kickoff) => {
+export const workspaceCreationHandoff: CreationHandoff = async (workspace, kickoff, origin) => {
 	const clientKey = creationClients.get(workspace.id) ?? "";
 	creationClients.delete(workspace.id);
 	provisionInitialTerminal(workspace);
 	if (!kickoff) return {};
 	await ensureWatch(workspace.id, { prewarm: false });
-	const { sessionId } = await startChat(workspace.id, {
-		...(kickoff.model ? { model: kickoff.model } : {}),
-		...(kickoff.thinkingLevel ? { thinkingLevel: kickoff.thinkingLevel } : {}),
-	});
-	if (!kickoff.text && !kickoff.images?.length) return { sessionId };
+	const internal = origin === "agent";
+	const chat = await startChatSession(
+		workspace,
+		{
+			...(kickoff.model ? { model: kickoff.model } : {}),
+			...(kickoff.thinkingLevel ? { thinkingLevel: kickoff.thinkingLevel } : {}),
+		},
+		{ pick: !internal },
+	);
+	const { sessionId } = chat;
+	if (!kickoff.text && !kickoff.images?.length) return chat;
 	let preflighted: () => void = () => {};
 	const preflight = new Promise<void>((resolve) => {
 		preflighted = resolve;
 	});
-	const sent = sendUserMessage("prompt", sessionId, kickoff.text, clientKey, () =>
-		promptSession(sessionId, kickoff.text, kickoff.images, { onPreflight: preflighted }),
-	);
+	const send = () =>
+		promptSession(sessionId, kickoff.text, kickoff.images, { onPreflight: preflighted });
+	const sent = internal
+		? ackSend(runObservation.send(sessionId, "internal", send))
+		: sendUserMessage("prompt", sessionId, kickoff.text, clientKey, send);
 	sent.catch(() => {});
 	try {
 		await Promise.race([preflight, sent]);
-		return { sessionId };
+		return chat;
 	} catch (err) {
-		return { sessionId, kickoffError: err instanceof Error ? err.message : String(err) };
+		return { ...chat, kickoffError: err instanceof Error ? err.message : String(err) };
 	}
 };
 
@@ -593,25 +621,31 @@ async function sendToFileChat(
 			`review ${workspaceId}: linked chat ${existing} is no longer on disk — starting a new review chat`,
 		);
 	}
-	ensureWorkspaceScratchDir(ws);
-	const defaults = await resolveNewChatModel(opts);
-	const created = await createSession({
-		cwd: ws.worktreePath,
-		workspaceId,
-		...(defaults.model ? { model: defaults.model } : {}),
-		thinkingLevel: defaults.thinkingLevel,
-	});
-	trackChatStarted({
-		sessionId: created.sessionId,
-		model: defaults.model ? created.model : null,
-	});
+	const created = await startChatSession(ws, opts);
 	await markCommentsSent(workspaceId, ids, created.sessionId);
 	fireReviewPrompt(workspaceId, comments, created.sessionId, pkg, capture);
 	return { ...created, reused: false };
 }
 
+const sharedSessionStateList = trailingSingleFlight(() =>
+	listSessionStates(listAllWorkspaceRecords().map(sessionStateWorkspace)),
+);
+
 function sessionStateWorkspace(workspace: Workspace) {
 	return { id: workspace.id, projectId: workspace.projectId, cwd: workspace.worktreePath };
+}
+
+function repositoryProject(projectId: string) {
+	const project = listProjects().find((candidate) => candidate.id === projectId);
+	if (!project) throw new Error(`Unknown project: ${projectId}`);
+	assertNotChatsContainer(project);
+	return project;
+}
+
+function repositoryWorkspace(workspaceId: string, action: string): Workspace {
+	const workspace = getWorkspace(workspaceId);
+	assertNotChatWorkspace(workspace, action);
+	return workspace;
 }
 
 function resourceCwd(workspaceId: string): string {
@@ -702,23 +736,37 @@ const handlers: WsHandlers = {
 		cancelProjectClone(params.operationId, ctx.clientKey);
 		return { ok: true };
 	},
-	"project.list": () =>
-		observeSetupRead(listProjects, (projects) => ({
-			project_present: projects.length > 0 ? "yes" : "no",
-		})),
+	"project.list": (_params, ctx) =>
+		observeSetupRead(
+			() =>
+				listProjects().filter(
+					(project) => seesChats(ctx.protocolVersion) || !isChatsContainer(project),
+				),
+			(projects) => ({
+				project_present: projects.some((project) => !isChatsContainer(project)) ? "yes" : "no",
+			}),
+		),
 	"project.hasSpecs": (params) => {
 		const { projectId } = params;
 		const project = listProjects().find((p) => p.id === projectId);
 		return { hasSpecs: project ? projectHasSpecs(project.path) : false };
 	},
 	"project.close": (params) => {
+		repositoryProject(params.id);
 		closeProject(params.id);
 		return { ok: true } as const;
 	},
-	"project.rename": (params) => renameProject(params.id, params.name),
+	"project.rename": (params) => {
+		repositoryProject(params.id);
+		return renameProject(params.id, params.name);
+	},
+	"project.move": (params) => {
+		repositoryProject(params.id);
+		repositoryProject(params.targetId);
+		return moveProject(params.id, params.targetId, params.placement);
+	},
 	"project.setTrust": async (p) => {
-		const project = listProjects().find((candidate) => candidate.id === p.id);
-		if (!project) throw new Error(`Unknown project: ${p.id}`);
+		const project = repositoryProject(p.id);
 		const acknowledged =
 			p.trusted && project.trusted !== true
 				? await listProjectAliasSkillNames(project.path)
@@ -762,16 +810,25 @@ const handlers: WsHandlers = {
 		creationClients.delete(p.id);
 		return dismissed;
 	},
-	"workspace.listExisting": (params) => listExistingWorktrees(params.projectId),
+	"workspace.listExisting": (params) => {
+		repositoryProject(params.projectId);
+		return listExistingWorktrees(params.projectId);
+	},
 	"workspace.openExisting": async (p) => {
 		return provisionInitialTerminal(
 			await observeSetupAction("worktree_attach", () => openExistingWorktree(p.projectId, p.path)),
 		);
 	},
 	"workspace.rename": (p) => {
-		return renameWorkspace(p.id, p.name);
+		return renameWorkspace(p.id, p.name).workspace;
 	},
-	"workspace.list": async (p) => {
+	"workspace.resolvePath": async (p) => {
+		const match = await resolveWorkspacePath(p.path);
+		if (match) provisionInitialTerminal(getWorkspace(match.workspaceId));
+		return match;
+	},
+	"workspace.list": async (p, ctx) => {
+		if (!seesChats(ctx.protocolVersion) && isChatsContainerId(p.projectId)) return [];
 		const rows = (
 			await listWorkspaces(p.projectId, { includeDiffStats: p.includeDiffStats ?? true })
 		).map((workspace) => ({ ...workspace, ...provisionInitialTerminal(workspace) }));
@@ -781,10 +838,10 @@ const handlers: WsHandlers = {
 		return rows;
 	},
 	"workspace.openReview": async (p, ctx) => {
-		const ws = getWorkspace(p.workspaceId);
+		const ws = repositoryWorkspace(p.workspaceId, "reviewed");
 		const fresh = shouldRefreshOpenReview(p.allowCached);
 		const [outcome, divergence] = await Promise.all([
-			findBranchReviewOutcome(ws.worktreePath, ws.branch, { fresh }),
+			findWorkspaceReviewOutcome(ws, { fresh }),
 			// Only pay the network fetch on a fresh lookup (focus / explicit refresh), not a cached activation.
 			countPushDivergence(ws.worktreePath, ws.branch, { fetch: fresh }),
 		]);
@@ -799,12 +856,12 @@ const handlers: WsHandlers = {
 		};
 	},
 	"workspace.branchStatus": async (p, ctx) => {
-		const ws = getWorkspace(p.workspaceId);
+		const ws = repositoryWorkspace(p.workspaceId, "given a branch status");
 		const fresh = shouldRefreshOpenReview(p.allowCached);
 		const origin = await originUrls(ws.worktreePath);
 		const splitPushUrl = origin.push !== origin.fetch ? origin.push : null;
 		const [outcome, measured, aheadOfBase] = await Promise.all([
-			findBranchReviewOutcome(ws.worktreePath, ws.branch, { fresh }),
+			findWorkspaceReviewOutcome(ws, { fresh }),
 			(splitPushUrl
 				? countPushTargetDivergence(ws.worktreePath, ws.branch, splitPushUrl)
 				: countPushDivergence(ws.worktreePath, ws.branch, {
@@ -835,10 +892,12 @@ const handlers: WsHandlers = {
 		};
 	},
 	"workspace.push": async (p) => {
+		repositoryWorkspace(p.workspaceId, "pushed");
 		recordWorkspaceActivity(p.workspaceId);
 		return pushBranch(p);
 	},
 	"workspace.deleteRemoteBranch": async (p) => {
+		repositoryWorkspace(p.workspaceId, "pushed");
 		recordWorkspaceActivity(p.workspaceId);
 		await deleteRemoteBranch(p);
 		return { ok: true } as const;
@@ -856,10 +915,12 @@ const handlers: WsHandlers = {
 		const ws = forgetWorkspace(id);
 		if (ws) {
 			evictSpecIndex(ws.id);
+			evictSpecRoot(ws.worktreePath);
 			removeWorkspaceReviews(ws.id);
 			forgetWorkspaceChanges(ws.id);
 			forgetWorkspaceTurns(ws.id);
 			forgetBrowserSession(ws.id);
+			removeWorkspaceArtifacts(ws.id);
 			stopWatch(ws.id);
 			closeWorkspaceTerminals(ws.id);
 			void archiveTeardown(ws, ctx.acp);
@@ -867,8 +928,16 @@ const handlers: WsHandlers = {
 		return { ok: true } as const;
 	},
 	"workspace.diffStats": (params) => workspaceDiffStats(params.id),
-	"workspace.openIn": (p) => {
-		openEditor(p.editor, getWorkspace(p.id).worktreePath);
+	"chat.create": (params) => createChat(params),
+	"chat.delete": async (params) => {
+		await deleteChat(params.workspaceId);
+		return { ok: true } as const;
+	},
+	"chat.inspect": (params) => inspectChat(params.workspaceId),
+	"chat.continue": (params) => startContinuation(params.workspaceId, params.projectId),
+	"chat.continuationStatus": (params) => continuationStatus(params.operationId),
+	"workspace.openIn": async (p) => {
+		await openEditor(p.editor, getWorkspace(p.id).worktreePath);
 		return { ok: true } as const;
 	},
 	"workspace.reveal": (params) => {
@@ -876,8 +945,12 @@ const handlers: WsHandlers = {
 		return { ok: true } as const;
 	},
 	"editor.list": () => listAvailableEditors(),
-	"git.listBranches": (params) => listBranches(params.projectId),
+	"git.listBranches": (params) => {
+		repositoryProject(params.projectId);
+		return listBranches(params.projectId);
+	},
 	"git.prefetch": async (p) => {
+		repositoryProject(p.projectId);
 		const { ok, moved } = await prefetchBranch(p.projectId, p.ref);
 		if (moved) nudgeBaseRefWorkspaces(p.projectId, p.ref);
 		return { ok };
@@ -908,7 +981,6 @@ const handlers: WsHandlers = {
 		return { ok: true } as const;
 	},
 	"pr.open": async (p) => {
-		refreshUserOwnedWorkspace(p.workspaceId);
 		recordWorkspaceActivity(p.workspaceId);
 		const { branch, ...result } = await observePrAction(() => openPr(p), p.source ?? "other");
 		if (result.review) {
@@ -929,8 +1001,10 @@ const handlers: WsHandlers = {
 	"fs.readDir": async (p) => {
 		void ensureWatch(p.workspaceId);
 		const nodes = readDir(p.workspaceId, p.path);
+		const workspace = getWorkspace(p.workspaceId);
+		if (isChatWorkspace(workspace)) return nodes;
 		const ignored = await ignoredPaths(
-			getWorkspace(p.workspaceId).worktreePath,
+			workspace.worktreePath,
 			nodes.map((node) => node.path),
 		);
 		return ignored.size === 0
@@ -939,7 +1013,79 @@ const handlers: WsHandlers = {
 	},
 	"fs.readFile": (p) => {
 		void ensureWatch(p.workspaceId);
-		return readFile(p.workspaceId, p.path);
+		return readFile(
+			p.workspaceId,
+			p.path,
+			p.maxBytes === undefined ? {} : { maxBytes: p.maxBytes },
+		);
+	},
+	"fs.copy": (p) => {
+		void ensureWatch(p.destinationWorkspaceId);
+		return withChangeLock(p.destinationWorkspaceId, async () => {
+			prepareArtifactsDestination(p.destinationWorkspaceId, p.destinationDirectory);
+			const { path, written } = await copyWorktreeEntry(p);
+			notifyWorkspacePathsChanged(p.destinationWorkspaceId, written);
+			return { path };
+		});
+	},
+	"fs.delete": (p) => {
+		void ensureWatch(p.workspaceId);
+		return withChangeLock(p.workspaceId, async () => {
+			const { path, directory } = await withUserRemoval(p.workspaceId, p.path, () =>
+				deleteWorktreeEntry(p.workspaceId, p.path),
+			);
+			notifyWorkspacePathsChanged(p.workspaceId, [path], { subtrees: directory });
+			return { ok: true } as const;
+		});
+	},
+	"fs.rename": (p) => {
+		void ensureWatch(p.workspaceId);
+		return withChangeLock(p.workspaceId, async () => {
+			const moved = await withUserRemoval(p.workspaceId, p.path, async () =>
+				renameWorktreeEntry(p.workspaceId, p.path, p.name),
+			);
+			notifyWorkspacePathsChanged(p.workspaceId, [moved.from, ...moved.written], {
+				subtrees: moved.directory,
+			});
+			return { path: moved.path };
+		});
+	},
+	"fs.move": (p) => {
+		void ensureWatch(p.sourceWorkspaceId);
+		void ensureWatch(p.destinationWorkspaceId);
+		const [first, second] =
+			p.sourceWorkspaceId < p.destinationWorkspaceId
+				? [p.sourceWorkspaceId, p.destinationWorkspaceId]
+				: [p.destinationWorkspaceId, p.sourceWorkspaceId];
+		const locked = <T>(operation: () => Promise<T>) =>
+			first === second
+				? withChangeLock(first, operation)
+				: withChangeLock(first, () => withChangeLock(second, operation));
+		return locked(async () => {
+			prepareArtifactsDestination(p.destinationWorkspaceId, p.destinationDirectory);
+			const moved = await withUserRemoval(p.sourceWorkspaceId, p.sourcePath, async () =>
+				moveWorktreeEntry(p),
+			);
+			notifyWorkspacePathsChanged(p.sourceWorkspaceId, [moved.from], {
+				subtrees: moved.directory,
+			});
+			notifyWorkspacePathsChanged(p.destinationWorkspaceId, moved.written);
+			return { path: moved.path };
+		});
+	},
+	"artifacts.list": (p) => {
+		void ensureWatch(p.workspaceId);
+		return listArtifacts(p.workspaceId);
+	},
+	"artifacts.restore": (p) =>
+		withChangeLock(p.workspaceId, async () => {
+			restoreArtifact(p.workspaceId, p.path);
+			notifyWorkspacePathsChanged(p.workspaceId, [p.path]);
+			return { ok: true } as const;
+		}),
+	"artifacts.discard": async (p) => {
+		await discardArtifact(p.workspaceId, p.path);
+		return { ok: true } as const;
 	},
 	"spec.graph": (p) => {
 		void ensureWatch(p.workspaceId);
@@ -1118,13 +1264,34 @@ const handlers: WsHandlers = {
 		const { projectId } = params;
 		const project = listProjects().find((candidate) => candidate.id === projectId);
 		if (!project) throw new Error(`Unknown project: ${projectId}`);
-		return listSkillCommands(project.path, admissionContextFor(project));
+		return listSkillCommands(
+			project.path,
+			admissionContextFor(project, {}, getConfig().otherAgentSkills),
+		);
 	},
 	"skills.state": (params) => {
 		const { workspaceId } = params;
 		const ws = getWorkspace(workspaceId);
 		const project = listProjects().find((p) => p.id === ws.projectId);
-		return listSkillCatalog(ws.worktreePath, admissionContextFor(project, ws.skillOverrides ?? {}));
+		return listSkillCatalog(
+			ws.worktreePath,
+			admissionContextFor(project, ws.skillOverrides ?? {}, getConfig().otherAgentSkills),
+		);
+	},
+	"subagent.setEnabled": (p) => {
+		setSubagentEnabled(p?.name, p?.enabled);
+		return { ok: true };
+	},
+	"subagent.list": (p) => {
+		if (p.workspaceId === undefined) return listSubagentCatalog();
+		const ws = getWorkspace(p.workspaceId);
+		const project = listProjects().find((candidate) => candidate.id === ws.projectId);
+		const admission = admissionContextFor(
+			project,
+			ws.skillOverrides ?? {},
+			getConfig().otherAgentSkills,
+		);
+		return listSubagentCatalog(ws.worktreePath, admission.piResourceTrusted);
 	},
 	"extension.list": () => listExtensionCatalog(new Set(getConfig().disabledExtensions)),
 	"packages.list": (p) => packagesList(p),
@@ -1141,10 +1308,25 @@ const handlers: WsHandlers = {
 	"fonts.list": () => readUserFonts(),
 	"fonts.installed": () => listInstalledFonts(),
 	"fonts.reveal": () => revealDataFolder(fontsDir()),
+	"speech.install": (p) => {
+		if (!isSpeechModel(p.model)) throw new Error("unknown voice model");
+		installSpeech(p.model);
+		return { ok: true };
+	},
+	"speech.cancelInstall": () => {
+		cancelSpeechInstall();
+		return { ok: true };
+	},
+	"speech.remove": async () => {
+		await removeSpeech();
+		return { ok: true };
+	},
 	"project.acknowledgeSkills": (p) => {
+		repositoryProject(p.id);
 		return acknowledgeProjectSkills(p.id, p.names);
 	},
 	"project.setSkillEnabled": (p) => {
+		repositoryProject(p.id);
 		return setProjectSkillEnabled(p.id, p.name, p.enabled);
 	},
 	"project.aliasSkills": (params) => {
@@ -1160,13 +1342,17 @@ const handlers: WsHandlers = {
 		return projectTrustSummary(project.path);
 	},
 	"project.setGroupEnabled": (p) => {
+		repositoryProject(p.id);
 		return setProjectGroupEnabled(p.id, p.group, p.enabled);
 	},
 	"project.skills": (params) => {
 		const { projectId } = params;
 		const project = listProjects().find((p) => p.id === projectId);
 		if (!project) throw new Error(`Unknown project: ${projectId}`);
-		return listSkillCatalog(project.path, admissionContextFor(project));
+		return listSkillCatalog(
+			project.path,
+			admissionContextFor(project, {}, getConfig().otherAgentSkills),
+		);
 	},
 	"workspace.setSkillOverride": (p) => {
 		return setWorkspaceSkillOverride(p.id, p.name, p.override);
@@ -1191,7 +1377,14 @@ const handlers: WsHandlers = {
 		await reloadSessionResources(params.sessionId);
 		return { ok: true } as const;
 	},
-	"session.create": (p) => startChat(p.workspaceId, p),
+	"session.create": async (p) => {
+		const ws = getWorkspace(p.workspaceId);
+		if (isChatWorkspace(ws)) {
+			const { workspace: _workspace, ...created } = await recoverChatSession(ws.id, p);
+			return created;
+		}
+		return startChatSession(ws, p, { pick: true });
+	},
 	"session.prompt": (p, ctx) => {
 		return sendUserMessage("prompt", p.sessionId, p.text, ctx.clientKey, () =>
 			promptSession(p.sessionId, p.text, p.images),
@@ -1236,6 +1429,7 @@ const handlers: WsHandlers = {
 		return { ok: true } as const;
 	},
 	"session.delete": async (p) => {
+		assertSessionDeletable(p.workspaceId);
 		await deleteSession(p.sessionId, p.workspaceId, getWorkspace(p.workspaceId).worktreePath);
 		await removeSessionTodoWindows(p);
 		return { ok: true } as const;
@@ -1253,6 +1447,7 @@ const handlers: WsHandlers = {
 		noteRecentModel(await setSessionModel(p.sessionId, p.model));
 		return { ok: true } as const;
 	},
+	"session.disableServerFallback": (p) => disableSessionServerFallback(p.sessionId),
 	"session.setThinkingLevel": (p) => {
 		setSessionThinkingLevel(p.sessionId, p.level);
 		return { ok: true } as const;
@@ -1263,8 +1458,11 @@ const handlers: WsHandlers = {
 	},
 	"session.getStats": (params) => getSessionStats(params.sessionId),
 	"session.getCommands": (params) => getSessionCommands(params.sessionId),
-	"session.list": async (params) => {
+	"session.list": async (params, ctx) => {
 		const { workspaceId } = params;
+		if (!seesChats(ctx.protocolVersion) && isChatWorkspaceId(workspaceId)) {
+			throw new Error(`Unknown workspace: ${workspaceId}`);
+		}
 		const summaries = await listSessions(workspaceId, getWorkspace(workspaceId).worktreePath);
 		return summaries.map((summary) => {
 			try {
@@ -1277,8 +1475,12 @@ const handlers: WsHandlers = {
 			}
 		});
 	},
-	"session.stateList": () =>
-		listSessionStates(listAllWorkspaceRecords().map(sessionStateWorkspace)),
+	"session.stateList": async (_params, ctx) => {
+		const records = await sharedSessionStateList();
+		return seesChats(ctx.protocolVersion)
+			? records
+			: records.filter((record) => !isChatWorkspaceId(record.workspaceId));
+	},
 	"session.acknowledgeCompletion": (p) => {
 		return acknowledgeCompletion(p.sessionId, p.completionId);
 	},
@@ -1312,6 +1514,7 @@ const handlers: WsHandlers = {
 	"mcp.setSessionOverride": (params) => mcpSetSessionOverride(params),
 	"mcp.approve": (params) => mcpApprove(params),
 	"mcp.shareWithRepo": (params) => mcpShareWithRepo(params),
+	"mcp.setUserServer": (params) => mcpSetUserServer(params),
 	"mcp.reconnect": (params) => mcpReconnect(params),
 	"mcp.login": (params, ctx) => mcpLogin(params, ctx.clientKey),
 	"mcp.logout": (params, ctx) => mcpLogout(params, ctx.clientKey),
@@ -1563,8 +1766,11 @@ const handlers: WsHandlers = {
 		);
 		return { ok: true, targeted } as const;
 	},
-	"subagent.getTranscript": (p) => {
-		getWorkspace(p.workspaceId);
+	"subagent.getTranscript": async (p) => {
+		const workspace = getWorkspace(p.workspaceId);
+		await ensureSessionAttached(p.parentSessionId, p.workspaceId, workspace.worktreePath).catch(
+			() => false,
+		);
 		return readChildTranscript(p.workspaceId, p.parentSessionId, p.childSessionId);
 	},
 	"session.extUiReply": (params) => {
@@ -1592,6 +1798,8 @@ const handlers: WsHandlers = {
 	"model.setContextWindow": (p) => {
 		return setModelContextWindow(p.target, p.contextWindow);
 	},
+	"cacheWarming.get": () => readCacheWarmingSetting(),
+	"cacheWarming.set": (p) => writeCacheWarmingMode(p.mode),
 	"customEndpoints.list": () => listCustomEndpoints(),
 	"customEndpoints.probe": (p) => probeCustomEndpoint(p),
 	"customEndpoints.save": (p) => saveCustomEndpoint(p),
@@ -1722,9 +1930,12 @@ const handlers: WsHandlers = {
 		reportClientError(typeof params === "object" && params !== null ? params : {});
 		return { ok: true } as const;
 	},
-	"history.search": (p) => {
-		const { filter, labels } = buildHistoryScope(p.scope, listProjects(), (projectId) =>
-			listWorkspaceRecords(projectId),
+	"history.search": (p, ctx) => {
+		const { filter, labels } = buildHistoryScope(
+			p.scope,
+			listProjects(),
+			(projectId) => listWorkspaceRecords(projectId),
+			historyHiddenCwd(ctx.protocolVersion),
 		);
 		return getHistoryIndex().search({
 			query: p.query,
@@ -1734,8 +1945,13 @@ const handlers: WsHandlers = {
 		});
 	},
 
+	"search.query": (p, ctx) => hostSearch().query(p, { chats: seesChats(ctx.protocolVersion) }),
+	"search.text": (p, ctx) =>
+		hostSearch().text(ctx.clientKey, p, (batch) => publishSearchText(ctx.clientKey, batch)),
+	"search.preview": (p, ctx) => hostSearch().preview(p, { chats: seesChats(ctx.protocolVersion) }),
+
 	"review.get": async (p) => {
-		ensureWatch(p.workspaceId);
+		void ensureWatch(p.workspaceId);
 		return markClientStale(await getReviewSnapshot(p.workspaceId), p.workspaceId);
 	},
 	"review.commentAdd": (p) => {
@@ -1877,6 +2093,72 @@ export function openReviewForClient(
 	return review.state === undefined || review.state === "open" ? review : null;
 }
 
+/** Git- and review-backed methods keyed by a workspace: a chat without a project is refused at the door, before any git work. */
+const REPOSITORY_ONLY_METHODS: ReadonlySet<WsMethodName> = new Set<WsMethodName>([
+	"git.status",
+	"git.diffFile",
+	"git.listCommits",
+	"workspace.turns",
+	"workspace.diffStats",
+	"workspace.setDiffBase",
+	"change.revert",
+	"change.undo",
+	"pr.preview",
+	"pr.generate",
+	"pr.ready",
+	"pr.merge",
+	"pr.reopen",
+	"pr.open",
+	"review.get",
+	"review.commentAdd",
+	"review.commentUpdate",
+	"review.commentDelete",
+	"review.fileDone",
+	"review.close",
+	"review.sendComment",
+	"review.sendBatch",
+	"todo.review",
+	"todo.startReview",
+	"todo.reviewAll",
+	"todo.requestFix",
+	"spec.graph",
+]);
+
+/** Doors that start or attach a session or a terminal: a chat being deleted, or whose deletion is pending, refuses them. */
+const CHAT_RESOURCE_DOORS: ReadonlySet<WsMethodName> = new Set<WsMethodName>([
+	"chat.continue",
+	"session.create",
+	"session.getMessages",
+	"session.nudge",
+	"session.resources",
+	"backgroundCommand.output",
+	"backgroundCommand.stop",
+	"subagent.stop",
+	"subagent.stopAll",
+	"terminal.reserve",
+	"terminal.attach",
+]);
+
+function paramWorkspaceId(params: unknown, orId: boolean): string | null {
+	if (!params || typeof params !== "object") return null;
+	const { workspaceId, id } = params as { workspaceId?: unknown; id?: unknown };
+	if (typeof workspaceId === "string") return workspaceId;
+	return orId && typeof id === "string" ? id : null;
+}
+
+function refuseRepositoryOnlyForChats(method: WsMethodName, params: unknown): void {
+	if (!REPOSITORY_ONLY_METHODS.has(method)) return;
+	const candidate = paramWorkspaceId(params, true);
+	if (candidate === null) return;
+	let workspace: Workspace;
+	try {
+		workspace = getWorkspace(candidate);
+	} catch {
+		return;
+	}
+	assertNotChatWorkspace(workspace, "asked about git, changes, reviews or pull requests");
+}
+
 export async function handleRequest(
 	method: string,
 	params: unknown,
@@ -1942,6 +2224,11 @@ export async function handleRequest(
 		ctx.protocolVersion < PROVIDER_MODELS_PROTOCOL_VERSION
 	) {
 		throw new Error("Provider model editing requires a newer host protocol.");
+	}
+	refuseRepositoryOnlyForChats(method, params);
+	if (CHAT_RESOURCE_DOORS.has(method)) {
+		const workspaceId = paramWorkspaceId(params, false);
+		if (workspaceId !== null) assertChatOpen(workspaceId);
 	}
 	return dispatch(method, params as WsParams<typeof method>, ctx);
 }

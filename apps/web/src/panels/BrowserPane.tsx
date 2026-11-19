@@ -93,7 +93,7 @@ const VIEWPORT_ICONS = {
 } as const satisfies Record<Viewport, typeof RiComputerLine>;
 
 const INPUT_CLASS =
-	"min-h-32 min-w-0 flex-1 rounded-sm border border-control-border-default bg-control-bg px-8 tr-code-text text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active";
+	"min-h-32 min-w-0 flex-1 rounded-sm border border-control-border-default bg-control-bg px-8 tr-code-text text-text-default placeholder:text-text-muted focus-visible:border-control-border-active focus-visible:focus-ring";
 
 const RECORDING_MAX_MS = 30_000;
 const RECORDING_FPS = 10;

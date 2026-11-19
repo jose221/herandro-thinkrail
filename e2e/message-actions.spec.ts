@@ -1,6 +1,11 @@
 import { realpathSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
-import { defaultWorkspaceRow, enterDefaultWorkspace, openFixtureProject } from "./fixtures/app";
+import {
+	closeSettings,
+	defaultWorkspaceRow,
+	enterDefaultWorkspace,
+	openFixtureProject,
+} from "./fixtures/app";
 import { E2E_FIXTURE_REPO } from "./fixtures/paths";
 import { seedWorkspaceSession } from "./fixtures/sessions";
 
@@ -9,13 +14,13 @@ async function restoreChatWidthBounded(page: Page): Promise<void> {
 	if (!(await page.getByTestId("settings-dialog").isVisible())) {
 		await page.getByTestId("open-settings").click();
 	}
-	await page.getByTestId("settings-nav-chat").click();
+	await page.getByTestId("settings-nav-text").click();
 	const bounded = page.getByTestId("chat-line-width-bounded");
 	if ((await bounded.getAttribute("data-active")) !== "true") {
 		await bounded.click();
 		await expect(bounded).toHaveAttribute("data-active", "true");
 	}
-	await page.keyboard.press("Escape");
+	await closeSettings(page);
 }
 
 const BASE_TS = 1_700_910_000_000;
@@ -105,7 +110,7 @@ test("an unbounded transcript keeps the user message within the visible pane", a
 	// Unbounded chat width fixes the transcript row to the measure, wider than a narrow pane. A
 	// right-aligned user message used to be pushed to the far edge of that row and clip on the left;
 	// it must stay within the horizontally-scrollable viewport (readable without scrolling right).
-	const pasted = `Refactoring of our own escaped react-markdown output ${"same risk class as the shiki path in chat/Markdown ".repeat(
+	const pasted = `Refactoring of our own escaped react-markdown output ${"same risk class as the code path in chat/Markdown ".repeat(
 		6,
 	)}`;
 	await openFixtureProject(page);
@@ -124,12 +129,12 @@ test("an unbounded transcript keeps the user message within the visible pane", a
 
 	try {
 		await page.getByTestId("open-settings").click();
-		await page.getByTestId("settings-nav-chat").click();
+		await page.getByTestId("settings-nav-text").click();
 		const bounded = page.getByTestId("chat-line-width-bounded");
 		await expect(bounded).toHaveAttribute("data-active", "true");
 		await bounded.click();
 		await expect(bounded).toHaveAttribute("data-active", "false");
-		await page.keyboard.press("Escape");
+		await closeSettings(page);
 
 		const scroll = page.getByTestId("chat-transcript-scroll");
 		// The row is wider than the pane (unbounded still scrolls horizontally for wide content).

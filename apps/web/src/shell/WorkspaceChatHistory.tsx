@@ -16,7 +16,13 @@ import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { useNow } from "../components/useNow";
 import { chatLabel, relativeTime } from "../lib";
 import { openChatInTab } from "../panels/openChat";
-import { type ClosedChat, selectChatFirstPrompt, toast, useAppStore } from "../store";
+import {
+	type ClosedChat,
+	selectChatFirstPrompt,
+	selectWorkspaceById,
+	toast,
+	useAppStore,
+} from "../store";
 import { errorText, getTransport } from "../transport";
 
 const StartingIcon = withIconClass(Loader2, "animate-spin motion-reduce:animate-none");
@@ -101,6 +107,9 @@ function ClosedChatRow({
 		selectChatFirstPrompt(state, workspaceId, chat.sessionId),
 	);
 	const label = chatLabel(t, chat.title, firstPrompt);
+	const projectless = useAppStore(
+		(state) => selectWorkspaceById(state, workspaceId)?.kind === "chat",
+	);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const reopenButtonRef = useRef<HTMLButtonElement>(null);
 	const editStartTitleRef = useRef(chat.title);
@@ -169,7 +178,7 @@ function ClosedChatRow({
 						defaultValue={chat.title}
 						onKeyDown={onNameKeyDown}
 						onBlur={commitRename}
-						className="min-w-0 flex-1 border-0 bg-transparent p-0 tr-text-ui text-text-default outline-none"
+						className="min-w-0 flex-1 border-0 bg-transparent p-0 tr-text-ui text-text-default focus-visible:focus-ring"
 					/>
 				</div>
 			) : (
@@ -216,31 +225,33 @@ function ClosedChatRow({
 					/>
 				)
 			) : null}
-			<IconTooltip label={t("shell.chatHistory.trashChat")}>
-				<button
-					type="button"
-					data-testid="closed-chat-delete"
-					aria-label={t("shell.chatHistory.trashNamed", { title: label.text })}
-					onClick={() => {
-						onDismiss();
-						void getTransport()
-							.request("session.delete", { workspaceId, sessionId: chat.sessionId })
-							.then(() => useAppStore.getState().deleteChat(workspaceId, chat.sessionId))
-							.catch((error) => {
-								const state = useAppStore.getState();
-								if (
-									!state.removedWorkspaceIds[workspaceId] &&
-									!state.deletedSessionsByWorkspace[workspaceId]?.[chat.sessionId]
-								) {
-									toast.error(errorText(error), t("shell.chatHistory.deleteFailed"));
-								}
-							});
-					}}
-					className={cn(menuItemClass, "shrink-0 px-4 text-text-muted focus:text-feedback-error")}
-				>
-					<Trash2 className="size-14" />
-				</button>
-			</IconTooltip>
+			{projectless ? null : (
+				<IconTooltip label={t("shell.chatHistory.trashChat")}>
+					<button
+						type="button"
+						data-testid="closed-chat-delete"
+						aria-label={t("shell.chatHistory.trashNamed", { title: label.text })}
+						onClick={() => {
+							onDismiss();
+							void getTransport()
+								.request("session.delete", { workspaceId, sessionId: chat.sessionId })
+								.then(() => useAppStore.getState().deleteChat(workspaceId, chat.sessionId))
+								.catch((error) => {
+									const state = useAppStore.getState();
+									if (
+										!state.removedWorkspaceIds[workspaceId] &&
+										!state.deletedSessionsByWorkspace[workspaceId]?.[chat.sessionId]
+									) {
+										toast.error(errorText(error), t("shell.chatHistory.deleteFailed"));
+									}
+								});
+						}}
+						className={cn(menuItemClass, "shrink-0 px-4 text-text-muted focus:text-feedback-error")}
+					>
+						<Trash2 className="size-14" />
+					</button>
+				</IconTooltip>
+			)}
 		</div>
 	);
 }

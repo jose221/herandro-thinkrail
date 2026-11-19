@@ -233,9 +233,11 @@ const log = logger("acp");
 class UnsupportedAcpProtocolError extends Error {}
 
 class AcpTimeoutError extends Error {
-	constructor(readonly timeoutMs: number) {
+	readonly timeoutMs: number;
+	constructor(timeoutMs: number) {
 		super(`ACP request timed out after ${timeoutMs} ms.`);
 		this.name = "AcpTimeoutError";
+		this.timeoutMs = timeoutMs;
 	}
 }
 
@@ -1489,7 +1491,8 @@ export class AcpSessionManager {
 				record.snapshot.summary.state = "idle";
 				record.snapshot.summary.updatedAt = Date.now();
 				this.persist();
-				this.options.publish({ type: "created", session: { ...record.snapshot.summary } });
+				const { publish } = this.options;
+				publish({ type: "created", session: { ...record.snapshot.summary } });
 				this.publishState(record);
 				return structuredClone(record.snapshot);
 			} catch (error) {
@@ -2062,7 +2065,8 @@ export class AcpSessionManager {
 
 	private emit(event: AcpSessionEvent): void {
 		try {
-			this.options.publish(event);
+			const { publish } = this.options;
+			publish(event);
 		} catch {
 			log.warn("ACP event publication failed");
 		}

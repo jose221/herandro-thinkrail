@@ -4,7 +4,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 import type { AppConfig } from "@thinkrail/contracts";
 import { removeTree } from "@thinkrail/shared/removeTree";
 import { seedAnalyticsConsent } from "./fixtures/analyticsConsent";
-import { openAppFresh, resetApp } from "./fixtures/app";
+import { closeSettings, openAppFresh, resetApp } from "./fixtures/app";
 import { openProviders } from "./fixtures/jbcentral";
 import { E2E_DATA_DIR, E2E_HOME_DIR, E2E_PI_AGENT_DIR } from "./fixtures/paths";
 import { E2eWire } from "./fixtures/wire";
@@ -431,8 +431,7 @@ test("a provider connected through Settings during the intro is verified on reac
 	await expect(page.getByTestId("login-success")).toBeVisible();
 	await page.getByTestId("login-close").click();
 	await expect(page.getByTestId("login-dialog")).toHaveCount(0);
-	await page.keyboard.press("Escape");
-	await expect(page.getByTestId("settings-dialog")).toHaveCount(0);
+	await closeSettings(page);
 
 	await wizard.getByTestId("onboarding-start").click();
 	await expect(wizard).toHaveAttribute("data-step", "done");
@@ -454,8 +453,7 @@ test("a provider connected and signed out again through Settings during the intr
 	await expect(
 		settings.locator('[data-testid="provider-row"][data-provider="e2e-apikey"]'),
 	).toHaveCount(0);
-	await page.keyboard.press("Escape");
-	await expect(page.getByTestId("settings-dialog")).toHaveCount(0);
+	await closeSettings(page);
 
 	await wizard.getByTestId("onboarding-start").click();
 	await expect(wizard).toHaveAttribute("data-step", "connect");
@@ -483,8 +481,7 @@ test("a provider signed out while its status re-read is still in flight is not v
 	status.hold = true;
 	await signOut.click();
 	await expect.poll(status.held).toBeGreaterThan(0);
-	await page.keyboard.press("Escape");
-	await expect(page.getByTestId("settings-dialog")).toHaveCount(0);
+	await closeSettings(page);
 	await wizard.getByTestId("onboarding-start").click();
 	await expect(wizard.getByTestId("connect-provider-options")).toBeVisible();
 	status.release();
@@ -515,8 +512,9 @@ test("the onboarding wizard verifies the connection in place, then collapses to 
 	await expect(wizard.getByTestId("connect-provider-options")).toHaveCount(0);
 	await expect(wizard.getByTestId("onboarding-skip")).toHaveCount(0);
 	await expect(page.getByTestId("welcome-cta")).toContainText("Start a new project");
-	await expect(page.getByTestId("welcome-action")).toHaveCount(1);
-	await expect(page.getByTestId("welcome-action")).toContainText("Open project");
+	await expect(page.getByTestId("welcome-action")).toHaveCount(2);
+	await expect(page.getByTestId("welcome-action").first()).toContainText("Open project");
+	await expect(page.getByTestId("welcome-action").last()).toContainText("Chat without a project");
 	await expect.poll(() => readConfig()?.onboardingDismissed).toBe(true);
 
 	await page.getByTestId("welcome-cta").click();

@@ -1,13 +1,31 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import type { AppConfig, ModelDefault } from "@thinkrail/contracts";
-import { expandModelGroup, openWorkspaceChat } from "./fixtures/app";
+import {
+	closeSettings,
+	expandModelGroup,
+	openWorkspaceChat,
+	revealModelGroups,
+} from "./fixtures/app";
 import { connectCentral, openProviders, waitForCentralState } from "./fixtures/jbcentral";
-import { E2E_SCREENSHOT_DIR } from "./fixtures/paths";
+import { E2E_PI_AGENT_DIR, E2E_SCREENSHOT_DIR } from "./fixtures/paths";
 import { E2eWire } from "./fixtures/wire";
 
 const SCREENSHOT_PATH = join(E2E_SCREENSHOT_DIR, "models-settings", "default-model.png");
+const MODELS_PATH = join(E2E_PI_AGENT_DIR, "models.json");
+const LONG_CATALOG = {
+	providers: {
+		"e2e-long": {
+			baseUrl: "http://127.0.0.1:9/v1",
+			api: "openai-completions",
+			apiKey: "e2e-long-catalog",
+			models: Array.from({ length: 40 }, (_, index) => ({
+				id: `long-model-${String(index).padStart(2, "0")}`,
+			})),
+		},
+	},
+};
 
 type SavedDefaults = Pick<AppConfig, "defaultModel" | "defaultEffort">;
 
@@ -52,6 +70,21 @@ async function disconnectFixtureProvider(page: Page): Promise<void> {
 	await openProviders(page);
 	await page.getByTestId("jetbrains-disconnect").click();
 	await waitForCentralState(page, "supported");
+	await closeSettings(page);
+}
+
+async function popoverInsideDialog(page: Page): Promise<boolean> {
+	const [popover, dialog] = await Promise.all([
+		page.locator("[data-radix-popper-content-wrapper] > *").boundingBox(),
+		page.getByTestId("settings-dialog").boundingBox(),
+	]);
+	if (!popover || !dialog) return false;
+	return (
+		popover.x >= dialog.x &&
+		popover.y >= dialog.y &&
+		popover.x + popover.width <= dialog.x + dialog.width &&
+		popover.y + popover.height <= dialog.y + dialog.height
+	);
 }
 
 async function openFreshChat(page: Page): Promise<void> {
@@ -61,7 +94,47 @@ async function openFreshChat(page: Page): Promise<void> {
 	await expect(chatTabs).toHaveCount(previousChatCount + 1);
 }
 
-test("Models settings save host defaults and apply them to a fresh chat", async ({ page }) => {
+async function holdReplies(page: Page) {
+	let armed: { method: string; id?: string; held: () => void; release: Promise<void> } | undefined;
+	await page.routeWebSocket(/\/ws(\?|$)/, (browserSocket) => {
+		const serverSocket = browserSocket.connectToServer();
+		browserSocket.onMessage((message) => {
+			const frame = JSON.parse(String(message)) as { id?: string; method?: string };
+			if (armed && !armed.id && frame.method === armed.method && frame.id) armed.id = frame.id;
+			serverSocket.send(message);
+		});
+		serverSocket.onMessage((message) => {
+			const frame = JSON.parse(String(message)) as { id?: string };
+			const pending = armed;
+			if (pending?.id && frame.id === pending.id) {
+				armed = undefined;
+				pending.held();
+				void pending.release.then(() => browserSocket.send(message));
+				return;
+			}
+			browserSocket.send(message);
+		});
+	});
+	return {
+		arm(method: string) {
+			let held = () => {};
+			let release = () => {};
+			const heldP = new Promise<void>((resolve) => {
+				held = resolve;
+			});
+			const releaseP = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			armed = { method, held, release: releaseP };
+			return { held: heldP, release };
+		},
+	};
+}
+
+test("Models settings save host defaults through the chat's model and effort picker and apply them to a fresh chat", async ({
+	page,
+}) => {
+	const replies = await holdReplies(page);
 	await openWorkspaceChat(page);
 	const defaults = await readDefaults(page);
 
@@ -77,11 +150,15 @@ test("Models settings save host defaults and apply them to a fresh chat", async 
 
 		const modelSelector = row.getByTestId("model-selector");
 		await expect(modelSelector).toBeVisible();
-		await modelSelector.click();
+		await modelSelector.focus();
+		await page.keyboard.press("Enter");
+		await expect(modelSelector).toHaveAttribute("data-open", "true");
+		await expect(page.getByTestId("model-set-default")).toHaveCount(0);
+		await revealModelGroups(page);
 		await expandModelGroup(page, "e2e-central");
-		const modelOption = page.locator(
-			'[data-testid="model-option"][data-model-id="e2e-central-model"]',
-		);
+		const modelOption = page
+			.locator('[data-testid="model-option"][data-model-id="e2e-central-model"]')
+			.last();
 		await expect(modelOption).toBeVisible();
 		const modelId = await modelOption.getAttribute("data-model-id");
 		const modelName = (
@@ -89,15 +166,27 @@ test("Models settings save host defaults and apply them to a fresh chat", async 
 		)?.trim();
 		if (!modelId || !modelName)
 			throw new Error("The model catalog returned an incomplete model option");
-		await modelOption.click();
-		await expect(modelSelector).toContainText(modelName);
-
 		const effortSelector = row.getByTestId("thinking-selector");
-		await expect(effortSelector).toBeEnabled();
-		await effortSelector.click();
+		const modelSave = replies.arm("settings.update");
+		await modelOption.click();
+		await modelSave.held;
+		await expect(modelSelector).toContainText(modelName);
+		await expect(modelSelector).toHaveAttribute("data-open", "true");
+		await expect(page.getByTestId("thinking-section")).toContainText(modelName);
+		modelSave.release();
+		await expect(row.getByTestId("settings-reset-chat-model")).toBeVisible();
+
 		const effortOption = page.locator('[data-testid="thinking-option"][data-level="high"]');
 		await expect(effortOption).toBeVisible();
+		const effortSave = replies.arm("settings.update");
 		await effortOption.click();
+		await effortSave.held;
+		await expect(effortSelector).toContainText("high");
+		effortSave.release();
+		await page.keyboard.press("Escape");
+		await expect(modelSelector).toHaveAttribute("data-open", "false");
+		await expect(modelSelector).toBeFocused();
+		await expect(dialog).toBeVisible();
 		await expect(effortSelector).toContainText("high");
 
 		await expect
@@ -114,12 +203,19 @@ test("Models settings save host defaults and apply them to a fresh chat", async 
 		mkdirSync(dirname(SCREENSHOT_PATH), { recursive: true });
 		await section.screenshot({ path: SCREENSHOT_PATH, animations: "disabled" });
 
-		await page.keyboard.press("Escape");
+		await closeSettings(page);
 		await openFreshChat(page);
 		const freshChatModel = page.getByTestId("model-selector").last();
 		await expect(freshChatModel).toBeVisible();
 		await expect(freshChatModel).toContainText(modelName);
 		await expect(page.getByTestId("thinking-selector").last()).toContainText("high");
+
+		await openProviders(page);
+		await page.getByTestId("settings-nav-models").click();
+		await row.getByTestId("settings-reset-chat-model").click();
+		await expect.poll(() => readDefaults(page)).toEqual({});
+		await expect(row.getByTestId("settings-reset-chat-model")).toHaveCount(0);
+		await closeSettings(page);
 
 		await disconnectFixtureProvider(page);
 	} finally {
@@ -135,7 +231,7 @@ test("without saved defaults, Settings and a fresh chat use the first available 
 
 	try {
 		await connectFixtureProvider(page);
-		await page.keyboard.press("Escape");
+		await closeSettings(page);
 		const resolved = await withHostWire(page, async (wire): Promise<ModelDefault> => {
 			const config = await wire.request("settings.update", {
 				config: { defaultModel: null, defaultEffort: null },
@@ -153,8 +249,9 @@ test("without saved defaults, Settings and a fresh chat use the first available 
 		const row = page.getByTestId("settings-models").getByTestId("default-model-row");
 		await expect(row.getByTestId("model-selector")).toContainText(modelName);
 		await expect(row.getByTestId("thinking-selector")).toContainText(effortLevel);
+		await expect(row.getByTestId("settings-reset-chat-model")).toHaveCount(0);
 
-		await page.keyboard.press("Escape");
+		await closeSettings(page);
 		await openFreshChat(page);
 		await expect(page.getByTestId("model-selector").last()).toContainText(modelName);
 		await expect(page.getByTestId("thinking-selector").last()).toContainText(effortLevel);
@@ -162,5 +259,46 @@ test("without saved defaults, Settings and a fresh chat use the first available 
 		await disconnectFixtureProvider(page);
 	} finally {
 		await restoreDefaults(page, defaults);
+	}
+});
+
+test("the Settings model pickers open inside the dialog, and the model list scrolls with the wheel", async ({
+	page,
+}) => {
+	await openWorkspaceChat(page);
+	writeFileSync(MODELS_PATH, JSON.stringify(LONG_CATALOG));
+
+	try {
+		await connectFixtureProvider(page);
+		await page.getByTestId("settings-nav-models").click();
+		const section = page.getByTestId("settings-models");
+		const list = page.locator("[cmdk-list]");
+		for (const viewport of [
+			{ width: 1280, height: 720 },
+			{ width: 1280, height: 400 },
+			{ width: 320, height: 568 },
+		]) {
+			await page.setViewportSize(viewport);
+			for (const row of ["default-model-row", "review-model-row"]) {
+				const trigger = section.getByTestId(row).getByTestId("model-selector");
+				await trigger.click();
+				await revealModelGroups(page);
+				await expandModelGroup(page, "e2e-long");
+				await expect(list.locator('[data-model-id="long-model-39"]')).toBeAttached();
+				await list.evaluate((element) => element.scrollTo({ top: 0 }));
+				await list.hover();
+				await page.mouse.wheel(0, 600);
+				await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+				await expect.poll(() => popoverInsideDialog(page)).toBe(true);
+				await expect(page.getByTestId("model-refresh")).toBeInViewport({ ratio: 1 });
+				await expect(page.getByTestId("model-set-default")).toHaveCount(0);
+				await page.keyboard.press("Escape");
+				await expect(list).toHaveCount(0);
+				await expect(trigger).toBeFocused();
+			}
+		}
+	} finally {
+		writeFileSync(MODELS_PATH, JSON.stringify({ providers: {} }));
+		await withHostWire(page, (wire) => wire.request("provider.jbcentralDisconnect", {}));
 	}
 });

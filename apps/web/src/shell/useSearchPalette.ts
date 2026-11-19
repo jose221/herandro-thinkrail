@@ -1,9 +1,13 @@
-import { useT } from "@thinkrail/locales/react";
+import { t as globalT, useT } from "@thinkrail/locales/react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { copyText } from "../lib";
+import { openFindInFiles } from "../findInFiles";
+import { chatDisplayName, copyText } from "../lib";
+import { canStartProjectlessChat, startProjectlessChat } from "../panels/chatActions";
 import { enterDefaultWorkspace } from "../panels/defaultWorkspace";
 import { startChatInTab } from "../panels/openChat";
+import { openFileInTab } from "../panels/openTabs";
+import { availableSettings, useSettingsCatalogContext } from "../panels/settingsCatalog";
 import { settingsNavGroups } from "../panels/settingsNav";
 import {
 	canSettleWorkspace,
@@ -19,42 +23,70 @@ import {
 import {
 	buildWorkItems,
 	commandItems,
+	type PaletteAsk,
+	type PaletteHost,
 	type PaletteItem,
+	type PaletteStart,
 	type SearchPaletteProps,
 	type SearchScope,
 	waitingItems,
 } from "../search";
 import {
+	isChatsContainer,
+	isChatWorkspace,
+	isDefaultWorkspace,
 	type SettingsSection,
 	selectActiveWorkspace,
+	selectChatWorkspaceFirstPrompt,
+	selectChatWorkspaceTitle,
 	selectContextProject,
+	selectContextRepoProject,
+	selectHasTextSearchScope,
 	selectHistoryTarget,
+	selectHostReachable,
+	selectHostSearchAvailable,
 	selectRecordFirstPrompts,
 	selectSupportsOnboarding,
+	selectWorkspaceById,
 	selectWorkspaceReadAction,
 	selectWorkspaceSettleBlocked,
 	selectWorkspaceSettledReason,
 	supportsWorkspaceReadState,
+	toast,
 	useAppStore,
+	workspaceName,
 } from "../store";
-import { getTransport } from "../transport";
+import { errorText, getTransport, supportsTextSearch } from "../transport";
 import {
+	focusCenterGroup,
+	focusChatComposer,
+	focusProjects,
+	focusTerminal,
 	openChatHistory,
+	showFiles,
 	toggleBottomPanel,
 	toggleLeftSide,
 	toggleRightSide,
 } from "./chordActions";
-import { createPaletteBackfill, mergeProjectWorkspaces } from "./paletteBackfill";
+import { useResolvedKeybindings } from "./keybindingState";
+import { collectCenterGroups } from "./layout";
+import { readNativePageZoomBridge } from "./nativePageZoom";
+import { type HostHitTargets, openHostHit } from "./openHostHit";
+import { createPaletteBackfill } from "./paletteBackfill";
 import {
 	buildCommands,
 	buildSettingsItems,
 	emptyStateActionIds,
 	type PaletteCatalogDeps,
 } from "./paletteCatalog";
-import { createPaletteNavigator } from "./paletteNavigation";
-import { readSettingsShortcutLabel } from "./useAppShortcuts";
+import { paletteNavigator } from "./paletteNavigation";
+import { focusAdjacentRegion } from "./regions";
+import { hasNativeShortcuts } from "./useAppShortcuts";
+import { activeTabActions, runActiveTabAction } from "./workbenchCommands";
 
-const SCOPES: readonly SearchScope[] = ["all", "work", "commands"];
+const LOCAL_SCOPES: readonly SearchScope[] = ["all", "work", "commands"];
+const HOST_SCOPES: readonly SearchScope[] = ["all", "work", "files", "specs", "commands"];
+const CHAT_SCOPES: readonly SearchScope[] = ["all", "work", "files", "commands"];
 const BACKFILL_CONCURRENCY = 4;
 
 const paletteBackfill = createPaletteBackfill({
@@ -63,30 +95,45 @@ const paletteBackfill = createPaletteBackfill({
 	concurrency: BACKFILL_CONCURRENCY,
 });
 
-const paletteNavigator = createPaletteNavigator(async (projectId) =>
-	mergeProjectWorkspaces(
-		projectId,
-		await getTransport().request("workspace.list", { projectId, includeDiffStats: false }),
-	),
-);
-
 function useWorkspaceBackfill(): void {
 	useEffect(() => paletteBackfill.watch(), []);
 }
 
+const hostHitTargets: HostHitTargets = {
+	navigateToWorkspace: paletteNavigator.navigateToWorkspace,
+	loadWorkspaceRow: paletteNavigator.loadWorkspaceRow,
+	openFile: (workspaceId, path) => openFileInTab(workspaceId, path, "keep"),
+	openSpec: (workspaceId, path, line) =>
+		useAppStore.getState().requestSpecView(workspaceId, path, line),
+	openChatLocation: (location) => useAppStore.getState().requestChatLocation(location),
+	openPlan: (workspaceId) => useAppStore.getState().requestToolView(workspaceId, "plan"),
+};
+
+export async function askTheAgent(
+	workspaceId: string | null,
+	projectId: string | null,
+	text: string,
+	stillWanted: () => boolean = paletteNavigator.beginPick(),
+): Promise<void> {
+	const target =
+		workspaceId ??
+		(projectId ? ((await enterDefaultWorkspace(projectId, stillWanted))?.id ?? null) : null);
+	if (target) await startChatInTab(target, { prompt: `${text}\n\n${globalT("search.ask.note")}` });
+}
+
 export interface SearchPaletteOptions {
-	readonly openNewWorkspace: (projectId: string) => void;
+	readonly openNewWorkspace: (projectId: string | null, initialPrompt?: string) => boolean;
 	readonly toggleProjectsHome: () => void;
 	readonly pickAndOpenProject: () => Promise<void>;
 	readonly enterHostPath: () => void;
 	readonly startNewProject: () => void;
 	readonly hasUpdateSettings: boolean;
+	readonly renderFilePreview: PaletteHost["renderFilePreview"];
 }
 
 export function useSearchPalette(options: SearchPaletteOptions): SearchPaletteProps {
 	const t = useT();
 	const status = useAppStore((s) => s.status);
-	const welcomeGeneration = useAppStore((s) => s.welcomeGeneration);
 	const protocolVersion = useAppStore((s) => s.protocolVersion);
 	const projects = useAppStore((s) => s.projects);
 	const workspaces = useAppStore((s) => s.workspaces);
@@ -96,6 +143,9 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 	const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId);
 	const activeWorkspace = useAppStore(selectActiveWorkspace);
 	const contextProject = useAppStore(selectContextProject);
+	const contextRepoProject = useAppStore(selectContextRepoProject);
+	const textSearchScoped = useAppStore(selectHasTextSearchScope);
+	const canStartChat = useAppStore(canStartProjectlessChat);
 	const historySessionId = useAppStore((s) => selectHistoryTarget(s)?.sessionId ?? null);
 	const readAction = useAppStore((s) =>
 		activeWorkspaceId && supportsWorkspaceReadState(s.protocolVersion)
@@ -116,28 +166,117 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 		() => settingsNavGroups(protocolVersion, options.hasUpdateSettings),
 		[protocolVersion, options.hasUpdateSettings],
 	);
+	const catalogContext = useSettingsCatalogContext();
+	const settingEntries = useMemo(
+		() => availableSettings(settingsGroups, catalogContext),
+		[settingsGroups, catalogContext],
+	);
 	const editors = useEditors();
-	const [nativeShortcuts] = useState(() => readSettingsShortcutLabel() !== null);
+	const [nativeShortcuts] = useState(hasNativeShortcuts);
+	const keybindings = useResolvedKeybindings();
+	const [pageZoom] = useState(readNativePageZoomBridge);
+	const [tabActions] = useState(activeTabActions);
 
-	const online = status === "connected" && welcomeGeneration > 0 && protocolVersion !== null;
+	const online = useAppStore(selectHostReachable);
+	const hostSearch = useAppStore(selectHostSearchAvailable);
+	const host = useMemo<PaletteHost | undefined>(() => {
+		if (!hostSearch) return undefined;
+		const names = new Map(
+			projects.map((project) => [
+				project.id,
+				isChatsContainer(project) ? t("search.item.noProject") : project.name,
+			]),
+		);
+		const workspaceNames = new Map<string, string>();
+		for (const list of Object.values(workspaces)) {
+			for (const workspace of list) {
+				if (!isChatWorkspace(workspace))
+					workspaceNames.set(workspace.id, workspaceName(t, workspace));
+			}
+		}
+		const chatName = (workspaceId: string) => {
+			const state = useAppStore.getState();
+			const workspace = selectWorkspaceById(state, workspaceId);
+			if (!workspace || !isChatWorkspace(workspace)) return undefined;
+			return chatDisplayName(
+				t,
+				selectChatWorkspaceTitle(state, workspaceId),
+				selectChatWorkspaceFirstPrompt(state, workspaceId),
+			);
+		};
+		return {
+			context: {
+				...(contextProject ? { projectId: contextProject.id } : {}),
+				...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
+			},
+			openHit: (hit) => {
+				void openHostHit(hit, hostHitTargets).catch((err: unknown) =>
+					toast.error(errorText(err, globalT("search.item.openFailed"))),
+				);
+			},
+			projectName: (projectId) => names.get(projectId),
+			workspaceName: (workspaceId) => workspaceNames.get(workspaceId) ?? chatName(workspaceId),
+			renderFilePreview: options.renderFilePreview,
+		};
+	}, [
+		hostSearch,
+		projects,
+		workspaces,
+		contextProject,
+		activeWorkspaceId,
+		t,
+		options.renderFilePreview,
+	]);
+
+	const openNewWorkspace = options.openNewWorkspace;
+	const start = useMemo<PaletteStart | undefined>(
+		() =>
+			contextRepoProject || canStartChat
+				? { openDialog: (text) => openNewWorkspace(contextRepoProject?.id ?? null, text) }
+				: undefined,
+		[contextRepoProject, canStartChat, openNewWorkspace],
+	);
+
+	const ask = useMemo<PaletteAsk | undefined>(() => {
+		const projectId = contextRepoProject?.id ?? null;
+		if (!hostSearch || (!activeWorkspaceId && !projectId)) return undefined;
+		const target =
+			activeWorkspace ??
+			(projectId ? workspaces[projectId]?.find(isDefaultWorkspace) : undefined) ??
+			null;
+		return {
+			ask: (text) => void askTheAgent(activeWorkspaceId, projectId, text),
+			...(target ? { target: workspaceName(t, target) } : {}),
+		};
+	}, [hostSearch, activeWorkspaceId, activeWorkspace, contextRepoProject, workspaces, t]);
 
 	const binding = useMemo(() => {
 		const store = () => useAppStore.getState();
+		const activeLayout = activeWorkspaceId ? layoutDocumentsByWorkspace[activeWorkspaceId] : null;
 		const deps: PaletteCatalogDeps = {
 			t,
-			contextProjectId: contextProject?.id ?? null,
+			contextProjectId: contextRepoProject?.id ?? null,
+			canStartChat,
 			activeWorkspace,
 			editors,
 			historyAvailable: historySessionId !== null,
 			canCreateProject: selectSupportsOnboarding({ protocolVersion }),
 			nativeShortcuts,
+			keybindings,
+			pageZoom,
+			findInFilesAvailable: supportsTextSearch(protocolVersion) && textSearchScoped,
+			changesAvailable: activeWorkspace !== null && !isChatWorkspace(activeWorkspace),
+			centerGroupCount: activeLayout ? collectCenterGroups(activeLayout.center).length : 0,
 			readAction,
 			canSettle: activeWorkspace !== null && canSettleWorkspace(protocolVersion, activeWorkspace),
 			settled,
 			settleBlocked,
 			settingsGroups,
+			settingEntries,
+			tabActions,
 			actions: {
 				newWorkspace: options.openNewWorkspace,
+				newProjectlessChat: () => void startProjectlessChat(),
 				openDefaultWorkspace: (projectId) =>
 					void enterDefaultWorkspace(projectId, paletteNavigator.beginPick()),
 				openProject: () => void options.pickAndOpenProject(),
@@ -149,7 +288,14 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 				toggleRight: toggleRightSide,
 				toggleBottom: toggleBottomPanel,
 				showTool: (workspaceId, tool) => store().requestToolView(workspaceId, tool),
+				showFiles,
+				focusRegion: focusAdjacentRegion,
+				focusComposer: focusChatComposer,
+				focusProjects: () => focusProjects(options.toggleProjectsHome),
+				focusTerminal,
+				focusGroup: focusCenterGroup,
 				openHistory: openChatHistory,
+				findInFiles: openFindInFiles,
 				markRead: markWorkspaceRead,
 				markUnread: markWorkspaceUnread,
 				settle: settleWorkspace,
@@ -157,7 +303,10 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 				reveal: revealWorkspace,
 				copyPath: (workspace) => void copyText(workspace.worktreePath),
 				openIn: openWorkspaceIn,
-				openSettings: (section?: SettingsSection) => store().openSettings(section),
+				openSettings: (section?: SettingsSection, settingId?: string) =>
+					store().openSettings(section, settingId),
+				openShortcuts: () => store().openShortcuts(),
+				runTabAction: runActiveTabAction,
 			},
 		};
 		const workItems = buildWorkItems({
@@ -172,12 +321,15 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 			},
 			contextProjectId: contextProject?.id ?? null,
 			firstPrompts,
+			transcriptPreviews: hostSearch,
 			navigateToProject: (projectId) => {
 				paletteNavigator.beginPick();
 				goToProjectHome(projectId);
 			},
 			navigateToWorkspace: (workspace, sessionId) =>
-				void paletteNavigator.navigateToWorkspace(workspace, sessionId),
+				void paletteNavigator.navigateToWorkspace(workspace, sessionId).then((opened) => {
+					if (opened) store().requestComposerFocus(workspace.id, sessionId);
+				}),
 		});
 		const rootItems: PaletteItem[] = [
 			...commandItems(t, buildCommands(deps), online),
@@ -194,6 +346,7 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 		t,
 		online,
 		settingsGroups,
+		settingEntries,
 		activeWorkspace,
 		historySessionId,
 		readAction,
@@ -201,8 +354,14 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 		settled,
 		settleBlocked,
 		nativeShortcuts,
+		keybindings,
+		pageZoom,
+		tabActions,
 		options,
 		contextProject,
+		contextRepoProject,
+		canStartChat,
+		textSearchScoped,
 		editors,
 		projects,
 		workspaces,
@@ -211,17 +370,31 @@ export function useSearchPalette(options: SearchPaletteOptions): SearchPalettePr
 		layoutDocumentsByWorkspace,
 		activeWorkspaceId,
 		firstPrompts,
+		hostSearch,
 	]);
 
 	return {
 		onClose: () => useAppStore.getState().closeSearch(),
-		scopes: SCOPES,
+		scopes:
+			hostSearch && contextProject
+				? isChatsContainer(contextProject)
+					? CHAT_SCOPES
+					: HOST_SCOPES
+				: LOCAL_SCOPES,
+		...(host ? { host } : {}),
+		...(start ? { start } : {}),
+		...(ask ? { ask } : {}),
 		...(online
-			? {}
+			? hostSearch
+				? {}
+				: { notice: { kind: "info", text: t("search.palette.olderHost") } }
 			: {
-					notice: t(
-						status === "disconnected" ? "search.palette.offline" : "search.palette.connecting",
-					),
+					notice: {
+						kind: "offline",
+						text: t(
+							status === "disconnected" ? "search.palette.offline" : "search.palette.connecting",
+						),
+					},
 				}),
 		...binding,
 	};

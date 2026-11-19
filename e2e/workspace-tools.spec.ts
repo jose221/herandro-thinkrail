@@ -49,11 +49,11 @@ test("workspace tools share host state: requests, memory, git and an agent-drive
 	await expect(commitFiles.first()).toHaveAttribute("aria-pressed", "true");
 	await expect(page.getByTestId("git-patch")).toBeVisible();
 	if ((await commitFiles.count()) > 1) {
-		const firstPatch = await page.getByTestId("git-patch").innerText();
+		const firstPatch = await page.getByTestId("git-patch").textContent();
 		await commitFiles.nth(1).click();
 		await expect(commitFiles.nth(1)).toHaveAttribute("aria-pressed", "true");
 		await expect(commitFiles.first()).toHaveAttribute("aria-pressed", "false");
-		await expect.poll(async () => page.getByTestId("git-patch").innerText()).not.toBe(firstPatch);
+		await expect.poll(async () => page.getByTestId("git-patch").textContent()).not.toBe(firstPatch);
 	}
 
 	await page.getByTestId("tool-rail-browser").click();

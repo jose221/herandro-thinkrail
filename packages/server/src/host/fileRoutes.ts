@@ -1,7 +1,9 @@
 import { statSync } from "node:fs";
+import { extname } from "node:path";
+import { WORKSPACE_VIEW_ROUTE } from "@thinkrail/contracts";
 import { CONTENT_SNIFF_BYTES, classifyBytes, mimeFromPath, resolveWorktreeFile } from "../fs";
 import { readBlobSizeAtAsync, readBlobStreamAtAsync } from "../git";
-import { loadWorkspaces } from "../persistence";
+import { isChatWorkspace, loadWorkspaces } from "../persistence";
 
 export const FILES_PREFIX = "/files/";
 export const BLOB_PREFIX = "/blob/";
@@ -49,8 +51,92 @@ function head(rest: string): { segment: string; remainder: string } | null {
 	return segment === null || remainder === "" ? null : { segment, remainder };
 }
 
-export async function serveWorktreeFile(pathname: string): Promise<Response> {
+function byteCap(param: string | null): number | null | "invalid" {
+	if (param === null) return null;
+	const cap = Number(param);
+	return /^\d+$/.test(param) && Number.isSafeInteger(cap) ? cap : "invalid";
+}
+
+export async function serveWorktreeFile(
+	pathname: string,
+	maxBytes: string | null = null,
+): Promise<Response> {
 	const parsed = head(pathname.slice(FILES_PREFIX.length));
+	const relPath = parsed === null ? null : decoded(parsed.remainder);
+	if (parsed === null || relPath === null) return notFound(NO_STORE);
+	const cap = byteCap(maxBytes);
+	if (cap === "invalid") return new Response("bad maxBytes", { status: 400, headers: NO_STORE });
+	try {
+		const abs = resolveWorktreeFile(parsed.segment, relPath);
+		const stat = statSync(abs);
+		if (!stat.isFile()) return notFound(NO_STORE);
+		if (cap !== null && stat.size > cap) {
+			return new Response("file too large", { status: 413, headers: NO_STORE });
+		}
+		const file = Bun.file(abs);
+		if (!(await file.exists())) return notFound(NO_STORE);
+		const bytes = new Uint8Array(await file.slice(0, CONTENT_SNIFF_BYTES).arrayBuffer());
+		return new Response(cap === null ? file : file.slice(0, stat.size), {
+			headers: contentHeaders(bytes, relPath, "no-store", stat.size),
+		});
+	} catch {
+		return notFound(NO_STORE);
+	}
+}
+
+const VIEW_MIME: Readonly<Record<string, string>> = {
+	".css": "text/css",
+	".js": "text/javascript",
+	".mjs": "text/javascript",
+	".cjs": "text/javascript",
+	".json": "application/json",
+	".map": "application/json",
+	".svg": "image/svg+xml",
+	".png": "image/png",
+	".jpg": "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif": "image/gif",
+	".webp": "image/webp",
+	".avif": "image/avif",
+	".ico": "image/x-icon",
+	".ttf": "font/ttf",
+	".otf": "font/otf",
+	".woff": "font/woff",
+	".woff2": "font/woff2",
+	".mp3": "audio/mpeg",
+	".wav": "audio/wav",
+	".mp4": "video/mp4",
+	".webm": "video/webm",
+};
+
+const TEXT_TYPES = new Set(["text/javascript", "application/json", "image/svg+xml"]);
+
+export function viewPolicy(base: string): string {
+	return [
+		"sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox",
+		"default-src 'none'",
+		`script-src ${base} 'unsafe-inline'`,
+		`style-src ${base} 'unsafe-inline'`,
+		`img-src ${base} data: blob:`,
+		`font-src ${base} data:`,
+		`media-src ${base} data: blob:`,
+		`frame-src ${base}`,
+		"connect-src 'none'",
+		"worker-src 'none'",
+		"object-src 'none'",
+		`base-uri ${base}`,
+		"form-action 'none'",
+	].join("; ");
+}
+
+export async function serveWorktreeView(method: string, url: URL): Promise<Response> {
+	if (method !== "GET" && method !== "HEAD") {
+		return new Response("method not allowed", {
+			status: 405,
+			headers: { ...NO_STORE, Allow: "GET, HEAD" },
+		});
+	}
+	const parsed = head(url.pathname.slice(WORKSPACE_VIEW_ROUTE.length));
 	const relPath = parsed === null ? null : decoded(parsed.remainder);
 	if (parsed === null || relPath === null) return notFound(NO_STORE);
 	try {
@@ -60,8 +146,21 @@ export async function serveWorktreeFile(pathname: string): Promise<Response> {
 		const file = Bun.file(abs);
 		if (!(await file.exists())) return notFound(NO_STORE);
 		const bytes = new Uint8Array(await file.slice(0, CONTENT_SNIFF_BYTES).arrayBuffer());
+		const mime =
+			classifyBytes(bytes).mime ??
+			VIEW_MIME[extname(relPath).toLowerCase()] ??
+			mimeFromPath(relPath) ??
+			"application/octet-stream";
+		const text = mime.startsWith("text/") || TEXT_TYPES.has(mime);
+		const base = `${url.origin}${WORKSPACE_VIEW_ROUTE}${encodeURIComponent(parsed.segment)}/`;
 		return new Response(file, {
-			headers: contentHeaders(bytes, relPath, "no-store", stat.size),
+			headers: {
+				"Content-Type": text ? `${mime}; charset=utf-8` : mime,
+				...NO_STORE,
+				"Content-Length": String(stat.size),
+				"X-Content-Type-Options": "nosniff",
+				...(ACTIVE_TYPES.has(mime) ? { "Content-Security-Policy": viewPolicy(base) } : {}),
+			},
 		});
 	} catch {
 		return notFound(NO_STORE);
@@ -75,10 +174,9 @@ export async function serveBlob(pathname: string, signal?: AbortSignal): Promise
 	if (workspace === null || blob === null || relPath === null) return notFound();
 	if (!OID.test(blob.segment)) return notFound();
 	try {
-		const worktreePath = loadWorkspaces().find(
-			(candidate) => candidate.id === workspace.segment,
-		)?.worktreePath;
-		if (worktreePath === undefined) return notFound();
+		const record = loadWorkspaces().find((candidate) => candidate.id === workspace.segment);
+		if (record === undefined || isChatWorkspace(record)) return notFound();
+		const { worktreePath } = record;
 		resolveWorktreeFile(workspace.segment, relPath);
 		const size = await readBlobSizeAtAsync(worktreePath, blob.segment, relPath);
 		if (size === null) return notFound();

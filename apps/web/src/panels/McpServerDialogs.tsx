@@ -53,7 +53,7 @@ import { GITHUB_MCP_RECIPE_JSON, MCP_PRESETS, type McpPreset } from "./mcpPreset
 import { type McpRowView, mcpConfiguredExposureText, mcpExposureLabel } from "./mcpServerView";
 
 const MCP_INPUT_CLASS =
-	"w-full min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 py-4 tr-text-ui text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text";
+	"w-full min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 py-4 tr-text-ui text-text-default placeholder:text-text-muted focus-visible:border-control-border-active focus-visible:focus-ring disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text";
 
 const NAME_REFERENCE = `\${NAME}`;
 
@@ -109,7 +109,7 @@ export async function addMcpServersWithProjectOptIn(
 
 function DialogBody({ children }: { children: ReactNode }) {
 	return (
-		<div className="-mx-16 flex min-h-0 flex-1 flex-col gap-12 overflow-y-auto px-16">
+		<div className="-mx-16 relative flex min-h-0 flex-1 flex-col gap-12 overflow-y-auto px-16">
 			{children}
 		</div>
 	);
@@ -590,6 +590,7 @@ export function McpAddDialog({
 	initialPreset,
 	existing,
 	projectScopeAvailable,
+	userOnly = false,
 	onOpenChange,
 	onAdd,
 	onEnableInProject,
@@ -599,9 +600,10 @@ export function McpAddDialog({
 	initialPreset?: McpPreset | undefined;
 	existing: readonly McpServerSummary[];
 	projectScopeAvailable: boolean;
+	userOnly?: boolean;
 	onOpenChange: (open: boolean) => void;
 	onAdd: McpAddServers;
-	onEnableInProject: (name: string) => Promise<void>;
+	onEnableInProject?: ((name: string) => Promise<void>) | undefined;
 }) {
 	const t = useT();
 	const [tier, setTier] = useState(initialTier);
@@ -697,10 +699,7 @@ export function McpAddDialog({
 	const reviewing = step.kind === "review";
 	return (
 		<Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
-			<DialogContent
-				data-testid="mcp-add-dialog"
-				className="flex max-h-[85vh] max-w-[36rem] flex-col"
-			>
+			<DialogContent data-testid="mcp-add-dialog" className="max-w-[36rem]">
 				<DialogHeader>
 					<DialogTitle>{reviewing ? t("mcp.review.title") : t("mcp.addDialog.title")}</DialogTitle>
 					<DialogDescription>
@@ -741,21 +740,27 @@ export function McpAddDialog({
 									]}
 									onChange={setTier}
 								/>
-								<Segments
-									testId="mcp-add-scope"
-									value={scope}
-									options={[
-										{ id: "user", label: t("mcp.addDialog.scopeUser") },
-										{
-											id: "project",
-											label: t("mcp.addDialog.scopeProject"),
-											disabled: !projectScopeAvailable,
-										},
-									]}
-									onChange={setSelectedScope}
-								/>
+								{userOnly ? null : (
+									<Segments
+										testId="mcp-add-scope"
+										value={scope}
+										options={[
+											{ id: "user", label: t("mcp.addDialog.scopeUser") },
+											{
+												id: "project",
+												label: t("mcp.addDialog.scopeProject"),
+												disabled: !projectScopeAvailable,
+											},
+										]}
+										onChange={setSelectedScope}
+									/>
+								)}
 							</div>
-							{!projectScopeAvailable ? (
+							{userOnly ? (
+								<p data-testid="mcp-add-user-only" className="text-text-muted tr-text-metadata">
+									{t("mcp.addDialog.userOnly")}
+								</p>
+							) : !projectScopeAvailable ? (
 								<p className="text-text-muted tr-text-metadata">{t("mcp.addDialog.untrusted")}</p>
 							) : null}
 							{tier === "form" ? (
@@ -908,10 +913,7 @@ export function McpEditDialog({
 
 	return (
 		<Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-			<DialogContent
-				data-testid="mcp-edit-dialog"
-				className="flex max-h-[85vh] max-w-[36rem] flex-col"
-			>
+			<DialogContent data-testid="mcp-edit-dialog" className="max-w-[36rem]">
 				<DialogHeader>
 					<DialogTitle>
 						{review ? t("mcp.review.title") : t("mcp.editDialog.title", { name })}
@@ -1029,10 +1031,7 @@ export function McpApproveDialog({
 	};
 	return (
 		<Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
-			<DialogContent
-				data-testid="mcp-approve-dialog"
-				className="flex max-h-[85vh] max-w-[32rem] flex-col"
-			>
+			<DialogContent data-testid="mcp-approve-dialog" className="max-w-[32rem]">
 				<DialogHeader>
 					<DialogTitle>{t("mcp.approveDialog.title", { name: summary.name })}</DialogTitle>
 					<DialogDescription>
@@ -1131,10 +1130,7 @@ export function McpDetailsDialog({
 	const { summary } = row;
 	return (
 		<Dialog open onOpenChange={(open) => !open && onClose()}>
-			<DialogContent
-				data-testid="mcp-details-dialog"
-				className="flex max-h-[85vh] max-w-[34rem] flex-col"
-			>
+			<DialogContent data-testid="mcp-details-dialog" className="max-w-[34rem]">
 				<DialogHeader>
 					<DialogTitle>{summary.name}</DialogTitle>
 					{summary.description ? (
@@ -1232,10 +1228,7 @@ export function McpLogDialog({
 	const { name } = row.summary;
 	return (
 		<Dialog open onOpenChange={(open) => !open && onClose()}>
-			<DialogContent
-				data-testid="mcp-log-dialog"
-				className="flex max-h-[85vh] max-w-[40rem] flex-col"
-			>
+			<DialogContent data-testid="mcp-log-dialog" className="max-w-[40rem]">
 				<DialogHeader>
 					<DialogTitle>{t("mcp.log.title", { name })}</DialogTitle>
 					<DialogDescription>{t("mcp.log.description")}</DialogDescription>

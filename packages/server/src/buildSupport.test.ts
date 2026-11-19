@@ -43,7 +43,7 @@ test("runtime source manifest covers the launcher artifact surface", () => {
 			["pi-thinkrail-workflow", "host"],
 			["pi-todos", "host"],
 			["server", "host"],
-			["pi-web-access", "extensions/web-access"],
+			["web-access", "extensions/web-access"],
 		],
 	);
 	expect(

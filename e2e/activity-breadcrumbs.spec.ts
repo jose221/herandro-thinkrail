@@ -1,6 +1,11 @@
 import { appendFileSync, realpathSync, utimesSync } from "node:fs";
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { defaultWorkspaceRow, enterDefaultWorkspace, openFixtureProject } from "./fixtures/app";
+import {
+	closeSettings,
+	defaultWorkspaceRow,
+	enterDefaultWorkspace,
+	openFixtureProject,
+} from "./fixtures/app";
 import {
 	moveMouseToChatViewport,
 	readChatScrollGeometry,
@@ -44,7 +49,7 @@ async function selectMessageOrder(
 	const option = page.getByTestId(`chat-order-${order}`);
 	await option.click();
 	await expect(option).toHaveAttribute("data-active", "true");
-	await page.keyboard.press("Escape");
+	await closeSettings(page);
 }
 
 function seedNestedActivityChat(name: string) {
@@ -236,6 +241,20 @@ test("a model-authored Thinking heading stays bounded and appears only while fol
 	);
 });
 
+async function scrollCodeLineToViewportCenter(block: Locator, line: string) {
+	await block.evaluate((element, lineText) => {
+		const scroller = element.closest<HTMLElement>("[data-virtuoso-scroller]");
+		if (!scroller) throw new Error("missing Virtuoso scroller");
+		const lines = (element.textContent ?? "").split("\n");
+		const index = lines.indexOf(lineText);
+		if (index < 0) throw new Error(`missing code line: ${lineText}`);
+		const rect = element.getBoundingClientRect();
+		const viewport = scroller.getBoundingClientRect();
+		const lineCenter = rect.top + (rect.height * (index + 0.5)) / lines.length;
+		scroller.scrollTop += lineCenter - (viewport.top + viewport.height / 2);
+	}, line);
+}
+
 for (const order of ["oldest-first", "newest-first"] as const) {
 	test(`${order} disclosure expansion preserves following and detached reading anchors`, async ({
 		page,
@@ -397,14 +416,8 @@ for (const order of ["oldest-first", "newest-first"] as const) {
 		await expectDetachedToggleAnchor(activityToggle);
 		await expectDetachedToggleAnchor(messageToggle);
 
-		const retainedPreviewAnchor = page.getByText("coalescer regression line 5", { exact: true });
-		await retainedPreviewAnchor.evaluate((element) => {
-			const scroller = element.closest<HTMLElement>("[data-virtuoso-scroller]");
-			if (!scroller) throw new Error("missing Virtuoso scroller");
-			const target = element.getBoundingClientRect();
-			const viewport = scroller.getBoundingClientRect();
-			scroller.scrollTop += target.top + target.height / 2 - (viewport.top + viewport.height / 2);
-		});
+		const retainedPreviewAnchor = page.locator("code", { hasText: "coalescer regression line 5" });
+		await scrollCodeLineToViewportCenter(retainedPreviewAnchor, "coalescer regression line 5");
 		await page.evaluate(() => new Promise(requestAnimationFrame));
 		expect((await readChatViewportIntersection(longOutputToggle)).intersects).toBe(false);
 		const retainedPreviewTop = (await retainedPreviewAnchor.boundingBox())?.y;
@@ -428,14 +441,8 @@ for (const order of ["oldest-first", "newest-first"] as const) {
 		await expect(longOutputToggle).toHaveAttribute("aria-expanded", "true");
 		await expect(chatScroll).toHaveAttribute("data-scroll-moving", "false");
 
-		const clippedPreviewAnchor = page.getByText("coalescer regression line 30", { exact: true });
-		await clippedPreviewAnchor.evaluate((element) => {
-			const scroller = element.closest<HTMLElement>("[data-virtuoso-scroller]");
-			if (!scroller) throw new Error("missing Virtuoso scroller");
-			const target = element.getBoundingClientRect();
-			const viewport = scroller.getBoundingClientRect();
-			scroller.scrollTop += target.top + target.height / 2 - (viewport.top + viewport.height / 2);
-		});
+		const clippedPreviewAnchor = page.locator("code", { hasText: "coalescer regression line 30" });
+		await scrollCodeLineToViewportCenter(clippedPreviewAnchor, "coalescer regression line 30");
 		await page.evaluate(() => new Promise(requestAnimationFrame));
 		expect((await readChatViewportIntersection(longOutputToggle)).intersects).toBe(false);
 		await longOutputToggle.evaluate((element: HTMLElement) => element.click());
@@ -522,14 +529,8 @@ for (const order of ["oldest-first", "newest-first"] as const) {
 		await thinkingToggle.evaluate((element: HTMLElement) => element.click());
 		await expect(thinkingToggle).toHaveAttribute("aria-expanded", "true");
 		await expect(chatScroll).toHaveAttribute("data-scroll-moving", "false");
-		const activityContent = page.getByText("coalescer regression line 30", { exact: true });
-		await activityContent.evaluate((element) => {
-			const scroller = element.closest<HTMLElement>("[data-virtuoso-scroller]");
-			if (!scroller) throw new Error("missing Virtuoso scroller");
-			const target = element.getBoundingClientRect();
-			const viewport = scroller.getBoundingClientRect();
-			scroller.scrollTop += target.top + target.height / 2 - (viewport.top + viewport.height / 2);
-		});
+		const activityContent = page.locator("code", { hasText: "coalescer regression line 30" });
+		await scrollCodeLineToViewportCenter(activityContent, "coalescer regression line 30");
 		await page.evaluate(() => new Promise(requestAnimationFrame));
 		await expect(trail).toBeVisible();
 		await trail
@@ -635,4 +636,116 @@ test("sticky activity breadcrumbs expose the off-screen Activity â†’ Thinking â†
 
 	await trail.getByRole("button", { name: "Jump to Thinking" }).click();
 	await expect(thinking.getByTestId("thinking-group-toggle")).toBeFocused();
+});
+
+test("sticky activity breadcrumb segments do not overlap when tool metadata is long", async ({
+	page,
+}) => {
+	await openFixtureProject(page);
+	const chat = seedWorkspaceSession(repoCwd(), {
+		name: "long breadcrumb overlap",
+		messages: [{ role: "user", text: "Inspect environment and run script.", timestamp: BASE_TS }],
+	});
+	const assistantId = `${chat.id}-a1`;
+	const longCommand =
+		"BW_PASSWORD_FILE=~/ops/mainpasswd.txt python3 - <<'EOF' import os, subprocess, json, pathlib; env = {**os.environ, 'FOO': 'bar_baz_qux_0123456789_abcdefghijklmnopqrstuvwxyz', 'TOKEN': 'long_payload_for_breadcrumb_overflow_reproduction_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz_0123456789_abcdefghijklmnopqrstuvwxyz'}; print(json.dumps(dict(env))) EOF";
+	appendMessage(chat.path, assistantId, `${chat.id}-m0`, {
+		role: "assistant",
+		content: [
+			{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "watch.ts" } },
+			{ type: "thinking", thinking: "Inspecting the environment and script execution." },
+			{ type: "toolCall", id: "read-2", name: "read", arguments: { path: "watch.test.ts" } },
+			{ type: "toolCall", id: "bash-long", name: "bash", arguments: { command: longCommand } },
+		],
+		usage,
+		stopReason: "toolUse",
+		timestamp: BASE_TS + 1_000,
+	});
+	let parentId = assistantId;
+	for (const [toolCallId, toolName, output] of [
+		["read-1", "read", "source"],
+		["read-2", "read", "test"],
+		[
+			"bash-long",
+			"bash",
+			Array.from({ length: 120 }, (_, index) => `output line ${index + 1}`).join("\n"),
+		],
+	] as const) {
+		parentId = appendMessage(chat.path, `${chat.id}-${toolCallId}`, parentId, {
+			role: "toolResult",
+			toolCallId,
+			toolName,
+			content: [{ type: "text", text: output }],
+			isError: false,
+			timestamp: BASE_TS + 2_000,
+		});
+	}
+	appendMessage(chat.path, `${chat.id}-a2`, parentId, {
+		role: "assistant",
+		content: [{ type: "text", text: "Done." }],
+		usage,
+		stopReason: "stop",
+		timestamp: BASE_TS + 3_000,
+	});
+	utimesSync(chat.path, new Date(BASE_TS), new Date(BASE_TS));
+
+	await expect(defaultWorkspaceRow(page)).toBeVisible();
+	await enterDefaultWorkspace(page);
+	await expect(page.locator('[data-testid="editor-tab"][data-kind="chat"]')).toHaveCount(1);
+
+	const activity = page.getByTestId("activity-group").first();
+	await activity.getByTestId("activity-group-toggle").click();
+	const thinking = activity.getByTestId("thinking-group").last();
+	await thinking.getByTestId("thinking-group-toggle").click();
+	const tool = thinking.locator('[data-testid="activity-step"][data-tool="bash"]');
+	await tool.getByTestId("activity-step-toggle").click();
+
+	const trail = page.getByTestId("activity-breadcrumb-trail");
+	await expect
+		.poll(async () => {
+			await tool.evaluate((element) => {
+				const scroller = element.closest<HTMLElement>('[data-virtuoso-scroller="true"]');
+				if (!scroller) throw new Error("missing Virtuoso scroller");
+				scroller.scrollTop +=
+					element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + 80;
+			});
+			return trail.isVisible();
+		})
+		.toBe(true);
+	await expect(trail.getByTestId("activity-breadcrumb-segment")).toHaveCount(3);
+
+	const geometry = await trail.evaluate((root) => {
+		const segments = [
+			...root.querySelectorAll<HTMLElement>('[data-testid="activity-breadcrumb-segment"]'),
+		];
+		return segments.map((segment) => {
+			const segRect = segment.getBoundingClientRect();
+			const label = segment.querySelector<HTMLElement>('[data-testid="activity-breadcrumb-label"]');
+			const labelRect = label?.getBoundingClientRect();
+			return {
+				kind: segment.dataset.kind,
+				segLeft: segRect.left,
+				segRight: segRect.right,
+				segHeight: segRect.height,
+				labelRight: labelRect?.right ?? 0,
+				labelScrollWidth: label?.scrollWidth ?? 0,
+				labelClientWidth: label?.clientWidth ?? 0,
+			};
+		});
+	});
+
+	for (let index = 0; index < geometry.length; index += 1) {
+		const current = geometry[index];
+		expect(current).toBeDefined();
+		if (!current) continue;
+		expect(current.segHeight).toBeLessThanOrEqual(36);
+		expect(current.labelRight).toBeGreaterThan(current.segLeft);
+		expect(current.labelClientWidth).toBeGreaterThanOrEqual(current.labelScrollWidth - 1);
+		expect(current.labelRight).toBeLessThanOrEqual(current.segRight + 0.5);
+		const next = geometry[index + 1];
+		if (next) {
+			expect(current.segRight).toBeLessThanOrEqual(next.segLeft + 0.5);
+			expect(current.labelRight).toBeLessThanOrEqual(next.segLeft + 0.5);
+		}
+	}
 });

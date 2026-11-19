@@ -166,12 +166,34 @@ describe("pushBranch", () => {
 		},
 	);
 
+	posix("a managed reftable workspace whose branch read times out aborts the push", async () => {
+		sh(repo, "refs", "migrate", "--ref-format=reftable");
+		const pushed = withHangingGit('*" symbolic-ref "*', () =>
+			pushBranch({ workspaceId: "w1", branch: "feature" }),
+		);
+		await expect(pushed).rejects.toThrow(expect.objectContaining({ code: "GIT_TIMEOUT" }));
+		expect(sh(remote, "for-each-ref", "refs/heads")).toBe("");
+	});
+
 	posix("a core.sshCommand probe that times out pushes nothing", async () => {
 		const pushed = withHangingGit('*" core.sshCommand "*', () =>
 			pushBranch({ workspaceId: "w1", branch: "feature" }),
 		);
 		await expect(pushed).rejects.toThrow(/^Could not read core\.sshCommand: timed out/);
 		expect(sh(remote, "for-each-ref", "refs/heads")).toBe("");
+	});
+
+	test("a managed workspace switched in its terminal pushes the live branch, never the stale one", async () => {
+		sh(repo, "switch", "-q", "-c", "feature-live");
+		await expect(pushBranch({ workspaceId: "w1", branch: "feature" })).rejects.toThrow(
+			/moved from "feature" to "feature-live"/,
+		);
+		expect(sh(remote, "for-each-ref", "refs/heads")).toBe("");
+
+		await pushBranch({ workspaceId: "w1", branch: "feature-live" });
+		expect(sh(remote, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(
+			"refs/heads/feature-live",
+		);
 	});
 
 	test("a repository without origin names the missing remote", async () => {
@@ -329,5 +351,16 @@ describe("gitlab new-MR hand-off", () => {
 		expect(url.searchParams.get("merge_request[target_branch]")).toBe("main");
 		expect(url.searchParams.get("merge_request[title]")).toBe("Ship");
 		expect(url.searchParams.get("merge_request[description]")).toBe("Body");
+	});
+
+	test("a multibyte description is trimmed until the encoded URL fits", async () => {
+		sh(repo, "remote", "set-url", "origin", "https://gitlab.com/acme/widgets.git");
+		sh(repo, "config", `url.${remote}.pushInsteadOf`, "https://gitlab.com/acme/widgets.git");
+		const body = "修复到期日漂移并补回归测试".repeat(500);
+		const url = (await openPr({ workspaceId: "w1", title: "标题", body })).compareUrl ?? "";
+		expect(url.length).toBeLessThanOrEqual(4_000);
+		expect(url.length).toBeGreaterThan(4_000 - 9);
+		const description = new URL(url).searchParams.get("merge_request[description]") ?? "";
+		expect(body.startsWith(description)).toBe(true);
 	});
 });

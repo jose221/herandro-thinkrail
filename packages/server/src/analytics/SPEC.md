@@ -55,7 +55,7 @@ bounded browser-derived strings, never resource identities or arbitrary product 
 | `setup_state_observed` | Provider/model/project readiness (`yes/no/unknown`); first current observation and changes, not every poll. |
 | `setup_action_finished` | Explicit setup operation, outcome and fixed failure category; automatic Default provisioning is excluded. `directory_pick` is the native folder picker (succeeded / cancelled / failed, never the path); `project_create` is the in-app new-project bootstrap; `project_open` reports the typed `not_git` / `already_open` reasons from the projects module's coded errors, and every untyped failure stays `unknown` — reasons are never derived from error text. |
 | `agent_run_started` | Work-cycle origin, workspace kind and catalog-bucketed provider/model. |
-| `agent_run_settled` | Final outcome, elapsed-time/retry/compaction buckets; only `agent_settled`, never attempt-level `agent_end`. |
+| `agent_run_settled` | Final outcome, elapsed-time/retry/compaction buckets; only `agent_settled`, never attempt-level `agent_end`. A `toolUse` terminal is `normal_stop`: pi settles on one only when a tool batch ended the run (`terminate`, e.g. next-step suggestions or a deferred question); an abort during tools settles as `aborted`. |
 | `task_completed` | Nonempty task-group completion transition after artifact reconciliation, change evidence and whether verification was recorded. |
 | `plan_opened` | The plan surfaced for the user, by `surface` (`page`/`rail`); a deliberate open action, not every plan refetch. |
 | `plan_item_added` | A user-added plan item (`origin:"user"`), by `surface` (`chat`/`page`/`rail`); the user curating the plan, not agent re-plans. |
@@ -136,7 +136,7 @@ included — revisitable; PostHog itself excludes expected 4xx outcomes — with
 registered method), `ui` (`client.reportError`; `scope` = kind[:boundary], render = handled) and `desktop`
 (handled desktop main-process errors, with their scope). An error `code` passes only as `^[A-Z][A-Z0-9_]+$`.
 
-The privacy guarantee is an allow-list, not a deny-list. Capture uses posthog-node 5.46.1's
+The privacy guarantee is an allow-list, not a deny-list. Capture uses posthog-node 5.57.2's
 `captureException` through a `PostHog` subclass whose overridden (protected)
 `createErrorPropertiesBuilder` keeps the SDK's coercers and node parser but **no frame modifiers**: the
 default ones read ±7 source lines per frame from disk, make paths relative to `cwd` (still
@@ -144,7 +144,8 @@ default ones read ±7 source lines per frame from disk, make paths relative to `
 imported only for that builder. The sink's typed (doc-less) `before_send` then **rebuilds** every
 `$exception` from scratch: ≤ 5 exceptions of identifier-only `type`, a classifier `value`,
 `mechanism.{handled,synthetic,type}` (the root's `handled` comes from the report, because the SDK's capture
-APIs take no hint and always default it to true; causes stay handled), and frames carrying only `platform`, identifier-only `function`,
+APIs take no hint and always default it to true; causes stay handled, and a mechanism without `handled`, as
+the SDK writes for chained causes, counts as handled), and frames carrying only `platform`, identifier-only `function`,
 normalized `filename`, `lineno`, `colno`, `in_app` and a UUID-shaped `chunk_id`. Context lines, `vars`,
 `abs_path`, `module` or any field a later SDK adds can never pass. Absolute filenames inside the app
 root (repo root from source, the bundle dir when packaged, `Resources/app` for desktop via `appRoot`)

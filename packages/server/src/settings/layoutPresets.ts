@@ -13,6 +13,7 @@ const TOOL_IDS = new Set<LayoutToolId>([
 	"files",
 	"review",
 	"plan",
+	"artifacts",
 	"emulator",
 	"browser",
 	"requests",

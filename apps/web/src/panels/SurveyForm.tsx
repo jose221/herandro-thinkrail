@@ -170,7 +170,7 @@ function SurveyAnswer({
 							<label
 								key={value}
 								className={cn(
-									"flex size-32 cursor-pointer items-center justify-center rounded-sm border tr-text-ui transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary",
+									"flex size-32 cursor-pointer items-center justify-center rounded-sm border tr-text-ui transition-colors has-[:focus-visible]:focus-ring",
 									checked
 										? "border-primary-muted bg-primary-subtle text-primary"
 										: "border-border-default text-text-default hover:bg-control-bg-hovered",
@@ -191,8 +191,8 @@ function SurveyAnswer({
 				</div>
 				{question.lowerBoundLabel || question.upperBoundLabel ? (
 					<div className="flex w-full justify-between gap-8 text-text-muted tr-text-metadata">
-						<span>{question.lowerBoundLabel}</span>
-						<span>{question.upperBoundLabel}</span>
+						<span className="min-w-0">{question.lowerBoundLabel}</span>
+						<span className="min-w-0">{question.upperBoundLabel}</span>
 					</div>
 				) : null}
 			</div>
@@ -280,14 +280,14 @@ function ChoiceRow({
 	return (
 		<label
 			className={cn(
-				"flex cursor-pointer items-center gap-8 rounded-sm border px-12 py-8 text-left transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary",
+				"flex cursor-pointer items-center gap-8 rounded-sm border px-12 py-8 text-left transition-colors has-[:focus-visible]:focus-ring",
 				checked
 					? "border-primary-muted bg-primary-subtle"
 					: "border-border-default hover:bg-control-bg-hovered",
 			)}
 		>
 			<input type={kind} name={name} checked={checked} onChange={onSelect} className="sr-only" />
-			<span className="tr-text-ui text-text-default">{label}</span>
+			<span className="min-w-0 tr-text-ui text-text-default">{label}</span>
 		</label>
 	);
 }

@@ -8,6 +8,18 @@ import { cn } from "./utils";
 
 const ToastProvider = ToastPrimitive.Provider;
 
+const toastPresses = new WeakSet<Event>();
+const recordToastPress = (event: Event) => toastPresses.add(event);
+
+function isToastPress(event: Event): boolean {
+	return toastPresses.has(event);
+}
+
+function watchToastPresses(viewport: HTMLElement | null) {
+	viewport?.addEventListener("pointerdown", recordToastPress, true);
+	return () => viewport?.removeEventListener("pointerdown", recordToastPress, true);
+}
+
 function ToastViewport({
 	className,
 	label,
@@ -16,9 +28,11 @@ function ToastViewport({
 	const t = useT();
 	return (
 		<ToastPrimitive.Viewport
+			data-toast-viewport=""
+			ref={watchToastPresses}
 			label={label ?? t("common.notificationsRegion", { hotkey: "{hotkey}" })}
 			className={cn(
-				"fixed inset-x-0 bottom-0 z-[100] flex max-h-screen w-full flex-col gap-8 p-12 outline-none sm:inset-x-auto sm:right-0 sm:bottom-0 sm:w-[380px] sm:max-w-[100vw]",
+				"fixed inset-x-0 bottom-0 z-[100] flex max-h-screen w-full flex-col gap-8 p-12 focus-visible:focus-ring-inset sm:inset-x-auto sm:right-0 sm:bottom-0 sm:w-[380px] sm:max-w-[100vw]",
 				className,
 			)}
 			{...props}
@@ -83,6 +97,7 @@ function ToastClose({ className, ...props }: React.ComponentProps<typeof ToastPr
 }
 
 export {
+	isToastPress,
 	Toast,
 	ToastAction,
 	ToastClose,

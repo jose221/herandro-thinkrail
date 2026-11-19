@@ -62,6 +62,19 @@ function routedWindow() {
 test("keeps same-origin navigation inside the webview", () => {
 	expect(externalNavigationUrl(`${origin}/#/v1`, origin)).toBeNull();
 	expect(externalNavigationUrl({ url: `${origin}/files/a/b` }, origin)).toBeNull();
+	expect(externalNavigationUrl(`${origin}/viewer`, origin)).toBeNull();
+});
+
+test("sends a same-origin browser view of a workspace file to the OS", () => {
+	expect(externalNavigationUrl(`${origin}/view/w1/mockups/a.html`, origin)).toBe(
+		`${origin}/view/w1/mockups/a.html`,
+	);
+	expect(
+		externalNavigationUrl(
+			JSON.stringify({ url: `${origin}/view/w1/a.html`, allowed: false }),
+			origin,
+		),
+	).toBe(`${origin}/view/w1/a.html`);
 });
 
 test("keeps local development servers inside the webview", () => {
@@ -123,16 +136,14 @@ test("opens the serialized will-navigate payload emitted by the native SDK", () 
 	);
 });
 
-test.each([
-	"file:///tmp/private",
-	"javascript:alert(1)",
-	"data:text/html,hello",
-	"views://web",
-])("rejects unsafe protocols in every SDK payload form: %s", (url) => {
-	for (const detail of [url, { url }, JSON.stringify({ url, allowed: false })]) {
-		expect(externalNavigationUrl(detail, origin)).toBeNull();
-	}
-});
+test.each(["file:///tmp/private", "javascript:alert(1)", "data:text/html,hello", "views://web"])(
+	"rejects unsafe protocols in every SDK payload form: %s",
+	(url) => {
+		for (const detail of [url, { url }, JSON.stringify({ url, allowed: false })]) {
+			expect(externalNavigationUrl(detail, origin)).toBeNull();
+		}
+	},
+);
 
 test.each([
 	null,
@@ -191,6 +202,7 @@ test("confines the window to its origin while keeping srcdoc previews and same-o
 		`${origin}/*`,
 		"about:srcdoc",
 		`blob:${origin}/*`,
+		`^${origin}/view/*`,
 	]);
 });
 
@@ -232,9 +244,14 @@ test("routes window.open of external URLs and delegates every other call to the 
 	expect(view.open("https://example.com/compare", "_blank", "noopener,noreferrer")).toBeNull();
 	expect(view.open(new URL("https://example.com/device"))).toBeNull();
 	view.open(`${origin}/files/a`, "_blank");
+	view.open(`${origin}/view/w1/a.html`, "_blank", "noopener,noreferrer");
 	view.open();
 
-	expect(assigned).toEqual(["https://example.com/compare", "https://example.com/device"]);
+	expect(assigned).toEqual([
+		"https://example.com/compare",
+		"https://example.com/device",
+		`${origin}/view/w1/a.html`,
+	]);
 	expect(nativeOpens).toEqual([
 		[`${origin}/files/a`, "_blank", undefined],
 		[undefined, undefined, undefined],

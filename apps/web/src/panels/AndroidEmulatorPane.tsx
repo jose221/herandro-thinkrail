@@ -41,7 +41,7 @@ const ISSUE_KEYS: Record<NonNullable<AndroidEmulatorStatus["issue"]>, MessageKey
 };
 
 const INPUT_CLASS =
-	"min-h-32 min-w-0 rounded-sm border border-border-default bg-control-bg px-8 text-text-default tr-text-ui focus-visible:ring-2 focus-visible:ring-primary";
+	"min-h-32 min-w-0 rounded-sm border border-border-default bg-control-bg px-8 text-text-default tr-text-ui focus-visible:border-control-border-active focus-visible:focus-ring";
 
 interface ScreenPoint {
 	x: number;

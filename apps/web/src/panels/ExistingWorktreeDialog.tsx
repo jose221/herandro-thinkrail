@@ -118,7 +118,7 @@ export function ExistingWorktreeDialog({
 
 				{loadError ? (
 					<div className="flex flex-col items-start gap-8 rounded-sm bg-feedback-error-subtle p-12 text-feedback-error tr-text-ui">
-						<p>{loadError}</p>
+						<p className="max-w-full">{loadError}</p>
 						<Button
 							variant="outline"
 							size="m"
@@ -142,7 +142,7 @@ export function ExistingWorktreeDialog({
 
 				{candidates && candidates.length > 0 ? (
 					<div
-						className="flex max-h-[min(50vh,24rem)] flex-col gap-4 overflow-y-auto pr-4 motion-safe:animate-reveal"
+						className="relative flex max-h-[min(50vh,24rem)] flex-col gap-4 overflow-y-auto pr-4 motion-safe:animate-reveal"
 						data-testid="existing-worktree-list"
 					>
 						{candidates.map((candidate) => {
@@ -157,7 +157,7 @@ export function ExistingWorktreeDialog({
 									data-testid="existing-worktree-candidate"
 									data-status={candidate.status}
 									onClick={() => void openCandidate(candidate)}
-									className="flex w-full items-start gap-12 rounded-sm border border-border-default bg-control-bg p-12 text-left outline-none transition-colors hover:bg-control-bg-hovered focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text"
+									className="flex w-full items-start gap-12 rounded-sm border border-border-default bg-control-bg p-12 text-left transition-colors hover:bg-control-bg-hovered focus-visible:focus-ring disabled:cursor-not-allowed disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text"
 								>
 									<div className="mt-2 flex size-28 shrink-0 items-center justify-center rounded-sm bg-container-elevated-bg text-text-muted">
 										{opening ? (

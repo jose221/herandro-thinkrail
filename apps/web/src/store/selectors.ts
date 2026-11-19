@@ -1,7 +1,11 @@
 import {
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
+	ARTIFACT_ROLES_PROTOCOL_VERSION,
+	ARTIFACTS_PROTOCOL_VERSION,
 	type BackgroundCommandSummary,
+	BROWSER_VIEW_PROTOCOL_VERSION,
 	CHAT_RESOURCES_PROTOCOL_VERSION,
+	CHATS_PROTOCOL_VERSION,
 	canMarkCompletionUnread,
 	DEFAULT_WORKSPACE_NAME,
 	firstPromptOfTexts,
@@ -19,6 +23,8 @@ import {
 	type ResourceKind,
 	type ResourceRecord,
 	resourceTallyTotal,
+	SEARCH_PROTOCOL_VERSION,
+	SERVER_FALLBACK_PROTOCOL_VERSION,
 	SESSION_RENAME_PROTOCOL_VERSION,
 	SESSION_STATE_PROTOCOL_VERSION,
 	type SessionResourceHistory,
@@ -33,6 +39,7 @@ import {
 	WORKSPACE_READ_STATE_PROTOCOL_VERSION,
 	WORKSPACE_SETTLE_PROTOCOL_VERSION,
 	type Workspace,
+	type WorkspaceArtifactsSnapshot,
 } from "@thinkrail/contracts";
 import type { Translator } from "@thinkrail/locales/react";
 import type { LoginState } from "../auth";
@@ -56,8 +63,10 @@ import type {
 	WorkspaceLayoutDocument,
 } from "../shell/layout";
 import type {
+	ArtifactsView,
 	ChangesTabSection,
 	ClosedChat,
+	ComposerFocusRequest,
 	EditorTab,
 	FilesTreeView,
 	MarkedUnread,
@@ -118,6 +127,32 @@ interface ProtocolState {
 	protocolVersion: number | null;
 }
 
+export function selectHostSearchAvailable(state: {
+	welcomeProtocolVersion: number | null;
+}): boolean {
+	return (
+		state.welcomeProtocolVersion !== null && state.welcomeProtocolVersion >= SEARCH_PROTOCOL_VERSION
+	);
+}
+
+export function selectHostReachable(
+	state: ProtocolState & { status: string; welcomeGeneration: number },
+): boolean {
+	return (
+		state.status === "connected" && state.welcomeGeneration > 0 && state.protocolVersion !== null
+	);
+}
+
+export function selectHostSearchReady(
+	state: ProtocolState & { status: string; welcomeGeneration: number },
+): boolean {
+	return (
+		selectHostReachable(state) &&
+		state.protocolVersion !== null &&
+		state.protocolVersion >= SEARCH_PROTOCOL_VERSION
+	);
+}
+
 export function selectCanRenameChat(state: ProtocolState): boolean {
 	return state.protocolVersion !== null && state.protocolVersion >= SESSION_RENAME_PROTOCOL_VERSION;
 }
@@ -136,15 +171,19 @@ export function selectSupportsOnboarding(state: ProtocolState): boolean {
 
 type OnboardingState = ProtocolState & {
 	onboardingDismissed: boolean;
-	projects: readonly unknown[];
+	projects: readonly Pick<Project, "kind">[];
 	recentProjects: readonly unknown[];
 };
+
+function hasRepoProject(projects: readonly Pick<Project, "kind">[]): boolean {
+	return projects.some((project) => !isChatsContainer(project));
+}
 
 export function selectOnboardingEligible(state: OnboardingState): boolean {
 	return (
 		!state.onboardingDismissed &&
 		selectSupportsOnboarding(state) &&
-		state.projects.length === 0 &&
+		!hasRepoProject(state.projects) &&
 		state.recentProjects.length === 0
 	);
 }
@@ -152,12 +191,18 @@ export function selectOnboardingEligible(state: OnboardingState): boolean {
 export function selectOnboardingActive(
 	state: OnboardingState & { onboardingWizard: "pending" | "shown" | "hidden" },
 ): boolean {
-	if (state.onboardingWizard === "shown") return state.projects.length === 0;
+	if (state.onboardingWizard === "shown") return !hasRepoProject(state.projects);
 	return state.onboardingWizard === "pending" && selectOnboardingEligible(state);
 }
 
 export function selectSupportsMcp(state: ProtocolState): boolean {
 	return state.protocolVersion !== null && state.protocolVersion >= MCP_PROTOCOL_VERSION;
+}
+
+export function selectSupportsServerFallbackRepair(state: ProtocolState): boolean {
+	return (
+		state.protocolVersion !== null && state.protocolVersion >= SERVER_FALLBACK_PROTOCOL_VERSION
+	);
 }
 
 export function supportsChatResources(protocolVersion: number | null): boolean {
@@ -315,7 +360,6 @@ export function selectChatResourceGroups(
 		subagents,
 		finishedCommands,
 		finishedSubagents,
-		recentFinished: { finishedCommands: recentCommands, finishedSubagents: recentSubagents },
 		history,
 		finishedCount: resourceTallyTotal(history.commands) + resourceTallyTotal(history.subagents),
 		remaining: {
@@ -423,7 +467,12 @@ export function selectWorkspaceSettledReason(
 	workspace: Workspace,
 	now: number,
 ): SettledReason | null {
-	if (!state.workspaceSettlingSupported || isDefaultWorkspace(workspace)) return null;
+	if (
+		!state.workspaceSettlingSupported ||
+		isDefaultWorkspace(workspace) ||
+		isChatWorkspace(workspace)
+	)
+		return null;
 	if (
 		selectWorkspaceIsRunning(state, workspace.id) ||
 		selectWorkspaceNeedsAttention(state, workspace.id)
@@ -506,6 +555,10 @@ export function selectWorkspaceNeedsAttention(
 
 export function supportsWorkspaceReadState(protocolVersion: number | null): boolean {
 	return protocolVersion !== null && protocolVersion >= WORKSPACE_READ_STATE_PROTOCOL_VERSION;
+}
+
+export function supportsProjectlessChats(protocolVersion: number | null): boolean {
+	return protocolVersion !== null && protocolVersion >= CHATS_PROTOCOL_VERSION;
 }
 
 export type WorkspaceReadAction = "markRead" | "markUnread";
@@ -736,15 +789,73 @@ export function selectChatAttended(
 	state: ChatAttentionState,
 	workspaceId: string,
 	sessionId: string,
+	{ ignoreHistory = false }: { ignoreHistory?: boolean } = {},
 ): boolean {
 	if (
 		state.activeWorkspaceId !== workspaceId ||
-		state.obscuredChatSessions[sessionId] ||
-		state.historyOpenRequest?.sessionId === sessionId
+		(!ignoreHistory &&
+			(state.obscuredChatSessions[sessionId] || state.historyOpenRequest?.sessionId === sessionId))
 	)
 		return false;
 	const tab = selectAttentionCenterTab(state, workspaceId);
 	return tab?.kind === "chat" && tab.sessionId === sessionId;
+}
+
+export function selectComposerFocusRequested(
+	state: ChatAttentionState & {
+		composerFocusRequest: ComposerFocusRequest | null;
+		navTickByWorkspace: Record<string, number>;
+	},
+	workspaceId: string,
+	sessionId: string,
+): boolean {
+	const request = state.composerFocusRequest;
+	return (
+		request !== null &&
+		request.workspaceId === workspaceId &&
+		(request.sessionId === null || request.sessionId === sessionId) &&
+		selectWorkspaceNavTick(state, workspaceId) === request.navTick &&
+		selectChatAttended(state, workspaceId, sessionId, {
+			ignoreHistory: request.dismissHistory === true,
+		})
+	);
+}
+
+export function selectQuestionMayClaimFocus(
+	state: { sessions: Record<string, { composerFocusWonOver: string | null }> },
+	sessionId: string,
+	toolCallId: string,
+): boolean {
+	return state.sessions[sessionId]?.composerFocusWonOver !== toolCallId;
+}
+
+export function selectComposerFocusRequestStale(
+	state: ChatAttentionState & {
+		composerFocusRequest: ComposerFocusRequest | null;
+		navTickByWorkspace: Record<string, number>;
+		routeChatTarget: RouteChatTarget | null;
+	},
+	workspaceId: string,
+): boolean {
+	const request = state.composerFocusRequest;
+	if (!request || request.workspaceId !== workspaceId) return false;
+	if (state.activeWorkspaceId !== workspaceId) return true;
+	if (selectWorkspaceNavTick(state, workspaceId) !== request.navTick) return true;
+	if (
+		!state.layoutDocumentsByWorkspace[workspaceId] ||
+		!state.layoutAttentionByWorkspace[workspaceId]
+	) {
+		return false;
+	}
+	if (request.sessionId && selectCurrentRouteChatTarget(state)?.sessionId === request.sessionId) {
+		return false;
+	}
+	const tab = selectAttentionCenterTab(state, workspaceId);
+	if (!tab) return false;
+	return !(
+		tab.kind === "chat" &&
+		(request.sessionId === null || tab.sessionId === request.sessionId)
+	);
 }
 
 export function selectAttentionCenterResourceCacheKey(
@@ -795,6 +906,46 @@ export function isUserOwnedWorkspace(workspace: Pick<Workspace, "kind">): boolea
 	return isDefaultWorkspace(workspace) || isExternalWorkspace(workspace);
 }
 
+/** A chat without a project: its own folder in the Chats container, never a git checkout. */
+export function isChatWorkspace(workspace: Pick<Workspace, "kind">): boolean {
+	return workspace.kind === "chat";
+}
+
+export function isChatsContainer(project: Pick<Project, "kind">): boolean {
+	return project.kind === "chats";
+}
+
+/** Every repository project — the Chats container is never one of them. */
+export function selectRepoProjects(state: Pick<ProjectContextState, "projects">): Project[] {
+	return state.projects.filter((project) => !isChatsContainer(project));
+}
+
+export function selectChatsContainer(state: Pick<ProjectContextState, "projects">): Project | null {
+	return state.projects.find(isChatsContainer) ?? null;
+}
+
+/** The chats without a project, newest activity first. */
+export function selectChatWorkspaces(
+	state: Pick<ProjectContextState, "projects" | "workspaces">,
+): Workspace[] {
+	const container = selectChatsContainer(state);
+	if (!container) return [];
+	return [...(state.workspaces[container.id] ?? [])].sort(
+		(a, b) => (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0),
+	);
+}
+
+/** The title pi gave a chat's conversation, from the host's state records; `null` until the agent names it. */
+export function selectChatWorkspaceTitle(
+	state: { sessionStateByWorkspace: Record<string, Record<string, SessionStateRecord>> },
+	workspaceId: string,
+): string | null {
+	for (const record of Object.values(state.sessionStateByWorkspace[workspaceId] ?? {})) {
+		if (record.title) return record.title;
+	}
+	return null;
+}
+
 export function selectActiveWorkspace(state: ActiveWorkspaceState): Workspace | null {
 	return state.activeWorkspaceId ? selectWorkspaceById(state, state.activeWorkspaceId) : null;
 }
@@ -814,9 +965,37 @@ export function selectActiveWorkspaceProjectId(state: ActiveWorkspaceState): str
 	return selectActiveWorkspace(state)?.projectId ?? null;
 }
 
+/** The active workspace when it has a repository: a chat without a project has none to scope to. */
+export function selectActiveRepoWorkspaceId(state: ActiveWorkspaceState): string | undefined {
+	const active = selectActiveWorkspace(state);
+	return active && !isChatWorkspace(active) ? active.id : undefined;
+}
+
+export function selectActiveSubagentProjectTrust(state: ProjectContextState) {
+	const workspaceId = selectActiveRepoWorkspaceId(state);
+	return workspaceId ? selectContextProject(state)?.piResourceTrust : undefined;
+}
+
 export function selectContextProject(state: ProjectContextState): Project | null {
 	const projectId = selectActiveWorkspace(state)?.projectId ?? state.selectedProjectId;
 	return state.projects.find((project) => project.id === projectId) ?? null;
+}
+
+/** Find in Files has a root: the active workspace, else a context project that is not the Chats container. */
+export function selectHasTextSearchScope(state: ProjectContextState): boolean {
+	if (selectActiveWorkspace(state)) return true;
+	const project = selectContextProject(state);
+	return project !== null && !isChatsContainer(project);
+}
+
+/** The repository new work is created in: the context project unless it is the Chats container, else the first repository. */
+export function selectContextRepoProject(state: ProjectContextState): Project | null {
+	const context = selectContextProject(state);
+	if (context && !isChatsContainer(context)) return context;
+	const selected = state.projects.find(
+		(project) => project.id === state.selectedProjectId && !isChatsContainer(project),
+	);
+	return selected ?? selectRepoProjects(state)[0] ?? null;
 }
 
 export interface HistoryTarget {
@@ -1094,6 +1273,17 @@ export function selectChatFirstPrompt(
 	return runtime ? firstPromptOfTexts(userTurnTexts(runtime.turns)) : undefined;
 }
 
+export function selectChatWorkspaceFirstPrompt(
+	state: ChatFirstPromptState,
+	workspaceId: string,
+): string | undefined {
+	for (const sessionId of Object.keys(state.sessionStateByWorkspace[workspaceId] ?? {})) {
+		const prompt = selectChatFirstPrompt(state, workspaceId, sessionId);
+		if (prompt) return prompt;
+	}
+	return undefined;
+}
+
 export function selectRecordFirstPrompts(state: ChatFirstPromptState): Record<string, string> {
 	const prompts: Record<string, string> = {};
 	for (const [workspaceId, records] of Object.entries(state.sessionStateByWorkspace)) {
@@ -1143,6 +1333,73 @@ export function selectCompactionTurnIds(
 	);
 }
 
+export function supportsBrowserView(protocolVersion: number | null): boolean {
+	return protocolVersion !== null && protocolVersion >= BROWSER_VIEW_PROTOCOL_VERSION;
+}
+
+export function supportsArtifactRoles(protocolVersion: number | null): boolean {
+	return protocolVersion !== null && protocolVersion >= ARTIFACT_ROLES_PROTOCOL_VERSION;
+}
+
+export function selectArtifactsSmartOffered(state: {
+	artifactsSmart: boolean;
+	protocolVersion: number | null;
+}): boolean {
+	return state.artifactsSmart && supportsArtifactRoles(state.protocolVersion);
+}
+
+export function selectArtifactsView(state: {
+	artifactsView: ArtifactsView | null;
+	artifactsSmart: boolean;
+	protocolVersion: number | null;
+}): ArtifactsView {
+	const smart = selectArtifactsSmartOffered(state);
+	if (state.artifactsView === "smart") return smart ? "smart" : "list";
+	return state.artifactsView ?? (smart ? "smart" : "list");
+}
+
+export function supportsArtifacts(protocolVersion: number | null): boolean {
+	return protocolVersion !== null && protocolVersion >= ARTIFACTS_PROTOCOL_VERSION;
+}
+
+export function hostLacksArtifacts(protocolVersion: number | null): boolean {
+	return protocolVersion !== null && protocolVersion < ARTIFACTS_PROTOCOL_VERSION;
+}
+
+export function artifactsWatermark(
+	snapshot: WorkspaceArtifactsSnapshot,
+	includeOutputs: boolean,
+): number {
+	let watermark = 0;
+	for (const artifact of snapshot.artifacts) watermark = Math.max(watermark, artifact.firstSeenAt);
+	if (!includeOutputs) return watermark;
+	for (const output of snapshot.outputs ?? []) watermark = Math.max(watermark, output.changedAt);
+	return watermark;
+}
+
+export function selectArtifactsUnseen(
+	state: {
+		artifactsByWorkspace: Record<string, WorkspaceArtifactsSnapshot>;
+		artifactsSeenByWorkspace: Record<string, number>;
+		artifactsShowIgnored: boolean;
+	},
+	workspaceId: string,
+): boolean {
+	const snapshot = state.artifactsByWorkspace[workspaceId];
+	return (
+		snapshot !== undefined &&
+		artifactsWatermark(snapshot, state.artifactsShowIgnored) >
+			(state.artifactsSeenByWorkspace[workspaceId] ?? 0)
+	);
+}
+
+export function selectArtifactsTick(
+	state: { artifactsTickByWorkspace: Record<string, number>; connectionGeneration: number },
+	workspaceId: string,
+): string {
+	return `${state.connectionGeneration}:${state.artifactsTickByWorkspace[workspaceId] ?? 0}`;
+}
+
 export function selectWorkspaceTick(
 	state: { fsChangesByWorkspace: Record<string, { tick: number }> },
 	workspaceId: string,
@@ -1181,6 +1438,21 @@ export function selectCurrentRouteChatTarget(state: {
 	const target = state.routeChatTarget;
 	if (!target || state.activeWorkspaceId !== target.workspaceId) return null;
 	return selectWorkspaceNavTick(state, target.workspaceId) === target.navTick ? target : null;
+}
+
+interface NavigationState {
+	activeWorkspaceId: string | null;
+	selectedProjectId: string | null;
+	navTickByWorkspace: Record<string, number>;
+}
+
+/** A change of the active workspace, the selected project or a counted tab switch: it overtakes a pending navigation. */
+export function isNavigationChange(state: NavigationState, previous: NavigationState): boolean {
+	return (
+		state.activeWorkspaceId !== previous.activeWorkspaceId ||
+		state.selectedProjectId !== previous.selectedProjectId ||
+		state.navTickByWorkspace !== previous.navTickByWorkspace
+	);
 }
 
 export function selectWorkspaceNavTick(

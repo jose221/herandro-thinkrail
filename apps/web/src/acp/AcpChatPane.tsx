@@ -214,7 +214,7 @@ function PillSelect({
 					value={value}
 					disabled={disabled}
 					onChange={(event) => onChange(event.currentTarget.value)}
-					className="max-w-224 min-w-0 appearance-none truncate bg-transparent pr-16 text-text-default tr-text-ui outline-none disabled:text-control-disabled-text"
+					className="max-w-224 min-w-0 appearance-none truncate rounded-sm bg-transparent pr-16 text-text-default tr-text-ui focus-visible:focus-ring disabled:text-control-disabled-text"
 				>
 					{options.map((option) => (
 						<option key={option.value} value={option.value}>

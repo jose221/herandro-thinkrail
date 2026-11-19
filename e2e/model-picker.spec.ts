@@ -1,6 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
 import type { AppConfig, ThinkingLevel } from "@thinkrail/contracts";
-import { expandModelGroup, openWorkspaceChat } from "./fixtures/app";
+import {
+	closeSettings,
+	expandModelGroup,
+	openWorkspaceChat,
+	revealModelGroups,
+} from "./fixtures/app";
 import { connectCentral, openProviders, waitForCentralState } from "./fixtures/jbcentral";
 import { shot } from "./fixtures/screenshots";
 import { E2eWire } from "./fixtures/wire";
@@ -40,14 +45,14 @@ async function connectFixtureProvider(page: Page): Promise<void> {
 	await waitForCentralState(page, "supported");
 	await connectCentral(page);
 	await waitForCentralState(page, "configured");
-	await page.keyboard.press("Escape");
+	await closeSettings(page);
 }
 
 async function disconnectFixtureProvider(page: Page): Promise<void> {
 	await openProviders(page);
 	await page.getByTestId("jetbrains-disconnect").click();
 	await waitForCentralState(page, "supported");
-	await page.keyboard.press("Escape");
+	await closeSettings(page);
 }
 
 test("the composer pill stars a favorite, records it as recent, and saves the pair as default", async ({
@@ -61,6 +66,7 @@ test("the composer pill stars a favorite, records it as recent, and saves the pa
 		await openFreshChat(page);
 		const pill = page.getByTestId("model-selector").last();
 		await pill.click();
+		await revealModelGroups(page);
 		// Provider groups start collapsed unless they hold the chat's current model.
 		await expandModelGroup(page, "e2e-central");
 		const option = page.locator(CENTRAL_OPTION).first();
@@ -79,6 +85,8 @@ test("the composer pill stars a favorite, records it as recent, and saves the pa
 			.poll(async () => (await readConfig(page)).favoriteModels.map((m) => m.id))
 			.toEqual(["e2e-central-model"]);
 		await expect(page.locator("[cmdk-group-heading]", { hasText: "Pinned" })).toBeVisible();
+		await page.keyboard.press("Escape");
+		await pill.click();
 		await expect(page.getByTestId("model-show-all")).toBeVisible();
 
 		await option.click();
@@ -87,8 +95,8 @@ test("the composer pill stars a favorite, records it as recent, and saves the pa
 		);
 		await expect(pill).toContainText("Synthetic JetBrains AI model");
 		await expect
-			.poll(async () => (await readConfig(page)).recentModels.map((m) => m.id))
-			.toEqual(["e2e-central-model"]);
+			.poll(async () => (await readConfig(page)).recentModels[0]?.id)
+			.toBe("e2e-central-model");
 
 		const high = page.locator('[data-testid="thinking-option"][data-level="high"]');
 		await expect(high).toBeVisible();

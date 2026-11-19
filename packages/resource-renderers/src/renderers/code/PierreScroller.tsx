@@ -1,4 +1,6 @@
+import { cn } from "@thinkrail/ui/utils";
 import { type ReactNode, type RefCallback, useCallback, useRef } from "react";
+import { CURSOR_PROXY_HOST, CursorProxy, type CursorProxyProps } from "../../support/CursorProxy";
 
 const SCROLL_TOP = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
 
@@ -11,7 +13,7 @@ function mirrorScroll(
 	const sync = () => {
 		content.style.transform = `translateY(${-scroller.scrollTop}px)`;
 	};
-	const fit = () => {
+	const fitHeight = () => {
 		sizer.style.height = `${content.offsetHeight}px`;
 		viewport.style.height = `${scroller.clientHeight}px`;
 		sync();
@@ -36,10 +38,10 @@ function mirrorScroll(
 		});
 	}
 	scroller.addEventListener("scroll", sync, { passive: true });
-	const resize = new ResizeObserver(fit);
+	const resize = new ResizeObserver(fitHeight);
 	resize.observe(scroller);
 	resize.observe(content);
-	fit();
+	fitHeight();
 	return () => {
 		resize.disconnect();
 		scroller.removeEventListener("scroll", sync);
@@ -54,12 +56,16 @@ function mirrorScroll(
 export function PierreScroller({
 	attach,
 	testId,
+	focusList,
 	className,
+	cursor,
 	children,
 }: {
 	attach: RefCallback<HTMLDivElement>;
 	testId: string;
+	focusList?: string;
 	className: string;
+	cursor?: CursorProxyProps | undefined;
 	children: ReactNode;
 }) {
 	const sizerRef = useRef<HTMLDivElement>(null);
@@ -81,7 +87,13 @@ export function PierreScroller({
 		[attach],
 	);
 	return (
-		<div ref={attachScroller} data-testid={testId} className={className}>
+		<div
+			ref={attachScroller}
+			data-testid={testId}
+			data-focus-list={focusList}
+			className={cn(className, cursor && CURSOR_PROXY_HOST)}
+		>
+			{cursor ? <CursorProxy {...cursor} /> : null}
 			<div ref={sizerRef}>
 				<div ref={viewportRef} className="sticky top-0 overflow-clip">
 					<div ref={contentRef} className="flex flex-col will-change-transform">

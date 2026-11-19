@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { RiChat2Line } from "@remixicon/react";
-import { parseMatchTerms } from "@thinkrail/contracts";
+import { MAX_SEARCH_QUERY_LENGTH, parseMatchTerms } from "@thinkrail/contracts";
 import { createDoubleShiftDetector, DOUBLE_SHIFT } from "./doubleShift";
 import {
 	adaptiveCounts,
@@ -9,10 +9,11 @@ import {
 	MAX_LEARNING_BYTES,
 	parseLearning,
 	recordPick,
+	recordVisit,
 	serializeLearning,
 } from "./learning";
 import type { PaletteItem } from "./model";
-import { parseSearchQuery, stripScopePrefix, withScopePrefix } from "./query";
+import { parseSearchQuery, scopeKinds, stripScopePrefix, withScopePrefix } from "./query";
 import { pickTopHit, rankItems } from "./rank";
 
 const DAY = 86_400_000;
@@ -62,6 +63,20 @@ describe("parseSearchQuery", () => {
 		});
 		expect(parseSearchQuery("//src", offered)).toMatchObject({ scope: "all", text: "/src" });
 		expect(parseSearchQuery(">theme", offered)).toMatchObject({ scope: "commands", text: "theme" });
+	});
+
+	test("the text is cut to the host's query length, so local and host terms come from the same characters", () => {
+		const long = `${"word ".repeat(MAX_SEARCH_QUERY_LENGTH / 5)}distinguishing`;
+		const parsed = parseSearchQuery(`@ ${long}`);
+		expect(parsed.text).toBe(long.slice(0, MAX_SEARCH_QUERY_LENGTH));
+		expect(parsed.terms).toEqual(parseMatchTerms(parsed.text.slice(0, MAX_SEARCH_QUERY_LENGTH)));
+		expect(parsed.terms.map((term) => term.text)).not.toContain("distinguishing");
+	});
+
+	test("spec sections are asked for only in the specs scope, never in All", () => {
+		expect(scopeKinds("specs")).toEqual(["spec", "section"]);
+		expect(scopeKinds("all")).not.toContain("section");
+		expect(scopeKinds("all")).toContain("spec");
 	});
 
 	test("scope prefixes round-trip, so a chip can write its prefix back", () => {
@@ -199,6 +214,35 @@ describe("learning", () => {
 		expect(parseLearning(text, now).version).toBe(1);
 		expect(parseLearning("{not json", now)).toBe(EMPTY_LEARNING);
 		expect(parseLearning(JSON.stringify({ version: 2 }), now)).toBe(EMPTY_LEARNING);
+	});
+
+	test("a visit stamps when the place was used without touching the typed ranking, and retires the places it stands for", () => {
+		const now = 7 * DAY;
+		const picked = recordPick(EMPTY_LEARNING, "auth", "workspace:w1", now);
+		expect(picked.lastUsed["workspace:w1"]).toBe(now);
+		const visited = recordVisit(picked, ["chat:c1", "workspace:w1"], now + 1);
+		expect(visited.lastUsed["chat:c1"]).toBe(now + 1);
+		expect(visited.lastUsed["workspace:w1"]).toBeUndefined();
+		expect(visited.frecency).toBe(picked.frecency);
+		expect(visited.adaptive).toBe(picked.adaptive);
+		expect(frecencyScore(visited, "chat:c1", now + 1)).toBe(0);
+		const reloaded = parseLearning(serializeLearning(visited), now);
+		expect(reloaded.lastUsed["chat:c1"]).toBe(now + 1);
+		expect(parseLearning(JSON.stringify({ version: 1, frecency: {} }), now).lastUsed).toEqual({});
+	});
+
+	test("picking the place the user already stands in keeps it one stamp, still learning the pick", () => {
+		const now = 9 * DAY;
+		const here = ["chat:c1", "workspace:w1"];
+		const inChat = recordVisit(EMPTY_LEARNING, here, now);
+		const picked = recordPick(inChat, "auth", "workspace:w1", now + 1, here);
+		expect(picked.lastUsed["workspace:w1"]).toBeUndefined();
+		expect(picked.lastUsed["chat:c1"]).toBe(now + 1);
+		expect(frecencyScore(picked, "workspace:w1", now + 1)).toBeCloseTo(1, 5);
+		expect(adaptiveCounts(picked, "auth", now + 1).get("workspace:w1")).toBeCloseTo(2, 5);
+		const elsewhere = recordPick(inChat, "", "workspace:w2", now + 1, here);
+		expect(elsewhere.lastUsed["workspace:w2"]).toBe(now + 1);
+		expect(elsewhere.lastUsed["chat:c1"]).toBe(now);
 	});
 
 	test("a query or id spelled like an object property survives a reload", () => {

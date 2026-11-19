@@ -37,15 +37,20 @@ import {
 	toast,
 	useAppStore,
 } from "./appStore";
+import type { PromptImage } from "./promptImageState";
 import {
 	selectActiveFilePath,
 	selectChatAttended,
 	selectCompactionTurnIds,
+	selectComposerFocusRequested,
+	selectComposerFocusRequestStale,
 	selectCurrentRouteChatTarget,
 	selectDiffScope,
 	selectFilesTreeView,
+	selectQuestionMayClaimFocus,
 	selectReadyCompletionAck,
 	selectSkillsStale,
+	selectUnnamedChatFirstPrompts,
 	selectWorkspaceNavTick,
 	selectWorkspaceSessionIds,
 	selectWorkspaceTick,
@@ -183,6 +188,7 @@ beforeEach(() => {
 		activeLogin: null,
 		settingsOpen: false,
 		settingsSection: "providers",
+		settingsTarget: null,
 		surveyInvitationOpen: false,
 		surveyWindowOpen: false,
 		inAppSurvey: null,
@@ -190,8 +196,8 @@ beforeEach(() => {
 		fileLineWidth: DEFAULT_CONFIG.fileLineWidth,
 		chatLineWidthBounded: DEFAULT_CONFIG.chatLineWidthBounded,
 		fileLineWidthBounded: DEFAULT_CONFIG.fileLineWidthBounded,
+		voiceInputEnabled: DEFAULT_CONFIG.voiceInputEnabled,
 		chatMessageOrder: "oldest-first",
-		streamingResponseMovement: { settle: 75, trigger: 100 },
 		toasts: [],
 	});
 });
@@ -400,6 +406,19 @@ test("a host-fired USER message folds into the transcript; the composer's optimi
 
 	store.handlePiEvent(userStart("[thinkrail:todo-nudge] plan changed"), "a");
 	expect(rt("a").turns.filter((t) => t.kind === "user")).toHaveLength(2);
+});
+
+test("sending a message works where crypto.randomUUID is unavailable (plain-http origin)", () => {
+	const original = crypto.randomUUID;
+	Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+	try {
+		const store = useAppStore.getState();
+		store.openChatSession("ws1", "insecure", null, "medium");
+		store.appendUserMessage("insecure", "hello");
+		expect(rt("insecure").turns.filter((t) => t.kind === "user")).toHaveLength(1);
+	} finally {
+		Object.defineProperty(crypto, "randomUUID", { value: original, configurable: true });
+	}
 });
 
 test("a matching user echo adopts the host clock while retaining optimistic identity and attachment labels", () => {
@@ -807,6 +826,36 @@ test("a todo-review-fix custom message_end appends a reviewFix turn", () => {
 	expect(reviewIgnored.eventRevision).toBe(reviewBefore.eventRevision + 1);
 });
 
+test("a continuation request and a handoff message_end append their cards", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "a", null, "medium");
+	const custom = (customType: string, details: unknown) =>
+		({
+			type: "message_end",
+			message: { role: "custom", customType, content: "x", display: true, details, timestamp: 5 },
+		}) as unknown as PiEvent;
+	store.handlePiEvent(
+		custom("continue-in-workspace-request", {
+			operationId: "op1",
+			projectId: "p1",
+			projectName: "repo",
+		}),
+		"a",
+	);
+	store.handlePiEvent(
+		custom("chat-handoff", {
+			operationId: "op1",
+			sourceWorkspaceId: "chat-1",
+			sourceSessionId: "s-chat",
+			summary: "The brief.",
+		}),
+		"a",
+	);
+	const [request, handoff] = rt("a").turns.slice(-2);
+	expect(request?.kind === "continuationRequest" && request.details.projectName).toBe("repo");
+	expect(handoff?.kind === "handoff" && handoff.details.summary).toBe("The brief.");
+});
+
 test("the tool lifecycle folds into toolResults (the status + raw the renderers read)", () => {
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "a", null, "medium");
@@ -965,7 +1014,7 @@ test("auto-retry with no assistant message yet (error before message_start) drop
 	expect(rt("a").turns.some((t) => t.kind === "retry")).toBe(true);
 });
 
-test("a turn that ends in a provider error surfaces the error (not a false ✓ Done)", () => {
+test("a turn that ends in a provider error surfaces the error (not a false Done)", () => {
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "a", null, "medium");
 
@@ -1025,7 +1074,7 @@ test("a run's closer lands before a mid-run result that woke nobody, as hydratio
 	}
 });
 
-test("a terminal length stop is a visible failure, never a false ✓ Done", () => {
+test("a terminal length stop is a visible failure, never a false Done", () => {
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "a", null, "medium");
 
@@ -1324,6 +1373,21 @@ test("a message_update with no prior message_start still builds the turn (mid-st
 	expect(rt("a").turns.filter((t) => t.kind === "assistant")).toHaveLength(1);
 });
 
+test("a mid-stream client given only the newest partial before message_end keeps the finished answer", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "held", null, "medium");
+	const final = { role: "assistant", content: [{ type: "text", text: "whole reply" }] };
+
+	store.handlePiEvent({ type: "message_end", message: final } as unknown as PiEvent, "held");
+	expect(rt("held").turns.filter((t) => t.kind === "assistant")).toHaveLength(0);
+
+	store.handlePiEvent(assistantText("whole re"), "held");
+	store.handlePiEvent({ type: "message_end", message: final } as unknown as PiEvent, "held");
+	const assistants = rt("held").turns.filter((t) => t.kind === "assistant");
+	expect(assistants).toHaveLength(1);
+	expect(assistants[0]).toMatchObject({ streaming: false, message: final });
+});
+
 test("a durable session title event renames an open chat without moving attention", () => {
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "named", null, "medium");
@@ -1498,6 +1562,93 @@ test("closeChatRuntime drops only its own runtime", () => {
 	store.closeChatRuntime("a");
 	expect(useAppStore.getState().sessions.a).toBeUndefined();
 	expect(rt("b").isStreaming).toBe(true);
+});
+
+test("extension editor text waits for the addressed composer and a replacement can clear it", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "a", null, "medium");
+	store.openChatSession("ws1", "b", null, "medium");
+	store.setChatDraft("a", "Old draft");
+	store.setChatDraft("b", "Other chat");
+	store.applyExtUi({
+		id: "edit-a",
+		sessionId: "a",
+		kind: "setEditorText",
+		text: "New 中文\ndraft",
+	});
+	expect(rt("a").composerEdit).toEqual({ id: "edit-a", kind: "replace", text: "New 中文\ndraft" });
+	expect(rt("a").draft).toBe("Old draft");
+	expect(rt("b").composerEdit).toBeNull();
+	store.applyExtUi({ id: "clear-a", sessionId: "a", kind: "setEditorText", text: "" });
+	expect(rt("a").composerEdit).toEqual({ id: "clear-a", kind: "replace", text: "" });
+	store.consumeComposerEdit("a", "edit-a");
+	expect(rt("a").composerEdit?.id).toBe("clear-a");
+	store.consumeComposerEdit("a", "clear-a");
+	expect(rt("a").composerEdit).toBeNull();
+});
+
+test("pending extension pastes fold into the edit a composer applies once", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "a", null, "medium");
+	store.applyExtUi({ id: "p1", sessionId: "a", kind: "pasteToEditor", text: "one" });
+	store.applyExtUi({ id: "p2", sessionId: "a", kind: "pasteToEditor", text: " two" });
+	expect(rt("a").composerEdit).toEqual({ id: "p2", kind: "paste", text: "one two" });
+	store.applyExtUi({ id: "r", sessionId: "a", kind: "setEditorText", text: "Base" });
+	store.applyExtUi({ id: "p3", sessionId: "a", kind: "pasteToEditor", text: " tail" });
+	expect(rt("a").composerEdit).toEqual({ id: "p3", kind: "replace", text: "Base tail" });
+});
+
+test("extension editor text received before a chat opens is applied in order", () => {
+	const store = useAppStore.getState();
+	store.applyExtUi({ id: "edit-first", sessionId: "later", kind: "setEditorText", text: "First" });
+	store.applyExtUi({ id: "paste-last", sessionId: "later", kind: "pasteToEditor", text: " last" });
+	store.openChatSession("ws1", "other", null, "medium");
+	expect(rt("other").composerEdit).toBeNull();
+	store.openChatSession("ws1", "later", null, "medium");
+	expect(rt("later").composerEdit).toEqual({
+		id: "paste-last",
+		kind: "replace",
+		text: "First last",
+	});
+	expect(useAppStore.getState().extUiOrphans).toEqual([]);
+});
+
+test("image drafts stay with their own runtime and unknown-session updates are ignored", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "a", null, "medium");
+	store.openChatSession("ws1", "b", null, "medium");
+	const image: PromptImage = {
+		id: "picked",
+		name: "picked.png",
+		content: { type: "image", mimeType: "image/png", data: "eA==" },
+	};
+	store.updateChatPromptImages("a", (current) => ({ ...current, images: [image], pending: 1 }));
+	store.setChatDraft("a", "keep this image");
+	expect(rt("a").promptImages.images).toEqual([image]);
+	expect(rt("a").promptImages.pending).toBe(1);
+	expect(rt("b").promptImages.images).toEqual([]);
+	expect(rt("b").promptImages.pending).toBe(0);
+	store.updateChatPromptImages("missing", () => {
+		throw new Error("a missing runtime must not run an image update");
+	});
+	expect(useAppStore.getState().sessions.missing).toBeUndefined();
+});
+
+test("closing a chat drops its image draft and reopening gets a new decode generation", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "a", null, "medium");
+	store.updateChatPromptImages("a", (current) => ({ ...current, pending: 1 }));
+	const generation = rt("a").promptImages.generation;
+	store.closeChatRuntime("a");
+	store.updateChatPromptImages("a", () => {
+		throw new Error("a late decode must not resurrect its closed runtime");
+	});
+	expect(useAppStore.getState().sessions.a).toBeUndefined();
+	store.openChatSession("ws1", "a", null, "medium");
+	expect(rt("a").promptImages.generation).not.toBe(generation);
+	expect(rt("a").promptImages.images).toEqual([]);
+	expect(rt("a").promptImages.pending).toBe(0);
+	expect(rt("a").promptImages.errors).toEqual([]);
 });
 
 test("applyExtUi routes a dialog to its session; the reply clears only that one", () => {
@@ -1883,6 +2034,25 @@ test("setTitle refreshes shared chat metadata without requesting activation", ()
 	});
 });
 
+test("setTitle without a string title falls back to the untitled name", () => {
+	const store = useAppStore.getState();
+	const cacheId = chatTabId("ws1", "a");
+	store.openChatSession("ws1", "a", null, "medium");
+
+	for (const title of [undefined, null, 42]) {
+		store.applyExtUi({
+			id: `named-${title}`,
+			sessionId: "a",
+			kind: "setTitle",
+			title: "Migration plan",
+		});
+		store.applyExtUi({ id: `title-${title}`, sessionId: "a", kind: "setTitle", title } as never);
+		const tab = useAppStore.getState().tabsByWorkspace.ws1?.find((t) => t.id === cacheId);
+		expect(tab?.name).toBe("");
+		expect(() => selectUnnamedChatFirstPrompts(useAppStore.getState(), "ws1")).not.toThrow();
+	}
+});
+
 test("setTitle cannot restore a cache whose structural close is already accepted", () => {
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "a", null, "medium");
@@ -2212,6 +2382,8 @@ test("reconcileSession replaces stale host state while preserving browser-local 
 	const store = useAppStore.getState();
 	store.openChatSession("ws1", "sync", null, "medium");
 	store.setChatDraft("sync", "keep my draft");
+	store.updateChatPromptImages("sync", (current) => ({ ...current, pending: 1 }));
+	store.setChatReadingAnchor("sync", { rowId: "row-1", offset: -24 });
 	store.appendUserMessage("sync", "old summarized prompt");
 	store.handlePiEvent(agentStart, "sync");
 	store.handlePiEvent({ type: "compaction_start", reason: "overflow" }, "sync");
@@ -2274,11 +2446,28 @@ test("reconcileSession replaces stale host state while preserving browser-local 
 		resuming: true,
 	});
 	expect(after.draft).toBe("keep my draft");
+	expect(after.promptImages).toBe(before.promptImages);
+	expect(after.readingAnchor).toEqual({ rowId: "row-1", offset: -24 });
 	expect(after.queue).toEqual({ steering: [], followUp: ["continue afterward"] });
 	expect(after.thinkingLevel).toBe("high");
 	expect(after.syncedConnectionGeneration).toBe(7);
 	expect(after.eventRevision).toBe(before.eventRevision + 1);
 	expect(after.statsRefreshTick).toBe(before.statsRefreshTick);
+});
+
+test("setChatReadingAnchor stores a detached reading position and skips an identical write", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("ws1", "reading", null, "medium");
+	expect(rt("reading").readingAnchor).toBeNull();
+
+	store.setChatReadingAnchor("reading", { rowId: "row-3", offset: -40 });
+	const saved = rt("reading");
+	expect(saved.readingAnchor).toEqual({ rowId: "row-3", offset: -40 });
+	store.setChatReadingAnchor("reading", { rowId: "row-3", offset: -40 });
+	expect(rt("reading")).toBe(saved);
+
+	store.setChatReadingAnchor("reading", null);
+	expect(rt("reading").readingAnchor).toBeNull();
 });
 
 test("reconcileSession rejects a transcript read crossed by even a UI-ignored Pi event", () => {
@@ -2668,6 +2857,19 @@ test("applyProjectUpdated reopens and reorders the same project without duplicat
 	expect(state.recentProjects[0]?.closed).toBeUndefined();
 });
 
+test("open projects follow the host's rank while Recents stay newest opened first", () => {
+	const p1 = project();
+	const p2 = project({ id: "p2", path: "/projects/two", slug: "project-two", lastOpened: 200 });
+	useAppStore.getState().installProjectSnapshot([p1, p2], [p1, p2]);
+	expect(useAppStore.getState().projects.map((candidate) => candidate.id)).toEqual(["p2", "p1"]);
+
+	useAppStore.getState().applyProjectUpdated({ ...p1, rank: 201 });
+
+	const state = useAppStore.getState();
+	expect(state.projects.map((candidate) => candidate.id)).toEqual(["p1", "p2"]);
+	expect(state.recentProjects.map((candidate) => candidate.id)).toEqual(["p2", "p1"]);
+});
+
 test("applyProjectUpdated closes the last project to the no-project state", () => {
 	const p1 = project();
 	useAppStore.setState({
@@ -2978,6 +3180,57 @@ test("installWelcomeSnapshot reconciles stale project navigation", () => {
 	expect(useAppStore.getState().selectedProjectId).toBe("p1");
 });
 
+test("no route enters a chat whose deletion did not finish, while the one already open stays open", () => {
+	const repo = pushedWorkspace();
+	const pending = pushedWorkspace({
+		id: "c1",
+		projectId: "chats",
+		kind: "chat",
+		deletionPending: true,
+	});
+	useAppStore.setState({
+		projects: [
+			{ id: "p1", name: "p1", path: "/p1", slug: "p1", lastOpened: 0 },
+			{ id: "chats", name: "Chats", path: "/chats", slug: "chats", lastOpened: 0, kind: "chats" },
+		],
+		workspaces: { p1: [repo], chats: [pending] },
+		selectedProjectId: "p1",
+		activeWorkspaceId: "w1",
+		chatLocationRequest: null,
+		historyOpenRequest: null,
+	});
+	const store = useAppStore.getState();
+	store.activateWorkspace(pending);
+	store.activateWorkspaceFromRoute(pending, "s1");
+	store.requestChatLocation({
+		workspaceId: "c1",
+		projectId: "chats",
+		sessionId: "s1",
+		messageIndex: 0,
+		anchorText: "keep this",
+	});
+	store.requestHistoryOpen({ workspaceId: "c1", sessionId: "s1", tabId: "s1" });
+	expect(useAppStore.getState()).toMatchObject({
+		activeWorkspaceId: "w1",
+		routeChatTarget: null,
+		chatLocationRequest: null,
+		historyOpenRequest: null,
+	});
+
+	useAppStore.setState({ selectedProjectId: "chats", activeWorkspaceId: "c1" });
+	useAppStore.getState().activateWorkspaceFromRoute(pending, "s1");
+	expect(useAppStore.getState().routeChatTarget?.workspaceId).toBe("c1");
+
+	useAppStore.setState({
+		selectedProjectId: "p1",
+		activeWorkspaceId: "w1",
+		workspaceSelectionHistory: ["w1", "c1", "w2"],
+		workspaces: { p1: [repo, pushedWorkspace({ id: "w2" })], chats: [pending] },
+	});
+	useAppStore.getState().applyWorkspaceRemoved("p1", "w1");
+	expect(useAppStore.getState().activeWorkspaceId).toBe("w2");
+});
+
 test("activateWorkspaceFromRoute atomically stamps exact-chat intent", () => {
 	const workspace = pushedWorkspace();
 	useAppStore.setState({ workspaces: { p1: [workspace] }, navTickByWorkspace: { w1: 3 } });
@@ -3003,6 +3256,130 @@ test("activateWorkspaceFromRoute atomically stamps exact-chat intent", () => {
 	const before = useAppStore.getState();
 	useAppStore.getState().clearRouteChatTarget();
 	expect(useAppStore.getState()).toBe(before);
+});
+
+test("a composer focus request targets the attended chat until navigation overtakes it", () => {
+	const workspace = pushedWorkspace();
+	useAppStore.setState({
+		workspaces: { p1: [workspace] },
+		layoutDocumentsByWorkspace: { w1: selectedChatLayout("s1") },
+		layoutAttentionByWorkspace: {
+			w1: {
+				selectedByGroup: { center: "chat:s1" },
+				lastFocusedCenterGroupId: "center",
+				lastFocusedSideGroupId: {},
+				navigationClockByGroup: { center: 0 },
+			},
+		},
+	});
+	const requested = (sessionId = "s1") =>
+		selectComposerFocusRequested(useAppStore.getState(), "w1", sessionId);
+	const store = useAppStore.getState();
+
+	store.activateWorkspaceFromRoute(workspace);
+	expect(requested()).toBe(false);
+	store.requestComposerFocus("w1");
+	expect(requested()).toBe(true);
+	store.clearComposerFocusRequest();
+	expect(requested()).toBe(false);
+
+	store.requestComposerFocus("w1", "s2");
+	expect(requested()).toBe(false);
+	store.requestComposerFocus("w1", "s1");
+	expect(requested()).toBe(true);
+
+	store.noteNavigation("w1");
+	expect(requested()).toBe(false);
+
+	store.requestComposerFocus("w1");
+	store.selectProject("p1");
+	expect(requested()).toBe(false);
+});
+
+test("a composer focus request goes stale once the destination settles on anything but its chat", () => {
+	const workspace = pushedWorkspace();
+	const document = selectedChatLayout("s1");
+	if (document.center.kind !== "group") throw new Error("expected one center group");
+	document.center.tabs.push({ kind: "file", id: "file:a.ts", name: "a.ts", path: "a.ts" });
+	const attention = (selected: string) => ({
+		selectedByGroup: { center: selected },
+		lastFocusedCenterGroupId: "center",
+		lastFocusedSideGroupId: {},
+		navigationClockByGroup: { center: 0 },
+	});
+	const stale = () => selectComposerFocusRequestStale(useAppStore.getState(), "w1");
+	useAppStore.setState({ workspaces: { p1: [workspace] } });
+	const store = useAppStore.getState();
+
+	store.activateWorkspaceFromRoute(workspace);
+	store.requestComposerFocus("w1");
+	expect(stale()).toBe(false);
+
+	useAppStore.setState({
+		layoutDocumentsByWorkspace: { w1: document },
+		layoutAttentionByWorkspace: { w1: attention("chat:s1") },
+	});
+	expect(stale()).toBe(false);
+
+	useAppStore.setState({ layoutAttentionByWorkspace: { w1: attention("file:a.ts") } });
+	expect(stale()).toBe(true);
+
+	store.activateWorkspaceFromRoute(workspace, "s2");
+	store.requestComposerFocus("w1", "s2");
+	expect(stale()).toBe(false);
+	store.clearRouteChatTarget();
+	expect(stale()).toBe(true);
+
+	store.requestComposerFocus("w1");
+	store.noteNavigation("w1");
+	expect(stale()).toBe(true);
+	expect(selectComposerFocusRequestStale(useAppStore.getState(), "w2")).toBe(false);
+});
+
+test("a served composer focus request wins over the question waiting then, never a later one", () => {
+	const mayClaim = (toolCallId: string) =>
+		selectQuestionMayClaimFocus(useAppStore.getState(), "s1", toolCallId);
+	const store = useAppStore.getState();
+	store.openChatSession("w1", "s1", null, "medium");
+	expect(mayClaim("ask-1")).toBe(true);
+
+	store.requestComposerFocus("w1", "s1");
+	store.serveComposerFocusRequest("s1", "ask-1");
+	expect(useAppStore.getState().composerFocusRequest).toBeNull();
+	expect(mayClaim("ask-1")).toBe(false);
+	expect(mayClaim("ask-2")).toBe(true);
+	expect(selectQuestionMayClaimFocus(useAppStore.getState(), "s2", "ask-1")).toBe(true);
+
+	store.serveComposerFocusRequest("s1", "ask-2");
+	expect(mayClaim("ask-1")).toBe(true);
+	expect(mayClaim("ask-2")).toBe(false);
+
+	store.serveComposerFocusRequest("s1", null);
+	expect(mayClaim("ask-2")).toBe(true);
+});
+
+test("the question a composer focus request won over outlives a remount's transcript reconcile", () => {
+	const store = useAppStore.getState();
+	store.openChatSession("w1", "s1", null, "medium");
+	store.serveComposerFocusRequest("s1", "ask-1");
+	const applied = store.reconcileSession(
+		{
+			sessionId: "s1",
+			workspaceId: "w1",
+			title: "Chat",
+			model: null,
+			thinkingLevel: "medium",
+			isStreaming: false,
+			messageCount: 0,
+			updatedAt: 1,
+			live: true,
+		},
+		{ turns: [], toolResults: {}, toolResponses: {}, turnIdByMessageIndex: [] },
+		rt("s1").eventRevision,
+		0,
+	);
+	expect(applied).toBe(true);
+	expect(selectQuestionMayClaimFocus(useAppStore.getState(), "s1", "ask-1")).toBe(false);
 });
 
 test("closeChatToHistory keeps a route target for the closed session", () => {
@@ -3214,6 +3591,7 @@ test("applyWorkspaceRemoved drops the row, clears its tabs, and returns the acti
 			workspaceId: "w1",
 			commentId: "comment",
 			surface: { kind: "diff", scope: { kind: "branch" } },
+			moveFocus: true,
 		},
 		closedChatsByWorkspace: {
 			w1: [{ sessionId: "removed-chat", title: "Removed", closedAt: 1 }],
@@ -3334,6 +3712,7 @@ test("applyWorkspaceRemoved drops the removed workspace's cached spec graph", ()
 test("files tree state keeps per-workspace folders and scroll, and drops a removed workspace", () => {
 	useAppStore.setState({
 		filesTreeByWorkspace: {},
+		fileClipboard: { workspaceId: "w1", path: "src/a.ts" },
 		removedWorkspaceIds: nullProto<Record<string, true>>(),
 		workspaces: { p1: [pushedWorkspace()] },
 	});
@@ -3359,6 +3738,7 @@ test("files tree state keeps per-workspace folders and scroll, and drops a remov
 
 	useAppStore.getState().applyWorkspaceRemoved("p1", "w1");
 	expect(useAppStore.getState().filesTreeByWorkspace.w1).toBeUndefined();
+	expect(useAppStore.getState().fileClipboard).toBeNull();
 	useAppStore.getState().setFilesTreeExpanded("w1", ["src"], true);
 	expect(useAppStore.getState().filesTreeByWorkspace.w1).toBeUndefined();
 });
@@ -3437,6 +3817,14 @@ test("requestChangesView / requestSpecView pair independent path requests with r
 	useAppStore.getState().requestSpecView("w1", ".thinkrail/context/TASK-x.md");
 	expect(useAppStore.getState().specRequest).not.toBe(first);
 	expect(useAppStore.getState().specRequest).toEqual(first);
+
+	useAppStore.getState().requestSpecView("w1", "SPEC.md", 42);
+	expect(useAppStore.getState().specRequest).toEqual({
+		workspaceId: "w1",
+		path: "SPEC.md",
+		line: 42,
+		navigation: null,
+	});
 });
 
 test("requestToolView reveals a tool without fabricating a path request", () => {
@@ -3767,7 +4155,7 @@ test("clearLoginInput drops the live input; success is terminal; clearLogin dism
 	expect(useAppStore.getState().activeLogin).toBeNull();
 });
 
-test("openSettings deep-links to a section (default providers); closeSettings hides it", () => {
+test("openSettings deep-links to a section, else reopens the remembered one (first ever: providers)", () => {
 	const s = useAppStore.getState();
 	s.openSettings();
 	expect(useAppStore.getState().settingsOpen).toBe(true);
@@ -3776,12 +4164,46 @@ test("openSettings deep-links to a section (default providers); closeSettings hi
 	s.openSettings("github");
 	expect(useAppStore.getState().settingsSection).toBe("github");
 
-	s.setSettingsSection("providers");
-	expect(useAppStore.getState().settingsSection).toBe("providers");
-
+	s.setSettingsSection("terminal");
 	s.closeSettings();
 	expect(useAppStore.getState().settingsOpen).toBe(false);
-	expect(useAppStore.getState().settingsSection).toBe("providers");
+	expect(useAppStore.getState().settingsSection).toBe("terminal");
+
+	s.openSettings();
+	expect(useAppStore.getState()).toMatchObject({
+		settingsOpen: true,
+		settingsSection: "terminal",
+		settingsTarget: null,
+	});
+});
+
+test("a setting target is set with its section and consumed once", () => {
+	const s = useAppStore.getState();
+	let updates = 0;
+	const unsubscribe = useAppStore.subscribe(() => {
+		updates += 1;
+	});
+	s.openSettings("keyboard", "double-shift");
+	expect(updates).toBe(1);
+	expect(useAppStore.getState()).toMatchObject({
+		settingsOpen: true,
+		settingsSection: "keyboard",
+		settingsTarget: "double-shift",
+	});
+
+	expect(s.consumeSettingsTarget()).toBe("double-shift");
+	expect(useAppStore.getState().settingsTarget).toBeNull();
+	expect(s.consumeSettingsTarget()).toBeNull();
+	expect(updates).toBe(2);
+
+	s.openSettings("text", "chat-line-width");
+	s.openSettings("chat");
+	expect(useAppStore.getState().settingsTarget).toBeNull();
+
+	s.openSettings("text", "chat-line-width");
+	s.closeSettings();
+	expect(useAppStore.getState().settingsTarget).toBeNull();
+	unsubscribe();
 });
 
 test("the survey invitation show action is idempotent and hide clears it", () => {
@@ -3973,6 +4395,22 @@ test("applyConfig folds and normalizes the server-synced theme preference", () =
 	});
 });
 
+test("applyConfig installs the host's keybinding overrides, an older host's absence as none", () => {
+	const keybindings = { "search.open": ["Mod+Alt+KeyS"], "tab.close": [] };
+	useAppStore.getState().applyConfig({ ...DEFAULT_CONFIG, keybindings });
+	expect(useAppStore.getState().keybindingOverrides).toEqual(keybindings);
+
+	const { keybindings: _absent, ...older } = DEFAULT_CONFIG;
+	useAppStore.getState().applyConfig(older as AppConfig);
+	expect(useAppStore.getState().keybindingOverrides).toEqual({});
+
+	useAppStore.getState().applyConfig({
+		...DEFAULT_CONFIG,
+		keybindings: ["Mod+KeyK"],
+	} as unknown as AppConfig);
+	expect(useAppStore.getState().keybindingOverrides).toEqual({});
+});
+
 test("applyConfig projects and validates the Windows terminal shell", () => {
 	useAppStore.getState().applyConfig({
 		...DEFAULT_CONFIG,
@@ -3996,6 +4434,14 @@ test("applyConfig projects the composer growth limit", () => {
 		composerGrowthLimit: "roomy",
 	});
 	expect(useAppStore.getState()).toHaveProperty("composerGrowthLimit", "roomy");
+});
+
+test("applyConfig projects the question panel height and defaults an invalid one", () => {
+	useAppStore.getState().applyConfig({ ...DEFAULT_CONFIG, questionPanelHeight: 85 });
+	expect(useAppStore.getState().questionPanelHeight).toBe(85);
+
+	useAppStore.getState().applyConfig({ ...DEFAULT_CONFIG, questionPanelHeight: 20 });
+	expect(useAppStore.getState().questionPanelHeight).toBe(DEFAULT_CONFIG.questionPanelHeight);
 });
 
 test("applyConfig projects synchronized chat and file line-width settings", () => {
@@ -4024,11 +4470,20 @@ test("applyConfig defaults absent or malformed line-width fields independently",
 	Reflect.set(config, "chatLineWidthBounded", "yes");
 	useAppStore.getState().applyConfig(config);
 	expect(useAppStore.getState()).toMatchObject({
-		chatLineWidth: 120,
+		chatLineWidth: 80,
 		fileLineWidth: 160,
 		chatLineWidthBounded: true,
 		fileLineWidthBounded: false,
 	});
+});
+
+test("applyConfig projects the voice input switch and reads an absent one as on", () => {
+	useAppStore.getState().applyConfig({ ...DEFAULT_CONFIG, voiceInputEnabled: false });
+	expect(useAppStore.getState().voiceInputEnabled).toBe(false);
+	const older = { ...DEFAULT_CONFIG };
+	Reflect.deleteProperty(older, "voiceInputEnabled");
+	useAppStore.getState().applyConfig(older);
+	expect(useAppStore.getState().voiceInputEnabled).toBe(true);
 });
 
 test("applyConfig projects the host-wide subagent default", () => {
@@ -4077,15 +4532,12 @@ test("applyConfig projects JetBrains quota display and cadence", () => {
 
 test("chat presentation preferences are client-local and cannot be overwritten by host config", () => {
 	useAppStore.getState().setChatMessageOrder("newest-first");
-	useAppStore.getState().setStreamingResponseMovement({ settle: 60, trigger: 90 });
 	const legacyConfig = {
 		...DEFAULT_CONFIG,
 		chatMessageOrder: "oldest-first",
-		streamingResponseMovement: { settle: 75, trigger: 100 },
 	};
 	useAppStore.getState().applyConfig(legacyConfig);
 	expect(useAppStore.getState().chatMessageOrder).toBe("newest-first");
-	expect(useAppStore.getState().streamingResponseMovement).toEqual({ settle: 60, trigger: 90 });
 });
 
 test("changes tabs: one per scope, preview-eligible, and review progress survives a re-open", () => {
@@ -4211,7 +4663,15 @@ test("consuming a changes-tab reveal lands active path, expansion and focus in o
 		workspaceId: "ws1",
 		commentId: "c1",
 		surface: { kind: "diff", scope: { kind: "branch" } },
+		moveFocus: false,
 	});
+	s().requestChangesTabReveal("ws1", tab.id, "src/a.ts", "c1");
+	s().consumeChangesTabReveal("ws1", tab.id, {
+		path: "src/a.ts",
+		commentId: "c1",
+		moveFocus: true,
+	});
+	expect(s().reviewFocusRequest?.moveFocus).toBe(true);
 
 	s().setChangesTabSectionViewState("ws1", tab.id, "src/a.ts", { scrollTop: 3 });
 	const saved = s().tabsByWorkspace;
@@ -5061,4 +5521,62 @@ test("openSearch starts a fresh palette session even when the palette is already
 	useAppStore.getState().closeSearch();
 	useAppStore.getState().closeSearch();
 	expect(useAppStore.getState()).toMatchObject({ searchOpen: false, searchSession: 2 });
+});
+
+test("revealFileTab stamps a reveal on the file tab, repeats through tick, and switches the renderer when asked", () => {
+	const s = () => useAppStore.getState();
+	useAppStore.setState({ activeWorkspaceId: "ws1" });
+	s().openTab({ ...fileTab("ws1", "src/a.ts"), rendererId: "thinkrail/markdown" }, "keep");
+	s().setTabViewState("ws1", "ws1:src/a.ts", { scrollTop: 7 });
+
+	s().revealFileTab("ws1", "src/a.ts", { line: 12, column: 3, length: 6 });
+	const first = s().tabsByWorkspace.ws1?.[0];
+	expect(first?.kind === "file" && first.reveal).toEqual({
+		line: 12,
+		column: 3,
+		length: 6,
+		tick: 1,
+	});
+	expect(first?.kind === "file" && first.rendererId).toBe("thinkrail/markdown");
+	expect(first?.kind === "file" && first.viewState).toEqual({ scrollTop: 7 });
+
+	s().revealFileTab("ws1", "src/a.ts", { line: 12 }, "thinkrail/code");
+	const second = s().tabsByWorkspace.ws1?.[0];
+	expect(second?.kind === "file" && second.reveal).toEqual({ line: 12, tick: 2 });
+	expect(second?.kind === "file" && second.rendererId).toBe("thinkrail/code");
+	expect(second).not.toHaveProperty("viewState");
+
+	s().revealFileTab("ws1", "src/missing.ts", { line: 1 });
+	expect(s().tabsByWorkspace.ws1).toHaveLength(1);
+});
+
+test("a reveal the view handled is cleared, and only for its own tick, so a remount keeps the reading position", () => {
+	const s = () => useAppStore.getState();
+	useAppStore.setState({ activeWorkspaceId: "ws1" });
+	s().openTab(fileTab("ws1", "src/a.ts"), "keep");
+	s().revealFileTab("ws1", "src/a.ts", { line: 4 });
+	s().revealFileTab("ws1", "src/a.ts", { line: 9 });
+	const before = s().tabsByWorkspace;
+	s().clearFileTabReveal("ws1", "ws1:src/a.ts", 1);
+	expect(s().tabsByWorkspace).toBe(before);
+	s().clearFileTabReveal("ws1", "ws1:src/a.ts", 2);
+	expect(s().tabsByWorkspace.ws1?.[0]).not.toHaveProperty("reveal");
+});
+
+test("agent availability hydrates from welcome and settings.changed, with old-host defaults", () => {
+	const store = useAppStore.getState();
+	store.installWelcomeSnapshot(124, [], [], {
+		...DEFAULT_CONFIG,
+		disabledSubagents: ["worker", "missing-role"],
+	});
+	expect(useAppStore.getState().disabledSubagents).toEqual(["worker", "missing-role"]);
+	store.applyConfig({ ...DEFAULT_CONFIG, disabledSubagents: ["scout"] });
+	expect(useAppStore.getState().disabledSubagents).toEqual(["scout"]);
+	const older = { ...DEFAULT_CONFIG };
+	Reflect.deleteProperty(older, "disabledSubagents");
+	store.installWelcomeSnapshot(123, [], [], older);
+	expect(useAppStore.getState().disabledSubagents).toEqual([]);
+	store.applyConfig({ ...DEFAULT_CONFIG, disabledSubagents: ["worker"] });
+	store.applyConfig(older);
+	expect(useAppStore.getState().disabledSubagents).toEqual([]);
 });

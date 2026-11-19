@@ -13,8 +13,9 @@ import { LoadingRegion } from "@thinkrail/ui/skeleton";
 import { Suspense, useMemo } from "react";
 import { isPhoneViewport } from "../lib";
 import type { FileTab } from "../store";
-import { useAppStore } from "../store";
+import { selectWorkspaceById, useAppStore } from "../store";
 import { getTransport } from "../transport";
+import { OpenInBrowserButton, useOpensInBrowser } from "./OpenInBrowserButton";
 import { resourceBytesUrl, useResetViewStateOnImplementationChange } from "./resourcePane";
 import { reviewFlagFor } from "./reviewModel";
 import { SendReviewButton } from "./SendReviewButton";
@@ -27,6 +28,9 @@ export function FilePane({ tab }: { tab: FileTab }) {
 	const t = useT();
 	const setTabRenderer = useAppStore((state) => state.setTabRenderer);
 	const review = useFileReview(tab.workspaceId, tab.path, "inline");
+	const reviewable = useAppStore(
+		(state) => selectWorkspaceById(state, tab.workspaceId)?.kind !== "chat",
+	);
 	const reviewComments = useAppStore(
 		(state) => state.reviewsByWorkspace[tab.workspaceId]?.comments,
 	);
@@ -56,8 +60,9 @@ export function FilePane({ tab }: { tab: FileTab }) {
 	const content = resourceContent(tab.content, tab.meta, () =>
 		resourceBytesUrl(tab.workspaceId, tab.path),
 	);
-	const reviews = [review.worktree];
-	const showToolbar = candidates.length >= 2 || fileHasDraft;
+	const reviews = reviewable ? [review.worktree] : [];
+	const opensInBrowser = useOpensInBrowser(tab.path);
+	const showToolbar = candidates.length >= 2 || fileHasDraft || opensInBrowser;
 	const saveViewState = (state: unknown) => {
 		const current = useAppStore
 			.getState()
@@ -80,6 +85,7 @@ export function FilePane({ tab }: { tab: FileTab }) {
 					aria-label={t("panels.filePane.resourceView")}
 					className="flex h-32 shrink-0 items-center justify-end gap-4 border-border-default border-b bg-container-header-bg px-12"
 				>
+					<OpenInBrowserButton workspaceId={tab.workspaceId} path={tab.path} />
 					<SendReviewButton workspaceId={tab.workspaceId} path={tab.path} />
 					<RendererToggles
 						candidates={candidates}
@@ -104,10 +110,17 @@ export function FilePane({ tab }: { tab: FileTab }) {
 						mobile={mobile}
 						resource={resource}
 						content={content}
-						review={review.worktree}
+						{...(reviewable ? { review: review.worktree } : {})}
 						onPlacedThreadIds={onPlacedThreadIds}
 						viewState={tab.viewState}
 						onViewState={saveViewState}
+						{...(tab.reveal
+							? {
+									reveal: tab.reveal,
+									onRevealHandled: (tick: number) =>
+										useAppStore.getState().clearFileTabReveal(tab.workspaceId, tab.id, tick),
+								}
+							: {})}
 					/>
 				</Suspense>
 			</div>

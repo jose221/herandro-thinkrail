@@ -18,10 +18,10 @@ import { useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
 import { Textarea } from "@thinkrail/ui/textarea";
 import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { SettingsNotice } from "@/settingsKit";
 import { toast, useAppStore } from "@/store";
 import { getTransport } from "@/transport";
 import { fileName } from "../lib/utils";
-import { SettingsNotice } from "./SettingsNotice";
 
 const AcpAuthTerminal = lazy(() => import("./AcpAuthTerminal"));
 
@@ -297,7 +297,7 @@ export function AcpSettings() {
 						}}
 						data-testid="acp-start-timeout-input"
 						data-settings-draft-input
-						className="h-32 w-80 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default outline-none focus:border-control-border-active focus-visible:ring-2 focus-visible:ring-primary aria-invalid:border-feedback-error"
+						className="h-32 w-80 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default focus:border-control-border-active focus-visible:focus-ring aria-invalid:border-feedback-error"
 					/>
 					{startTimeoutInvalid ? (
 						<p

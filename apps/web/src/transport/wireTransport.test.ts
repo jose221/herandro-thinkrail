@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
 	CHANGE_MUTATIONS_PROTOCOL_VERSION,
 	HOST_UPDATE_RUN_PROTOCOL_VERSION,
+	KEYBINDINGS_PROTOCOL_VERSION,
 	PLAN_REVIEW_SUBAGENT_PROTOCOL_VERSION,
 	PLAN_SUMMARY_GENERATION_PROTOCOL_VERSION,
 	type Project,
@@ -19,11 +20,13 @@ import {
 	mergeSessionStateRecords,
 	supportsChangeMutations,
 	supportsHostUpdateRun,
+	supportsKeybindings,
 	supportsPlanReview,
 	supportsPlanSummaryGeneration,
 	supportsRichAnchors,
 	supportsToolResponses,
 	supportsUserThemes,
+	updateKeybindings,
 } from "./wireTransport";
 
 test("tool responses go to session.respondToTool only from a v93 host; older hosts take the ask answer", () => {
@@ -36,6 +39,47 @@ test("user theme files are read only from a host at or beyond their capability v
 	expect(supportsUserThemes(USER_THEMES_PROTOCOL_VERSION)).toBe(true);
 	expect(supportsUserThemes(USER_THEMES_PROTOCOL_VERSION - 1)).toBe(false);
 	expect(supportsUserThemes(null)).toBe(false);
+});
+
+test("keybindings are written only to a host at or beyond their capability version", () => {
+	expect(supportsKeybindings(KEYBINDINGS_PROTOCOL_VERSION)).toBe(true);
+	expect(supportsKeybindings(KEYBINDINGS_PROTOCOL_VERSION + 1)).toBe(true);
+	expect(supportsKeybindings(KEYBINDINGS_PROTOCOL_VERSION - 1)).toBe(false);
+	expect(supportsKeybindings(null)).toBe(false);
+});
+
+describe("updateKeybindings", () => {
+	const requests: [string, unknown][] = [];
+	let spy: ReturnType<typeof spyOn> | null = null;
+	beforeEach(() => {
+		requests.length = 0;
+		const transport = {
+			request: (method: string, params: unknown) => {
+				requests.push([method, params]);
+				return Promise.resolve({});
+			},
+		} as unknown as ReturnType<typeof wireTransport.getTransport>;
+		spy = spyOn(wireTransport, "getTransport").mockReturnValue(transport);
+		useAppStore.setState({ keybindingOverrides: {} });
+	});
+	afterEach(() => {
+		spy?.mockRestore();
+		useAppStore.setState({ protocolVersion: null, keybindingOverrides: {} });
+	});
+
+	test("refuses an older host without sending anything", async () => {
+		useAppStore.setState({ protocolVersion: KEYBINDINGS_PROTOCOL_VERSION - 1 });
+		expect(await updateKeybindings({ "search.open": ["Mod+Alt+KeyS"] })).toBe(false);
+		expect(requests).toEqual([]);
+	});
+
+	test("sends the whole map as one settings update and leaves the store to the broadcast", async () => {
+		useAppStore.setState({ protocolVersion: KEYBINDINGS_PROTOCOL_VERSION });
+		const keybindings = { "search.open": ["Mod+Alt+KeyS"], "tab.close": [] };
+		expect(await updateKeybindings(keybindings)).toBe(true);
+		expect(requests).toEqual([["settings.update", { config: { keybindings } }]]);
+		expect(useAppStore.getState().keybindingOverrides).toEqual({});
+	});
 });
 
 test("host update execution is offered only by a host at or beyond the v70 capability", () => {
@@ -147,6 +191,23 @@ describe("the reconnect workspace list refresh", () => {
 		const state = useAppStore.getState();
 		expect(state.workspaces.p1?.map((row) => row.id)).toEqual(["w1", "w-pushed"]);
 		expect(state.removedWorkspaceIds["w-pushed"]).toBeUndefined();
+	});
+
+	test("adds the chats the Chats container lists that this surface does not hold, never one it saw removed", () => {
+		const chat = (id: string): Workspace => ({ ...workspace(id), kind: "chat", branch: "" });
+		useAppStore.setState({
+			projects: [{ ...project("p1"), kind: "chats" }],
+			workspaces: { p1: [chat("c-held"), chat("c-gone")] },
+		});
+		useAppStore.getState().applyWorkspaceRemoved("p1", "c-deleted-here");
+		applyWorkspaceListRefresh(
+			"p1",
+			["c-held", "c-gone"],
+			[chat("c-held"), chat("c-elsewhere"), chat("c-deleted-here")],
+		);
+		const state = useAppStore.getState();
+		expect(state.workspaces.p1?.map((row) => row.id)).toEqual(["c-held", "c-elsewhere"]);
+		expect(state.removedWorkspaceIds["c-gone"]).toBe(true);
 	});
 
 	test("ignores a reply for a project that closed meanwhile", () => {

@@ -16,6 +16,7 @@ import {
 	resetConfigCache,
 	type SettingsPublisher,
 	setSettingsPublisher,
+	setSubagentEnabled,
 	updateConfig,
 } from "./settings";
 
@@ -109,22 +110,22 @@ test("ACP start timeout validates, persists, and publishes", () => {
 	expect(readFileSync(join(dataDir, "config.json"), "utf8")).toBe(before);
 });
 
-test.each([
-	true,
-	false,
-])("legacy analytics preference %s seeds selection without consent", (enabled) => {
-	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ analyticsEnabled: enabled }));
-	expect(getConfig()).toMatchObject({
-		analyticsEnabled: enabled,
-		analyticsConsentConfirmed: false,
-	});
-	updateConfig({ theme: "light" });
-	resetConfigCache();
-	expect(getConfig()).toMatchObject({
-		analyticsEnabled: enabled,
-		analyticsConsentConfirmed: false,
-	});
-});
+test.each([true, false])(
+	"legacy analytics preference %s seeds selection without consent",
+	(enabled) => {
+		writeFileSync(join(dataDir, "config.json"), JSON.stringify({ analyticsEnabled: enabled }));
+		expect(getConfig()).toMatchObject({
+			analyticsEnabled: enabled,
+			analyticsConsentConfirmed: false,
+		});
+		updateConfig({ theme: "light" });
+		resetConfigCache();
+		expect(getConfig()).toMatchObject({
+			analyticsEnabled: enabled,
+			analyticsConsentConfirmed: false,
+		});
+	},
+);
 
 test("new and malformed analytics config defaults off and unconfirmed", () => {
 	expect(getConfig()).toMatchObject({ analyticsEnabled: false, analyticsConsentConfirmed: false });
@@ -136,21 +137,24 @@ test("new and malformed analytics config defaults off and unconfirmed", () => {
 	expect(getConfig()).toMatchObject({ analyticsEnabled: false, analyticsConsentConfirmed: false });
 });
 
-test.each([
-	true,
-	false,
-])("explicit analytics choice %s persists and broadcasts atomically", (enabled) => {
-	const published: AppConfig[] = [];
-	setSettingsPublisher((config) => published.push(config));
-	updateConfig({ analyticsEnabled: enabled, analyticsConsentConfirmed: true });
-	expect(published).toHaveLength(1);
-	expect(published[0]).toMatchObject({
-		analyticsEnabled: enabled,
-		analyticsConsentConfirmed: true,
-	});
-	resetConfigCache();
-	expect(getConfig()).toMatchObject({ analyticsEnabled: enabled, analyticsConsentConfirmed: true });
-});
+test.each([true, false])(
+	"explicit analytics choice %s persists and broadcasts atomically",
+	(enabled) => {
+		const published: AppConfig[] = [];
+		setSettingsPublisher((config) => published.push(config));
+		updateConfig({ analyticsEnabled: enabled, analyticsConsentConfirmed: true });
+		expect(published).toHaveLength(1);
+		expect(published[0]).toMatchObject({
+			analyticsEnabled: enabled,
+			analyticsConsentConfirmed: true,
+		});
+		resetConfigCache();
+		expect(getConfig()).toMatchObject({
+			analyticsEnabled: enabled,
+			analyticsConsentConfirmed: true,
+		});
+	},
+);
 
 test("preference-only updates cannot infer expanded consent", () => {
 	updateConfig({ analyticsEnabled: true });
@@ -372,7 +376,10 @@ test("empty and multi-key valid updates persist and publish", () => {
 		defaultEffort: "high",
 		subagentsEnabled: false,
 	});
-	expect(JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8"))).toEqual(next);
+	expect(JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8"))).toEqual({
+		...next,
+		configVersion: 1,
+	});
 	expect(published).toEqual([DEFAULT_CONFIG, next]);
 });
 
@@ -426,6 +433,26 @@ test("agentReviewEnabled defaults off; an old config loads the default; toggling
 	expect(getConfig().agentReviewEnabled).toBe(true);
 	const invalid = { agentReviewEnabled: "nope" } as unknown as AppConfigUpdate;
 	expect(() => updateConfig(invalid)).toThrow("agentReviewEnabled must be a boolean");
+});
+
+test("otherAgentSkills is off for a new install, and every config it writes keeps it off", () => {
+	expect(DEFAULT_CONFIG.otherAgentSkills).toBe(false);
+	resetConfigCache();
+	expect(getConfig().otherAgentSkills).toBe(false);
+	updateConfig({ agentReviewEnabled: true });
+	resetConfigCache();
+	expect(getConfig().otherAgentSkills).toBe(false);
+});
+
+test("otherAgentSkills stays on for a config that predates it; opting out round-trips; non-boolean rejected", () => {
+	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ theme: "dark" }));
+	resetConfigCache();
+	expect(getConfig().otherAgentSkills).toBe(true);
+	expect(updateConfig({ otherAgentSkills: false }).otherAgentSkills).toBe(false);
+	resetConfigCache();
+	expect(getConfig().otherAgentSkills).toBe(false);
+	const invalid = { otherAgentSkills: 1 } as unknown as AppConfigUpdate;
+	expect(() => updateConfig(invalid)).toThrow("otherAgentSkills must be a boolean");
 });
 
 test("onboardingDismissed defaults off; an old config loads the default; dismissing round-trips; non-boolean rejected", () => {
@@ -496,6 +523,126 @@ test("a malformed disabled-extensions update is rejected; a malformed stored lis
 	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ disabledExtensions: "visualize" }));
 	resetConfigCache();
 	expect(getConfig().disabledExtensions).toEqual([]);
+});
+
+test("disabled subagents default empty, round-trip deduped, and keep unknown names", () => {
+	expect(DEFAULT_CONFIG.disabledSubagents).toEqual([]);
+	const published: AppConfigUpdate[] = [];
+	setSettingsPublisher((_config, applied) => published.push(applied));
+	expect(getConfig().disabledSubagents).toEqual([]);
+	const next = updateConfig({ disabledSubagents: ["scout", "retired", "scout"] });
+	expect(next.disabledSubagents).toEqual(["scout", "retired"]);
+	expect(published.at(-1)?.disabledSubagents).toEqual(["scout", "retired", "scout"]);
+	resetConfigCache();
+	expect(getConfig().disabledSubagents).toEqual(["scout", "retired"]);
+	expect(updateConfig({ disabledSubagents: [] }).disabledSubagents).toEqual([]);
+});
+
+test("a malformed disabled-subagents update is rejected; a malformed stored list keeps valid names", () => {
+	const published: AppConfig[] = [];
+	setSettingsPublisher((config) => published.push(config));
+	const before = getConfig();
+	for (const value of ["scout", [""], ["  "], [1], null]) {
+		const invalid = { disabledSubagents: value } as unknown as AppConfigUpdate;
+		expect(() => updateConfig(invalid)).toThrow("disabledSubagents must be a list of agent names");
+	}
+	expect(getConfig()).toEqual(before);
+	expect(published).toEqual([]);
+	expect(existsSync(join(dataDir, "config.json"))).toBe(false);
+
+	writeFileSync(
+		join(dataDir, "config.json"),
+		JSON.stringify({ disabledSubagents: ["scout", 3, "", "scout"] }),
+	);
+	resetConfigCache();
+	expect(getConfig().disabledSubagents).toEqual(["scout"]);
+	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ disabledSubagents: "scout" }));
+	resetConfigCache();
+	expect(getConfig().disabledSubagents).toEqual([]);
+});
+
+test("keybindings replace the whole map, keep unknown command ids and empty unbinds, and dedupe chords", () => {
+	expect(DEFAULT_CONFIG.keybindings).toEqual({});
+	const published: AppConfigUpdate[] = [];
+	setSettingsPublisher((_config, applied) => published.push(applied));
+	updateConfig({ keybindings: { "search.open": ["Mod+Alt+KeyS"] } });
+	const next = updateConfig({
+		keybindings: {
+			"group.splitRight": ["Ctrl+Alt+ArrowLeft", "Ctrl+Alt+ArrowLeft"],
+			"retired-extension.command": ["F6"],
+			"tab.close": [],
+		},
+	});
+	expect(next.keybindings).toEqual({
+		"group.splitRight": ["Ctrl+Alt+ArrowLeft"],
+		"retired-extension.command": ["F6"],
+		"tab.close": [],
+	});
+	expect(published.at(-1)?.keybindings?.["group.splitRight"]).toEqual([
+		"Ctrl+Alt+ArrowLeft",
+		"Ctrl+Alt+ArrowLeft",
+	]);
+	resetConfigCache();
+	expect(getConfig().keybindings).toEqual(next.keybindings);
+	expect(updateConfig({ keybindings: {} }).keybindings).toEqual({});
+});
+
+test("a malformed keybindings update is rejected whole with a code; nothing persists or publishes", () => {
+	const published: AppConfig[] = [];
+	setSettingsPublisher((config) => published.push(config));
+	const before = getConfig();
+	for (const value of [
+		null,
+		[],
+		{ "search.open": "Mod+KeyK" },
+		{ "search.open": ["Mod+k"] },
+		{ "search.open": ["Alt+Mod+KeyK"] },
+		{ "search.open": ["Mod+ShiftLeft"] },
+		{ "search.open": ["Mod+KeyK", 3] },
+		{ "": ["Mod+KeyK"] },
+	]) {
+		const invalid = { keybindings: value } as unknown as AppConfigUpdate;
+		let thrown: unknown;
+		try {
+			updateConfig(invalid);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toMatchObject({
+			code: "KEYBINDINGS_INVALID",
+			message: "keybindings must map command ids to lists of chords such as Mod+Alt+KeyS",
+		});
+	}
+	expect(getConfig()).toEqual(before);
+	expect(published).toEqual([]);
+	expect(existsSync(join(dataDir, "config.json"))).toBe(false);
+});
+
+test("stored keybindings drop malformed chords and entries but keep unknown ids and explicit unbinds", () => {
+	writeFileSync(
+		join(dataDir, "config.json"),
+		JSON.stringify({
+			keybindings: {
+				"search.open": ["Mod+KeyK", "mod+k", "Mod+KeyK", 7],
+				"retired.command": ["Mod+Shift+KeyR"],
+				"tab.close": [],
+				"view.files": ["Shift+Mod+KeyE"],
+				"view.changes": "Mod+Shift+KeyG",
+				" ": ["F6"],
+			},
+		}),
+	);
+	resetConfigCache();
+	expect(getConfig().keybindings).toEqual({
+		"search.open": ["Mod+KeyK"],
+		"retired.command": ["Mod+Shift+KeyR"],
+		"tab.close": [],
+	});
+	for (const stored of [null, ["Mod+KeyK"], "Mod+KeyK"]) {
+		writeFileSync(join(dataDir, "config.json"), JSON.stringify({ keybindings: stored }));
+		resetConfigCache();
+		expect(getConfig().keybindings).toEqual({});
+	}
 });
 
 test("extension settings merge per extension and key, persist, and drop non-boolean stored values", () => {
@@ -690,15 +837,17 @@ test("line-width fields default independently when an older or malformed config 
 			fileLineWidth: 180,
 			chatLineWidthBounded: "yes",
 			fileLineWidthBounded: false,
+			voiceInputEnabled: "no",
 		}),
 	);
 	resetConfigCache();
 
 	expect(getConfig()).toMatchObject({
-		chatLineWidth: 120,
+		chatLineWidth: 80,
 		fileLineWidth: 180,
 		chatLineWidthBounded: true,
 		fileLineWidthBounded: false,
+		voiceInputEnabled: true,
 	});
 });
 
@@ -710,6 +859,7 @@ test("invalid line-width updates are rejected before persistence or broadcast", 
 		{ fileLineWidth: Number.POSITIVE_INFINITY },
 		{ chatLineWidthBounded: "true" },
 		{ fileLineWidthBounded: 1 },
+		{ voiceInputEnabled: "off" },
 	];
 
 	for (const update of invalidUpdates) {
@@ -724,6 +874,60 @@ test("invalid line-width updates are rejected before persistence or broadcast", 
 		expect(published).toEqual([]);
 		expect(existsSync(join(dataDir, "config.json"))).toBe(false);
 	}
+});
+
+test("the question panel height persists a whole percent from 40 to 100 and rejects the rest", () => {
+	expect(updateConfig({ questionPanelHeight: 85 }).questionPanelHeight).toBe(85);
+	for (const questionPanelHeight of [39, 101, 72.5, "60"]) {
+		const before = getConfig();
+		expect(() => updateConfig({ questionPanelHeight } as unknown as AppConfigUpdate)).toThrow(
+			"questionPanelHeight must be a whole number from 40 to 100",
+		);
+		expect(getConfig()).toEqual(before);
+	}
+});
+
+test("an older or malformed config loads the default question panel height", () => {
+	writeFileSync(
+		join(dataDir, "config.json"),
+		JSON.stringify({ ...DEFAULT_CONFIG, questionPanelHeight: 150 }),
+	);
+	resetConfigCache();
+	expect(getConfig().questionPanelHeight).toBe(70);
+
+	const { questionPanelHeight: _omitted, ...older } = DEFAULT_CONFIG;
+	writeFileSync(join(dataDir, "config.json"), JSON.stringify(older));
+	resetConfigCache();
+	expect(getConfig().questionPanelHeight).toBe(70);
+	expect(getConfig()).toEqual(DEFAULT_CONFIG);
+});
+
+test("the old default question panel height 60 becomes 70 once; any other stored height is kept", () => {
+	const stored = (config: Record<string, unknown>) => {
+		writeFileSync(join(dataDir, "config.json"), JSON.stringify(config));
+		resetConfigCache();
+		return getConfig();
+	};
+	const onDisk = () => JSON.parse(readFileSync(join(dataDir, "config.json"), "utf8"));
+
+	expect(stored({ ...DEFAULT_CONFIG, questionPanelHeight: 60 }).questionPanelHeight).toBe(70);
+	expect(stored({ ...DEFAULT_CONFIG, questionPanelHeight: 55 }).questionPanelHeight).toBe(55);
+	expect(stored({ ...DEFAULT_CONFIG, questionPanelHeight: 100 }).questionPanelHeight).toBe(100);
+	expect(stored({ theme: "dark" }).questionPanelHeight).toBe(70);
+
+	stored({ ...DEFAULT_CONFIG, questionPanelHeight: 60 });
+	updateConfig({ theme: "acme.dark" });
+	expect(onDisk()).toMatchObject({ questionPanelHeight: 70, configVersion: 1 });
+	expect(getConfig()).not.toHaveProperty("configVersion");
+
+	updateConfig({ questionPanelHeight: 60 });
+	expect(onDisk()).toMatchObject({ questionPanelHeight: 60, configVersion: 1 });
+	resetConfigCache();
+	expect(getConfig().questionPanelHeight).toBe(60);
+	expect(getConfig()).not.toHaveProperty("configVersion");
+	updateConfig({ theme: "acme.light" });
+	resetConfigCache();
+	expect(getConfig().questionPanelHeight).toBe(60);
 });
 
 test("a non-boolean subagents update is rejected before persistence or broadcast", () => {
@@ -852,6 +1056,7 @@ test("loadConfig ignores the old layout settings object", () => {
 	expect(getConfig()).toEqual({
 		...DEFAULT_CONFIG,
 		theme: "acme.persisted",
+		otherAgentSkills: true,
 	});
 });
 
@@ -1090,4 +1295,35 @@ test("invalid font updates are rejected before persistence or broadcast", () => 
 	expect(getConfig()).toEqual(before);
 	expect(published).toEqual([]);
 	expect(existsSync(join(dataDir, "config.json"))).toBe(false);
+});
+
+test("per-name subagent intents merge against live state, retain unknown names and persist", async () => {
+	updateConfig({ disabledSubagents: ["temporarily-missing"] });
+	const published: AppConfig[] = [];
+	setSettingsPublisher((config) => published.push(config));
+	await Promise.all([
+		Promise.resolve().then(() => setSubagentEnabled("scout", false)),
+		Promise.resolve().then(() => setSubagentEnabled("worker", false)),
+	]);
+	expect(published.map((config) => config.disabledSubagents)).toEqual([
+		["temporarily-missing", "scout"],
+		["temporarily-missing", "scout", "worker"],
+	]);
+	resetConfigCache();
+	expect(getConfig().disabledSubagents).toEqual(["temporarily-missing", "scout", "worker"]);
+	setSubagentEnabled("scout", false);
+	expect(getConfig().disabledSubagents).toEqual(["temporarily-missing", "worker", "scout"]);
+	setSubagentEnabled("worker", true);
+	setSubagentEnabled("unknown-role", false);
+	expect(getConfig().disabledSubagents).toEqual(["temporarily-missing", "scout", "unknown-role"]);
+});
+
+test("failed per-name persistence leaves the live cache and publisher unchanged", () => {
+	const before = getConfig();
+	const published: AppConfig[] = [];
+	setSettingsPublisher((config) => published.push(config));
+	mkdirSync(join(dataDir, "config.json"));
+	expect(() => setSubagentEnabled("scout", false)).toThrow();
+	expect(getConfig()).toBe(before);
+	expect(published).toEqual([]);
 });

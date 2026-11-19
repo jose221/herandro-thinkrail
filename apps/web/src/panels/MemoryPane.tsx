@@ -37,7 +37,7 @@ const VERDICT_KEYS: Record<MemoryAnalysis["verdict"], MessageKey> = {
 };
 
 const INPUT_CLASS =
-	"min-h-28 min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default outline-none placeholder:text-text-muted focus-visible:border-control-border-active";
+	"min-h-28 min-w-0 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default placeholder:text-text-muted focus-visible:border-control-border-active focus-visible:focus-ring";
 
 interface Point {
 	at: number;

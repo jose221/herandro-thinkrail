@@ -34,7 +34,7 @@ choice was settled: the decision log below.
   Default and legacy factories own their completion lifetime per factory invocation: reload ends that
   lifetime, while parent-turn abort does not. Late tool updates are dropped by Pi after the tool returns.
 - `createSubagentsExtension(options?)` — the compatible runner-scoped extension factory. Options include
-  `service?`, `delegationRoot?`, `scope?`, `isEnabled?`, and `canDeliverCompletion?`.
+  `service?`, `delegationRoot?`, `scope?`, `isEnabled?`, `isAgentEnabled?(name)`, and `canDeliverCompletion?`.
 - `createSubagents(options: SubagentsExtensionOptions & { service: DelegationService })` — an explicitly
   retained, portable parent owner exposing only `extension`, `flushCompletions({ atTurnEnd? })` and
   synchronous `dispose()`. Its injected service remains embedder-owned. One immutable parent identity is established
@@ -51,6 +51,13 @@ choice was settled: the decision log below.
   that unstarted child before rejecting. `canDeliverCompletion` defaults to true and temporarily gates
   both transcript append and automatic wake-up, without closing the owner or losing pending outcomes.
   An embedder flushes after a provisional deletion rolls back or registration becomes addressable.
+- `isAgentEnabled(name)` defaults to true. It filters the per-turn advertised definition snapshot and is
+  checked live before assembly, after asynchronous child setup (a newly disabled unstarted child is
+  disposed) and when a run leaves the concurrency queue (its first `onUpdate`, the `running` transition):
+  a disabled role is then cancelled through `ChildHandle.abort` with reason `Subagent "<name>" is
+  disabled.` before any provider work — a foreground call rejects with that message, a background run
+  completes `aborted` with it as `abortReason`. Every refusal uses that message. Definition/model pins
+  remain snapshotted; availability is live. Running children and completion delivery are unaffected.
 - `SUBAGENT_COMPLETION_MESSAGE` — the custom-message type the web's background result row keys on;
   `SubagentCompletionDetails` (the run's `DelegationRunDetails` plus `delivery: CompletionDelivery` —
   `wake` | `run` | `appended`, see Result delivery), mirrored into `@thinkrail/contracts`.
@@ -127,7 +134,7 @@ committing, git-read stays open. User-authored definitions keep the community `.
 (`name`, `description`, `tools`, `model`, `thinking`, `max_turns`, `inherit_project_context`,
 `skills`, `extensions`; body = system prompt). Malformed files are skipped, never fatal. All four
 builtins set `extensions: true` (the embedder's curated child set — inert under pure-pi
-zero-config) with the spec READ tools (`spec_grep`/`spec_get`/`spec_graph`) allowlisted for the
+zero-config) with the spec READ tools (`spec_search`/`spec_grep`/`spec_get`/`spec_graph`) allowlisted for the
 read-only roles and web tools (`web_search`/`fetch_content`) for the scout. The reviewer alone opts
 into project context: its judgment depends on repository guidance, and its prompt admits only
 material, reachable, unmitigated findings attributed to the named target. It must falsify candidate
@@ -141,6 +148,11 @@ The effective reference follows definition pin → invocation model → parent i
 the invocation reference, including its thinking suffix, without resolving it. References resolve
 against the session's available models (`provider/id` → exact id → unique prefix); no provider
 substitution, custom model synthesis or parent fallback is permitted for an unresolved selection.
+The invocation words `inherit`, `parent` and `default` (any case) are the parent-inheritance spelling
+models carry over from Claude Code. They and a blank value (empty or whitespace only) count as no
+invocation model and are never looked up: a word cannot name a model, and `""` cannot prefix-match
+every model and fail as ambiguous (#1352). Other invocation values are looked up as sent, surrounding
+whitespace included. A definition pin is not reinterpreted; the frontmatter parser drops a blank `model`.
 
 Both definition and invocation model references accept one final `:<thinking>` suffix: `off`,
 `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Whole-reference resolution always comes first:
@@ -148,7 +160,9 @@ existing literal colon IDs and unique prefixes keep their meaning, and ambiguity
 a stripped reference. Only a missing whole reference permits suffix parsing; its nonempty base must
 resolve under the same rules, with no recursive stripping. Unknown suffixes remain literal unresolved
 references, with a syntax hint rather than silent default thinking. Missing and ambiguous selections
-have distinct diagnostics; provider qualification is suggested only for ambiguity. The exported
+have distinct diagnostics; provider qualification is suggested only for ambiguity. A missing
+selection lists the first 20 available `provider/id` refs, and a missing invocation reference also
+says that leaving `model` out uses the parent's model, so the next call can succeed. The exported
 `resolveModelRef` remains identity-only and does not interpret suffixes.
 
 Thinking precedence is explicit definition `thinking` → suffix on the winning reference → live parent.

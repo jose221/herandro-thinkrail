@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { hideAuxiliaryWorkbench, openWorkspaceChat, PHONE_VIEWPORT } from "./fixtures/app";
+import {
+	closeSettings,
+	hideAuxiliaryWorkbench,
+	openSettingsSection,
+	openWorkspaceChat,
+	PHONE_VIEWPORT,
+} from "./fixtures/app";
 
 async function box(locator: import("@playwright/test").Locator) {
 	const value = await locator.boundingBox();
@@ -106,8 +112,7 @@ test("half-chat growth caps the editor shell and scrolls the textarea", async ({
 test("chat growth setting persists and compact means six visual lines", async ({ page }) => {
 	await page.goto("/");
 	await expect(page.getByTestId("connection-status")).toHaveAttribute("data-status", "connected");
-	await page.getByTestId("open-settings").click();
-	await page.getByTestId("settings-nav-chat").click();
+	await openSettingsSection(page, "chat");
 
 	const compact = page.getByTestId("composer-growth-compact");
 	const roomy = page.getByTestId("composer-growth-roomy");
@@ -120,10 +125,9 @@ test("chat growth setting persists and compact means six visual lines", async ({
 
 	await page.reload();
 	await expect(page.getByTestId("connection-status")).toHaveAttribute("data-status", "connected");
-	await page.getByTestId("open-settings").click();
-	await page.getByTestId("settings-nav-chat").click();
+	await openSettingsSection(page, "chat");
 	await expect(compact).toHaveAttribute("data-active", "true");
-	await page.keyboard.press("Escape");
+	await closeSettings(page);
 
 	await openWorkspaceChat(page);
 	const input = page.getByTestId("chat-input");
@@ -140,10 +144,10 @@ test("chat growth setting persists and compact means six visual lines", async ({
 	expect(lines).toBeGreaterThanOrEqual(5.9);
 	expect(lines).toBeLessThanOrEqual(6.1);
 
-	await page.getByTestId("open-settings").click();
-	await page.getByTestId("settings-nav-chat").click();
+	await openSettingsSection(page, "chat");
 	await half.click();
 	await expect(half).toHaveAttribute("data-active", "true");
+	await closeSettings(page);
 });
 
 test("compact phone controls remain inside the chat viewport", async ({ page }) => {
@@ -177,4 +181,51 @@ test("compact phone controls remain inside the chat viewport", async ({ page }) 
 	expect((await box(page.getByTestId("model-selector"))).y).toBeGreaterThanOrEqual(
 		inputBox.y + inputBox.height,
 	);
+});
+
+test("pressing composer padding focuses the input without stealing control clicks", async ({
+	page,
+}) => {
+	await openWorkspaceChat(page);
+
+	const input = page.getByTestId("chat-input");
+	const model = page.getByTestId("model-selector");
+	const history = page.getByTestId("history-open");
+	const modelBox = await box(model);
+	const historyBox = await box(history);
+	const sendBox = await box(page.getByTestId("chat-send"));
+	const footerGap = {
+		x: (modelBox.x + modelBox.width + historyBox.x) / 2,
+		y: modelBox.y + modelBox.height / 2,
+	};
+	const presses = [
+		footerGap,
+		{ x: footerGap.x, y: modelBox.y - 2 },
+		{ x: historyBox.x + historyBox.width + 2, y: historyBox.y + historyBox.height / 2 },
+		{ x: sendBox.x + sendBox.width / 2, y: sendBox.y + sendBox.height / 2 },
+	];
+	for (const { x, y } of presses) {
+		await input.blur();
+		await expect(input).not.toBeFocused();
+		await page.mouse.click(x, y);
+		await expect(input).toBeFocused();
+	}
+
+	await input.fill("draft");
+	await input.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(2, 2));
+	await input.blur();
+	await page.mouse.click(footerGap.x, footerGap.y);
+	await expect(input).toBeFocused();
+	expect(await input.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(2);
+
+	await input.blur();
+	await model.click();
+	const refresh = page.getByTestId("model-refresh");
+	await expect(refresh).toBeVisible();
+	await expect(input).not.toBeFocused();
+	const popover = refresh.locator("xpath=ancestor::*[@data-radix-popper-content-wrapper]");
+	const popoverBox = await box(popover);
+	await page.mouse.click(popoverBox.x + 2, popoverBox.y + 2);
+	await expect(input).not.toBeFocused();
+	await expect(refresh).toBeVisible();
 });

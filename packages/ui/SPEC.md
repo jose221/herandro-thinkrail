@@ -17,8 +17,33 @@ feature state, theme selection, and token generation stay with the app.
 
 Primitives expose per-file `@thinkrail/ui/<primitive>` subpaths, not a root component barrel; this keeps
 lazy chunks independent and preserves the shadcn convention. `./utils` exposes `cn`; `./keyboard` exposes
-`isImeComposing`, `yieldEscapeToIme` and the platform modifier (`isApplePlatform`, `hasPlatformModifier`:
-Cmd on Apple, Ctrl elsewhere — shared so the app's shortcuts and an extension's card read one definition); `./theme` exposes
+`isImeComposing`, `yieldEscapeToIme`, the platform modifier (`isApplePlatform`, `hasPlatformModifier`:
+Cmd on Apple, Ctrl elsewhere — shared so the app's shortcuts and an extension's card read one definition)
+and the pure chord primitives: `chordPressed(chord, event, platform, { ignoreShift })` (physical `code`
+or typed key, exact modifiers, `Mod` = ⌘ on Apple and Ctrl elsewhere, no Alt chord under AltGraph off
+Apple — the app's keybinding matcher delegates to it, so the two cannot drift), `chordCaps`, `keyCap`,
+`codeLabel` (a code's US label), `ariaKeyShortcuts(chords, platform)` (one platform's modifier names, never
+Meta and Control both; the numpad Enter reads `Enter`, so a pair announces once), `isTypingChord`, `ARROW_TWIN_COMMANDS` (`arrows.left/down/up/right`, H/J/K/L
+by `code`, in shared scope `ARROW_TWINS_SCOPE`) and `twinArrow(id)` (the arrow a matched twin stands for). `./local-keys` is the seam an element matches its
+rebindable local keys through, whoever renders it (the app, resource renderers, an extension card):
+`useLocalKeys(scope, defaults)` returns `{ match(event, { ignoreShift, textEntry }), caps(id), label(id),
+aria(...ids) }` (`label` joins the caps the platform's way, `""` when unbound; `aria` lists every chord of
+the ids for `aria-keyshortcuts`) over the
+effective chords `LocalKeymapProvider` supplies (the app's resolved table), or over `defaults` when no
+provider is mounted or it lacks the scope — the `./fonts` pattern of a host-published signal with a
+standalone default. `match` returns the first exact match; `ignoreShift` only adds a fallback after it —
+a shifted press may match a chord that does not require Shift — so a binding that requires Shift keeps
+it and never shadows the exact match of its unshifted twin (`chordPressed`'s `ignoreShift` relaxes Shift
+the same one way). `match` ignores an IME composition and a typing chord in text entry (the provider's
+`isTextEntry`, else inputs and contenteditable — `textEntry` overrides that verdict for a caller that
+knows a press edits nothing, as the history search's `Delete` at the end of its query); `defaults` must be a stable module constant. `./focus` exposes
+the one tabbable-control selector (`TABBABLE_SELECTOR`, which includes a `<details>` element's own
+`<summary>`, natively tabbable), `focusFirstControl(container)` (the first
+control, focused with `preventScroll`), shared by the app's focus recovery and reveal moves and the
+resource renderers' reveal of a comment card, and `focusAndReveal(element)` — focus with `preventScroll`,
+then scroll only the nearest vertically scrolling ancestor just enough (`revealDelta`, the outline
+included) to show it, never `scrollIntoView`'s every ancestor — which the ask card, the chat and the
+shell's Esc landing use for a waiting question's controls (`scrollsVertically` is its scroller test); `./theme` exposes
 only `onThemeSwap`, a DOM MutationObserver subscription to the completed `data-theme` signal, with
 explicit cleanup. It knows nothing about the theme catalog or preferences. `./fonts` is the same seam for
 the font settings: `onFontsChange` / `fontsRevision` over the `data-fonts` signal, `resolveFont(className)`
@@ -77,17 +102,17 @@ test's documented specialized list names it.
   size to content unless the layout asks for `w-full`.
 - **States** live in the component, not at the call site: hover uses the variant's hover role
   (soft-primary: `control-soft-primary-bg-hovered` plus a `primary-muted` border, so its accent label
-  stays AA); pressed (`:active`, pointer down or Space held) looks exactly like hover — the same `active:` classes mirror the `hover:` ones, so a keyboard press without a pointer shows it too — and never moves geometry; focus-visible is a 2px `primary` outline with a 2px offset in every variant, so
+  stays AA); pressed (`:active`, pointer down or Space held) looks exactly like hover — the same `active:` classes mirror the `hover:` ones, so a keyboard press without a pointer shows it too — and never moves geometry; focus-visible is the shared `focus-ring` (1px `focus-ring` outline, 1px outside) in every variant, so
   it stays visible over a primary or destructive fill and on every surface (`ghost`, which has no surface
   of its own, also takes its hover fill and default text while focused, so the focused button reads as a
-  control and not only as a ring around empty space) — except a `ghost` icon-only button, which draws the
-  ring 2px inside its square, because those sit flush in 28px header strips and rails whose
+  control and not only as a ring around empty space) — except a `ghost` icon-only button, which takes
+  `focus-ring-inset`, because those sit flush in 28px header strips and rails whose
   `overflow: hidden` would clip an outer ring; disabled keeps the element in
   place on the `control-disabled-*` / `control-primary-disabled-*` / `control-destructive-disabled-*` roles
   (never opacity, never hidden) through the `button-disabled` variant the app stylesheet defines — a
   `data-disabled` element, or a natively `:disabled` one that is not loading, so a button inside a disabled
   `<fieldset>` takes the skin too; `loading` swaps the icon (with `spinIcon`, it instead rotates the button's own icon in place — the refresh idiom of `apps/web/src/components` *Loading vocabulary* — and under reduced motion shows the static spinner glyph instead, so the state stays visible) (or, with no icon, overlays the label it keeps
-  transparent for width and the accessible name) for a spinner at the size's icon size, sets `aria-busy`, and natively disables the
+  transparent for width and the accessible name) for a spinner at the size's icon size, sets `aria-busy` (a caller's own `aria-busy` survives on a button that is not loading — the busy-but-clickable mic), and natively disables the
   element so the action cannot run twice; `selected` — or an open Radix trigger (`data-state="open"`) — is
   the persistent toggle/open fill (`control-bg-selected`) for `outline` and `ghost`, distinct from pressed;
   `soft-primary` shows selected as its hover look (`primary-muted` border on the hover tint), the one
@@ -116,17 +141,19 @@ test's documented specialized list names it.
 The per-file surface is `button`, `switch`, `dialog`, `dropdown-menu`, `context-menu`, `menu-styles`,
 `popover`, `command` (cmdk combobox body), `textarea`, `tooltip`, `resizable`, `toast`, `toggle-segment`
 (the slim header toggle: active segment on `control-bg-selected` + `text-default`, `data-active` /
-`aria-pressed`), `skeleton` (`SkeletonRows` / `LoadingRegion`, the one loading placeholder; its usage rules
+`aria-pressed`, and an explicit `tabIndex={0}` because the macOS WKWebView skips a `<button>` without one
+on Tab), `skeleton` (`SkeletonRows` / `LoadingRegion`, the one loading placeholder; its usage rules
 live in the web components spec), and `attention-line` (`AttentionLine`, the "Your input is needed · Agent is
 waiting" line; `announced` hides the visible line from assistive tech once the always-mounted polite
-region carries the announcement, `live={false}` drops the region), alongside `utils`, `keyboard`, `theme` and `fonts`.
+region carries the announcement, `announcement` replaces its default text, `live={false}` drops the region), and `keycaps` (`Keycaps`, a row of
+`<kbd>` caps for already-formatted key labels, a repeated key such as double Shift included), alongside `utils`, `keyboard`, `local-keys`, `theme` and `fonts`.
 `menu-styles` is shared by the menu primitives and custom app menu rows. `toggle-segment` and `skeleton`
 moved here from the app when the resource renderers became a package, because both the app and
 [[module-resource-renderers]] use them; `attention-line` moved for the same reason when the
 `ask_user_question` card became an extension web half, because the app's extension prompts use it too.
 
 - Switch exposes native disabled behavior and `role="switch"`/`aria-checked`, not visible On/Off
-  text. Every modal dialog's overlay carries `data-modal-layer`, and `useModalLayerOpen()` reports whether one is open: it lets callers tell "covered by a modal" from their own visibility without a dialog registry, independent of how `aria-hidden` treats live regions. Dialog accepts `hideClose` for chromeless surfaces. `DialogPanel` renders Radix content in place
+  text. Every modal dialog's overlay carries `data-modal-layer`, and `useModalLayerOpen()` reports whether one is open: it lets callers tell "covered by a modal" from their own visibility without a dialog registry, independent of how `aria-hidden` treats live regions. Dialog accepts `hideClose` for chromeless surfaces. `DialogContent` contains what it holds: width and max height keep a window gutter, the body scrolls by default, long text wraps, and `DialogFooter` wraps its actions and then their labels (a footer `Button` grows past its fixed height only then). A caller adding a pinned footer scrolls an inner `min-h-0 flex-1` body; one portalling popovers into the content element sets `overflow-visible` and scrolls an inner body. An inner scroll body is `relative`: otherwise an absolutely positioned descendant (an `sr-only` label) takes the dialog as its containing block and stretches the dialog's own scroll area, giving it a second scrollbar. Flex rows of data still need `min-w-0`. `DialogPanel` renders Radix content in place
   without a portal or overlay for caller-positioned, non-modal dialogs; title/role semantics, Escape
   dismissal, and focus return remain Radix-owned while surrounding UI stays interactive.
 - **An active IME owns the key** ([[module-web]]'s text-field rule). `isImeComposing` is `isComposing`
@@ -151,22 +178,35 @@ moved here from the app when the resource renderers became a package, because bo
   an open tooltip is the topmost dismissable layer and would swallow the Escape meant for the dialog. For
   the same reason an open `IconTooltip` closes itself synchronously on Escape in a window capture
   listener, before Radix's document-level layer handling, so one Escape dismisses the tooltip *and* the
-  dialog, popover or menu beneath it. Tooltip content stacks at `z-150`, above dialogs and the toast
+  dialog, popover or menu beneath it. An optional `shortcut` (pre-formatted caps — the tooltip never
+  formats a chord, the app passes its own labels) renders as `Keycaps` after the label; `Button` and
+  `IconButton` forward it as `tooltipShortcut`. Tooltip content stacks at `z-150`, above dialogs and the toast
   viewport (`z-[100]`), so a toast's own close tooltip is never painted under the toast.
 - Context and dropdown menus share menu geometry and token classes: content surface, radius/shadow,
   item/icon spacing, separators, semantic action colors, focus rows, and viewport collision behavior.
   Context menus add pointer-position right-click/touch long-press anchoring; features own enabled gestures
-  and actions. Dropdowns are vertically bounded by the smaller of 60vh and Radix's available height,
-  scrollable with horizontal overflow hidden so long rows truncate rather than scroll.
+  and actions — a trigger opts into the keyboard gesture (Context Menu key or Shift+F10, anchored below the
+  trigger) by passing `openContextMenuFromKeyboard` as its `onKeyDown`. `isContextMenuKey` is that
+  gesture's one predicate: a row whose menu is a controlled dropdown opens it on the same keys. Each opener
+  is explicit because macOS WebKit synthesizes no `contextmenu` event from Shift+F10. Dropdowns are vertically bounded by
+  the smaller of 60vh and Radix's available height, scrollable with horizontal overflow hidden so long rows
+  truncate rather than scroll.
 - Toast exposes `ToastProvider`/`Toast`/`ToastViewport`/`ToastTitle`/`ToastDescription`/`ToastAction`/
   `ToastClose` and `toastVariants` (`error`/`success`/`warning`/`info`). Severity is a uniform semantic
   border (`border-feedback-*-muted`) on a neutral `bg-container-elevated-bg` background. `ToastAction` is
   unstyled: the caller supplies the control through `asChild`. Queue ownership, icons, and notification
   lifetimes stay in the app (`panels/Toaster` composes the primitives).
+- `DialogContent` and `DialogPanel` stay open for a press that began in the toast viewport (the viewport
+  records its `pointerdown`s; `isToastPress` reads them) and for focus landing in the viewport, so a toast's
+  action or close works over a dialog. Radix would do this through its
+  dismissable-layer branch, but the dialog and the toast resolve different copies of that module; the
+  dialog's copy also defers an outside press to its `click`, by when a closed toast is already detached,
+  so the record is per event, not per element. Unifying the copies is not the fix: Radix then makes each
+  toast the topmost layer, and the first Escape would close an error toast instead of the dialog.
 - Resizable handles paint a 1 px line at their leading edge; the pointer hit area extends only into the
   following panel (fine-pointer margin 1 px), so the preceding panel's trailing-edge scrollbar stays
   usable. There is no grip variant.
 - Primitives use only the host's token utilities, never shadcn's default oklch palette.
 
-Code highlighting is deliberately absent: `CodeBlock` and shiki depend on the app's theme registration
+Code highlighting is deliberately absent: `CodeBlock` and its highlighter depend on the app's theme registration
 and remain app-local until a second extension requires that seam.

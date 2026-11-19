@@ -2,8 +2,9 @@ import type { OpenBranchReview, Project, Workspace } from "@thinkrail/contracts"
 import { useNow } from "../../components/useNow";
 import type { BranchFacts } from "../../panels/branchStatusState";
 import { resolveBranchReview } from "../../panels/useBranchStatus";
-import { useAppStore } from "../../store";
+import { isChatWorkspace, useAppStore } from "../../store";
 import { BranchSegment } from "./BranchSegment";
+import { ChatSegment } from "./ChatSegment";
 import { ProjectSegment } from "./ProjectSegment";
 import { ShipStrip } from "./ShipSegments";
 import { useActiveWorkspaceSettled, WorkspaceSegment } from "./WorkspaceSegment";
@@ -15,6 +16,7 @@ export function LocationBar({
 	branchStatus,
 	noteOpenReview,
 	refreshBranchStatus,
+	newWorkspaceShortcut,
 	onNewWorkspace,
 }: {
 	project: Project;
@@ -23,6 +25,7 @@ export function LocationBar({
 	branchStatus: BranchFacts | null;
 	noteOpenReview: (review: OpenBranchReview, url?: string) => void;
 	refreshBranchStatus: () => void;
+	newWorkspaceShortcut: string;
 	onNewWorkspace: () => void;
 }) {
 	const workspaceSettlingSupported = useAppStore((state) => state.workspaceSettlingSupported);
@@ -30,6 +33,18 @@ export function LocationBar({
 	const settled = useActiveWorkspaceSettled(workspace, now);
 	const resolvedReview = resolveBranchReview(review, workspace?.review, workspaceSettlingSupported);
 	const shownReview = resolvedReview.review;
+	if (workspace && isChatWorkspace(workspace)) {
+		return (
+			<div
+				data-testid="scope-context"
+				data-context="chat"
+				className="flex min-w-0 flex-1 items-stretch self-stretch overflow-hidden"
+			>
+				<ProjectSegment project={project} atHome={false} />
+				<ChatSegment workspace={workspace} />
+			</div>
+		);
+	}
 	return (
 		<div
 			data-testid="scope-context"
@@ -42,6 +57,7 @@ export function LocationBar({
 				workspace={workspace}
 				activeSettled={settled}
 				now={now}
+				newWorkspaceShortcut={newWorkspaceShortcut}
 				onNewWorkspace={onNewWorkspace}
 			/>
 			{workspace ? (

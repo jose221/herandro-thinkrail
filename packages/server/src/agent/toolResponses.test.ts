@@ -74,7 +74,12 @@ function composeAsk(waiters: ToolResponseWaiters): {
 		extension &&
 		extensionSessionServices(extension, {
 			...services,
-			workspaceFiles: { check: async () => {}, scratchDir: "" },
+			workspaceFiles: {
+				check: async () => {},
+				ensureArtifactsDir: async () => {},
+				scratchDir: "",
+				artifactsDir: "",
+			},
 		});
 	for (const factory of (session && extension?.sessionExtensions?.(session)) ?? []) factory(pi);
 	if (!tool) throw new Error("the ask-user-question extension registered no tool");
@@ -581,7 +586,7 @@ test("supersede never reverses a response that was already accepted", async () =
 test("supersede leaves a stopped call stopped", async () => {
 	const waiters = createToolResponseWaiters();
 	waiters.expect("tc-stopped");
-	waiters.prepareAbort();
+	await waiters.prepareAbort();
 	expect(waiters.supersede()).toBe(false);
 	await expect(waiters.wait("tc-stopped", undefined)).rejects.toThrow(TOOL_RESPONSE_STOPPED_ERROR);
 	waiters.persistTurn([]);

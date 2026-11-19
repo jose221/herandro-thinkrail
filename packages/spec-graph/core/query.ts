@@ -41,7 +41,14 @@ export function formatGrepMatch(match: GrepMatch): string {
 
 export const DEFAULT_GREP_LIMIT = 200;
 
-function matchesFilters(fm: Frontmatter, filters: SpecFilters): boolean {
+export const TASK_SPEC_TYPE = "task-spec";
+
+export function isRetiredTaskSpec(fm: Frontmatter): boolean {
+	return scalar(fm, FIELDS.type) === TASK_SPEC_TYPE && scalar(fm, FIELDS.status) === "done";
+}
+
+export function matchesFilters(fm: Frontmatter, filters: SpecFilters): boolean {
+	if (filters.type !== TASK_SPEC_TYPE && isRetiredTaskSpec(fm)) return false;
 	if (filters.type !== undefined && scalar(fm, FIELDS.type) !== filters.type) return false;
 	if (filters.parent !== undefined && scalar(fm, FIELDS.parent) !== filters.parent) return false;
 	if (filters.tag !== undefined && !list(fm, FIELDS.tags).includes(filters.tag)) return false;
@@ -77,7 +84,7 @@ export function grepSpecs(entries: SpecContentEntry[], opts: GrepOptions): GrepR
 		if (!matchesFilters(entry.frontmatter, opts)) continue;
 		const lines = entry.content.split("\n");
 		for (let i = 0; i < lines.length; i++) {
-			const raw = (i === 0 ? (lines[0]?.replace(/^\ufeff/, "") ?? "") : (lines[i] ?? "")) as string;
+			const raw = i === 0 ? (lines[0]?.replace(/^\ufeff/, "") ?? "") : (lines[i] ?? "");
 			const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
 			if (matcher(line)) {
 				if (skipped < offset) {
@@ -126,12 +133,17 @@ export function graphSlice(graph: SpecGraph, opts: SliceOptions): GraphSlice {
 	const seenEdges = new Set<string>();
 	const missing = new Set<string>();
 
+	const retired = (id: string): boolean => {
+		const node = graph.nodes.get(id);
+		return id !== opts.root && node !== undefined && isRetiredTaskSpec(node.frontmatter);
+	};
 	const walk = (next: (id: string) => { to: string; edge: SpecEdge }[]): void => {
 		let frontier = [opts.root];
 		for (let d = 0; d < depth; d++) {
 			const nextFrontier: string[] = [];
 			for (const id of frontier) {
 				for (const { to, edge } of next(id)) {
+					if (retired(to)) continue;
 					const key = `${edge.from}\u0000${edge.kind}\u0000${edge.to}`;
 					if (!seenEdges.has(key)) {
 						seenEdges.add(key);
@@ -168,11 +180,11 @@ export function graphSlice(graph: SpecGraph, opts: SliceOptions): GraphSlice {
 		walk((id) => {
 			const out = (graph.forward[edge].get(id) ?? []).map((to) => ({
 				to,
-				edge: { from: id, to, kind: edge } as SpecEdge,
+				edge: { from: id, to, kind: edge },
 			}));
 			const inc = (graph.reverse[edge].get(id) ?? []).map((from) => ({
 				to: from,
-				edge: { from, to: id, kind: edge } as SpecEdge,
+				edge: { from, to: id, kind: edge },
 			}));
 			return [...out, ...inc];
 		});

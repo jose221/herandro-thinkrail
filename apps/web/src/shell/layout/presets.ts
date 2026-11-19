@@ -81,7 +81,7 @@ export const BUILTIN_LAYOUT_PRESETS: readonly LayoutPreset[] = [
 		right: side(true, 0.28, [
 			{
 				id: "balanced-right-top",
-				tools: ["specs", "files", "emulator", "browser", "git"],
+				tools: ["specs", "files", "artifacts", "emulator", "browser", "git"],
 				weight: 1.25,
 			},
 			{ id: "balanced-right-bottom", tools: ["plan", "review", "requests", "memory"] },
@@ -96,7 +96,17 @@ export const BUILTIN_LAYOUT_PRESETS: readonly LayoutPreset[] = [
 		right: side(false, 0.26, [
 			{
 				id: "focus-right",
-				tools: ["specs", "files", "review", "emulator", "browser", "requests", "memory", "git"],
+				tools: [
+					"specs",
+					"files",
+					"review",
+					"artifacts",
+					"emulator",
+					"browser",
+					"requests",
+					"memory",
+					"git",
+				],
 			},
 		]),
 		bottom: bottom(false, [{ id: "focus-bottom", tools: [] }]),
@@ -108,7 +118,10 @@ export const BUILTIN_LAYOUT_PRESETS: readonly LayoutPreset[] = [
 		left: side(true, 0.16, [{ id: "review-left", tools: ["projects"] }]),
 		right: side(true, 0.32, [
 			{ id: "review-right-main", tools: ["review"], weight: 1.4 },
-			{ id: "review-right-reference", tools: ["specs", "files", "emulator", "browser", "git"] },
+			{
+				id: "review-right-reference",
+				tools: ["specs", "files", "artifacts", "emulator", "browser", "git"],
+			},
 		]),
 		bottom: bottom(true, [{ id: "review-bottom", tools: [] }]),
 	},

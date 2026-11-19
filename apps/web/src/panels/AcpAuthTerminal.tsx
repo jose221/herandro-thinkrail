@@ -170,13 +170,13 @@ export default function AcpAuthTerminal({ clientId, methodId, workspaceId, onExi
 		};
 		void runAfterTerminalRelayout(
 			() => webFonts.relayout(),
-			() => {
+			async () => {
 				if (disposed) return;
 				fitTerminal(fit);
 				const startSize = { cols: term.cols, rows: term.rows };
 				startRequestPending = true;
-				void transport
-					.request(
+				try {
+					const result = await transport.request(
 						"acp.client.authTerminal.start",
 						{
 							...(workspaceId ? { workspaceId } : {}),
@@ -185,17 +185,15 @@ export default function AcpAuthTerminal({ clientId, methodId, workspaceId, onExi
 							...startSize,
 						},
 						{ timeoutMs: 60_000 },
-					)
-					.then((result) => {
-						startRequestPending = false;
-						sizeSync.acknowledge(startSize);
-						handleStartResult(result);
-					})
-					.catch(() => {
-						startRequestPending = false;
-						cancelStart();
-						reportStartFailure();
-					});
+					);
+					startRequestPending = false;
+					sizeSync.acknowledge(startSize);
+					handleStartResult(result);
+				} catch {
+					startRequestPending = false;
+					cancelStart();
+					reportStartFailure();
+				}
 			},
 			{
 				timeoutMs: AUTH_TERMINAL_RELAYOUT_TIMEOUT_MS,
