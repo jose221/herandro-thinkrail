@@ -814,7 +814,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		!suspended &&
 		activeTab !== null &&
 		activeTab.url !== "about:blank" &&
-		engineStatus?.available === true;
+		engineStatus?.available !== false;
 
 	const capture = async () => {
 		if (!captureSupported) return;
