@@ -102,7 +102,8 @@ projects ACP sessions into Pi state.
     `refresh({ allowNetwork: false })` as `createAgentSessionServices` does (skipped otherwise: the strict
     pass's services call has just run it). Ids it registered are `extensionProviderIds`.
     Unlike the strict pass it never fails a candidate: a failed load or a rejected registration skips only
-    that item, and the pass, refresh included, is bounded by 10 s: a load still running then is abandoned
+    that item, and the pass, refresh included, is bounded by 10 s (`EXTENSION_LOAD_TIMEOUT_MS`, the installed
+    loader's bound too): a load still running then is abandoned
     and nothing it queued is applied, so a factory that hangs asynchronously cannot hold boot or a Central
     rebuild (a late completion only fills the abandoned loader's queue), and a refresh still running is no
     longer awaited (it only settles the runtime's snapshot). Its diagnostics are closed counts: no extension
@@ -681,9 +682,14 @@ projects ACP sessions into Pi state.
     pi's own `emitError` sites omit it (`runner.js` message_end, `agent-session.js` command/`<runtime>`),
     and synthesising one there would record the *host's* stack — pointing the reader at
     `prepareSessionEntry` instead of the extension, which is the opposite of why the line exists.
-    **Members distinguish browser calls from terminal-only calls.** *Untranslatable* ones are inert no-ops and rightly so — they take a
-    TUI `Component` factory a web host cannot render (`setFooter`, `setHeader`, `setEditorComponent`,
-    `custom`, `setWidget`'s factory overload; the string-array overload **is** rendered).
+    **Members distinguish browser calls from terminal-only calls.** *Untranslatable* setters are inert
+    no-ops: they take a TUI `Component` factory a web host cannot render (`setFooter`, `setHeader`,
+    `setEditorComponent`, `setWidget`'s factory overload; the string-array overload **is** rendered).
+    `custom()` instead rejects with `CodedError("EXTENSION_UI_UNSUPPORTED")`, without invoking its factory
+    or registering a dialog. An extension can catch `error.code === "EXTENSION_UI_UNSUPPORTED"` and fall
+    back to `select`, `confirm`, `input` or `editor`; a supported dialog's user cancellation still resolves
+    its ordinary cancelled value. An uncaught rejection follows pi's existing extension error reporting,
+    not a fabricated cancellation. `ctx.mode` stays `"rpc"` and `ctx.hasUI` stays true.
     *Translatable* ones must behave: **`theme` is a real `Theme`** (`plainTextTheme`) whose every
     decorator returns its input unchanged. `setEditorText` and `pasteToEditor` publish fire-and-forget
     frames of their own kinds for that session's browser composer: a replacement (an empty string clears
@@ -827,11 +833,15 @@ projects ACP sessions into Pi state.
     the manager bullet above). Pure over pi's `SessionManager` (compaction-aware via
     `buildSessionContext`; idempotent; appends only missing results from the active tail batch) —
     unit-tested against `SessionManager.inMemory`, including failed-attempt and historical-gap replay.
-  - `artifactsGuard` — keeps the agent's output in the workspace for the Artifacts tool
+  - `artifactsGuard` — defaults the agent's output to the workspace for the Artifacts tool
     ([[submodule-server-artifacts]]): a `before_agent_start` system-prompt section (`thinkrail-artifacts`)
-    telling the agent to put every non-code output it produces under `.thinkrail/context/` and never to
-    delete or move files out of it, and asking softly that it link each result in its final message and
-    keep scratch work in a `_`-prefixed folder such as `_work/` (both feed the artifact roles: a linked
+    telling the agent to put non-code output under `.thinkrail/context/` by default, while honoring an
+    explicit user-selected persistent path or directory, including one outside the workspace. Such
+    results are linked at their actual paths in the final message; files outside the artifacts folder
+    cannot be published through `present_files` and need not be copied there just to appear in Outputs.
+    The rule still forbids deleting or moving files out of the artifacts folder, and asks that it link
+    each result in its final message and keep scratch work in a `_`-prefixed folder such as `_work/`
+    (both feed the artifact roles: a linked
     path is a result, a `_` folder holds working files), plus a `tool_call` hook that blocks a `write` that would **create a new
     file** in a temporary folder (`/tmp`, `/var/tmp`, `os.tmpdir()`, `$TMPDIR`/`$TEMP`/`$TMP`, real paths
     included) outside the session's own folder, with a reason naming the `.thinkrail/context/` path to use.
@@ -1034,12 +1044,42 @@ projects ACP sessions into Pi state.
     prompt section after pi-spec-graph wrote it (inline extensions load after path and bundled ones), and
     `childExtensionFactories(workspaceId)` leaves pi-spec-graph out of their delegated children. Only
     the tool is gated — the `startPlanReview` button path is a separate host seam. See `submodule-server-host-plan-review`.
+    **The registry is a runtime list** (`serverExtensions()` of [[submodule-server-extensions]]: the
+    built-ins, then installed ThinkRail extensions as they load). pi copies a loader's inline factories at
+    construction, so `buildResourceLoader` returns **one stable `ResourceLoader`** that delegates to an
+    inner pi loader and, at a reload that finds a different registry array than it was built with,
+    builds a fresh inner loader with the current factories (same inputs, same `cwd`) before reloading
+    it; the policy key is recorded on the stable outer loader. The host's `onChange` for installed
+    extensions calls `refreshInstalledExtensions()` (`bumpPackagesRevision` + `refreshExtensionTools`),
+    so every chat's loader is stale and rebuilds when its turn ends, exactly as a pi package change.
+    `enabledExtensionMissing`, owner lookup and skill roots read the same getter; skill roots are memoised
+    per registry entry. **Composition order — host-owned tools always win.** A parent's inline factories
+    are the bundled factories (bundled mode), the built-in registry extensions, the host's own factories
+    (`HOST_INLINE_FACTORIES`, headless-search policy through `skillCarryover`; `host` also hands the list to
+    `startInstalledExtensions`, so an installed extension's same-named tools are listed as shadowed), the caller's `extraFactories` (subagents, background
+    commands, the MCP host and its `mcp` / `tool-search` slots, usage policy, spec rule), and **then** the
+    installed extensions; pi gives a duplicate tool to its first registration, so an installed extension
+    never takes a host tool, and `preferRegistryTools` promotes built-ins only. A user's pi package and the
+    `builtin:` slots load before every inline factory, so they too beat an installed extension on a shared
+    name. Because pi drops a replaceable slot that another extension shares a name with, the installed
+    factories see a view of `pi` that silently refuses any tool, command or flag the host's slots
+    registered earlier in the same load (recorded per reload), so an installed `tool_search` or `/mcp`
+    never replaces the host's (registered in [[pi-compatibility]] § Registry tool precedence). The child
+    set keeps the same rule: `childExtensionFactories` ends with the built-in registry child factories, and
+    the installed ones go to `pi-delegation` apart, as `childInstalledExtensionFactories()`, which it loads
+    after a DAG resource's worker factories (and before its tool-less `dropCancelledPrompt`, which stays last),
+    so an installed child factory never shadows a host or DAG worker tool. A child loads no `builtin:` slot, so pi's first-registration
+    rule is the whole guard there. `piPackagesInstall` applies the kind rule ([[submodule-server-agent-packages]]
+    § Kind detection) and returns `{ installed: "package" | "extension", … }`. The pi runtime build forces
+    jiti's transform through the shared `withForcedJitiTransform`, serialized with installed-extension
+    loads because the env is process-wide.
     **Registry extensions** follow the same shape, keyed by extension name instead of workspace. A
     host-injected `setDisabledExtensionsResolver(() => ReadonlySet<string>)` (global — no `agent` →
     settings edge; a throwing resolver means nothing disabled) is read by `buildResourceLoader` at **every
     loader reload** (snapshotted beside project trust), so the gated registry factories skip a disabled
     extension and `extensionsOverride` omits its `<inline:…>` entry — new parents never load it — and by
-    `childExtensionFactories(workspaceId)` when a hidden child's loader runs. `refreshExtensionTools()`
+    `childExtensionFactories(workspaceId)` / `childInstalledExtensionFactories()` when a hidden child's
+    loader runs. `refreshExtensionTools()`
     updates live sessions: tools whose `sourceInfo.path` belongs to a disabled registry extension leave
     the active set (remembered per entry so re-enabling restores exactly the withheld tools, never ones
     that were inactive by default) idle-sync / streaming-deferred to `agent_settled`, latest policy wins, and
@@ -1103,7 +1143,18 @@ projects ACP sessions into Pi state.
     `isLoaderPolicyStale` is one more predicate of the reconciliation `applyExtensionTools` runs at
     registration, after every reload and on `refreshExtensionTools`, so a session prepared under an older
     policy or older setting values reloads when it registers (or once its turn ends) and a change
-    mid-reload re-reloads — the fan-out alone would miss both. A pending question keeps the arguments it
+    mid-reload re-reloads — the fan-out alone would miss both. The loader's `extensionsOverride` composes
+    `preferRegistryTools(omitSupersededPackages(omitDisabledRegistryExtensions(result, …, registry), …,
+    builtins), registry)`: only a built-in supersedes a package (the installed loader refuses the field).
+    It also compares the **superseded
+    packages** a loader's last load left out (`omitSupersededPackages`, recorded on the stable outer loader
+    with what that load found of the packages a built-in supersedes, `supersedablePackagesIn`) with what the current
+    switches would leave out of the same packages: switching a superseding extension reloads exactly the
+    chats that load such a package (a user's vanilla `@thinkrail/pi-session-insights`, whose `/insights`
+    then appears or goes), under the same end-of-turn rule, and no other chat. Keying the disabled set
+    itself into the policy was rejected: every toggle of any extension would reload every open chat.
+    `piPackagesCatalog` marks an installed package's row `supersededBy` (`supersedingExtension`) the same
+    way, after the shared catalog cache, so the row follows the switch without invalidating it. A pending question keeps the arguments it
     was asked with.
     The **`set_title`** tool (`titleTool.ts`) is how chats and workspaces get named: the main agent calls it
     with `chat_title?` / `workspace_name?` / `branch?` (English kebab slug). It is always registered and
@@ -1143,6 +1194,20 @@ projects ACP sessions into Pi state.
     side/separate/parallel-workspace cues, but only *suggest* splitting work the user did not ask to
     parallelize. Nothing else is built in by design: no waiting primitive (the agent decides how and whether
     to wait), no steering, stopping, archiving or merging of another workspace, and no cap or confirmation.
+    The **project tool** (`projectTools.ts`), **`open_project { repository }`**, is the step before
+    `start_workspace` when the repository is not an open project: always registered, top-level only, and
+    idempotent — a known project comes back as is, a host folder opens, a URL clones. It returns the
+    project (`OpenedProject`: id, name, slug, path, `outcome: open | opened | cloned`) and tells the agent
+    to pass the slug to `start_workspace`. It is a separate tool rather than a clone mode of
+    `start_workspace` so each call has one result and one failure (a combined call made retry ambiguous:
+    clone again, or only start?). The host seam `setProjectToolsHost({ plan, clone })` composes
+    `projects` + `git` + `settings` ([[submodule-server-host]]); the prompt stays here: between `plan` and
+    `clone` the tool asks **`selectForToolCall`** on its own call — anchored explicitly, with the repository
+    and destination as `toolInput`, because pi's `ctx.ui.confirm` anchors only while exactly one call runs
+    — with **Clone · Deny**. Deny, a dismissed prompt (a sent message cancels it) and Stop fail the call
+    with "nothing was cloned", so the agent does not go on to `start_workspace`. The two `partialResult`
+    stages (`approval`, `cloning`) carry `{ url, destination, notice }` for the card, and `notice` also
+    adds the default-folder sentence to the question.
     `readFinalAssistantTexts(workspaceId, cwd, sessionIds)` serves the status final messages. For a live
     entry it reads the entry's messages. Otherwise it lists the workspace's transcripts **once** and opens
     each match read-only, never through `attachDiskSession`, so a status check neither loads nor announces
@@ -1185,8 +1250,9 @@ projects ACP sessions into Pi state.
     Children opting into extensions
     (`extensions: true` in their definition) get the **curated child set**
     (`childExtensionFactories` in `extensions`, pi `InlineExtension`s): the headless-search policy +
-    `pi-spec-graph` + every registry extension's `childExtensions` (named inline, from
-    [[submodule-server-extensions]]; today `web-access`'s `pi-web-access`) — deliberately not the parent's
+    `pi-spec-graph` + every built-in registry extension's `childExtensions` (named inline, from
+    [[submodule-server-extensions]]; today `web-access`'s `pi-web-access`; installed extensions' child halves
+    come from `childInstalledExtensionFactories()`, loaded after a resource's factories) — deliberately not the parent's
     full set
     (rationale + the listed-children carve-out: core decision #25). **Every** child, opted in or not,
     also loads the core's base set (`childBaseExtensionFactories`, same decision): `oversizedImageGuard`,
@@ -1261,8 +1327,10 @@ projects ACP sessions into Pi state.
     `.agents/skills`, so capped filesystem batches carry truthful skill-change evidence without making
     `watch` depend on `agent`. The fixed project/personal alias roots are registered as candidate skill paths
     **whether or not they exist yet**, so a `loader.reload()` picks up one a branch switch / pull / clone
-    creates mid-session (plugin dirs are the set installed at construction — a plugin added later
-    needs a fresh session); classification still only counts dirs that actually exist. Still never arbitrary
+    creates mid-session. Every reload also re-reads the installed Claude plugin manifest before refreshing
+    the existing loader's skill paths, so newly installed plugins appear, upgraded install paths replace old
+    ones, and removed plugins disappear even when their cache folders remain on disk. Current admission
+    applies before these paths reach pi; classification still only counts dirs that actually exist. Still never arbitrary
     dot-directory scanning, plugin caches, commands, or nested downward discovery. Pi remains the parser:
     vendor-only macros/hooks/models/subagents/metadata are not emulated. First-name-wins precedence is
     Pi native/configured/shared → ThinkRail-bundled → personal aliases → project aliases, so a repo can
@@ -1288,7 +1356,7 @@ projects ACP sessions into Pi state.
     `on` beats a group disable). `skillsGate` filters + relabels in one `skillsOverride`; only `load` skills
     reach the system prompt / `/skill:` list. A **disabled registry extension's** skill roots
     (`extensionSkillRoots`: source roots in dev, the `extensions/<name>` folder of the staged root when
-    bundled) are left out of `additionalSkillPaths` itself — rebuilt in place from the disabled set
+    bundled, an installed extension's roots resolved from its own entry in every mode) are left out of `additionalSkillPaths` itself — rebuilt in place from the disabled set
     snapshotted at each reload — never filtered from pi's result: pi resolves same-name skills first-wins
     before any override runs, so dropping a winner afterwards would also lose the personal or project skill
     it shadowed. `listSkillCommands` (whose cache key includes the disabled set) and `listSkillCatalog`
@@ -1297,8 +1365,8 @@ projects ACP sessions into Pi state.
     The host resolves the context via the **`setSkillAdmissionResolver`** seam (keyed by `workspaceId`, fails
     closed); `buildResourceLoader` takes the resolver as a thunk and `skillsGate` re-resolves **both** the admission
     context (`getCtx`) **and** the live compatibility source set (fresh discovery) on every `loader.reload()`, so
-    `session.reloadResources` picks up a mid-session trust grant, skill/group toggle, **or a newly-appeared alias
-    dir** — and a late-appearing project alias is still classified + trust-gated, never slipping through as an
+    `session.reloadResources` picks up a mid-session trust grant, skill/group toggle, **a newly-appeared alias
+    dir or a changed plugin installation** — and a late-appearing project alias is still classified + trust-gated, never slipping through as an
     unclassified load. Personal and bundled resources are never trust-gated (only the enable/disable layer), and
     this gate is scoped to the compatibility aliases. pi-native project resources (`.pi/` settings, extensions,
     skills, prompts and themes, `SYSTEM.md`, ancestor `.agents/skills`) follow pi-level trust instead: pi gates
@@ -1316,9 +1384,9 @@ projects ACP sessions into Pi state.
       **lazily on first use** (never at module load: the resolve requires `node_modules`, which a
       compiled binary lacks). The workspace packages' `pi.skills` manifests aren't auto-discovered for
       file-path entries — their `skills/` dirs (`pi-spec-graph`, `pi-thinkrail-workflow`, `pi-todos`), the
-      host's own skills (`packages/server/skills`: ThinkRail-only guidance such as
-      `managing-mcp-servers`, which would be wrong under vanilla pi and so cannot live in a portable
-      package) plus the registry extensions' owner-resolved skill roots are wired via
+      host's own skills (`packages/server/skills`: ThinkRail-only guidance — `managing-mcp-servers` and
+      `making-thinkrail-extensions`, which would be wrong under vanilla pi and so cannot live in a portable
+      package; a skill folder may carry reference files and plain-Node scripts, staged with it, never tests) plus the registry extensions' owner-resolved skill roots are wired via
       **`additionalSkillPaths`**; `build-support`'s `skillRoots` lists the same host root for both bundles.
       Registry extensions themselves are never path-loaded: they are the same named inline factories in
       both modes (one composition mode; `{ name, factory }` keeps `<inline:visualize>` in diagnostics).
@@ -1414,12 +1482,15 @@ projects ACP sessions into Pi state.
   and pure helpers (`createToolResponseWaiters`/`toolResponseSessionServices`/`assessRespondability`/
   `describeToolResponse`/`buildToolResponseMessage`/`awaitingToolCallId`); normalized-state operations
   (`listSessionStates`/`acknowledgeCompletion`/`markWorkspaceUnread`/`markWorkspaceRead`/`nudgeSession` +
-  publisher/project seams);
-  `repairDanglingToolCalls`; `liveParentContext` + `readChildTranscript` + `trashWorkspaceDelegation`
-  (the delegation embedding); the skill catalog helpers
+  publisher/project seams) and `sessionCompletionOf(sessionId)` (the persisted completion, `null` when none
+  or before the baseline — an in-memory read that, unlike `listSessionStates`, parses no transcript, for
+  the extension host services);
+  `repairDanglingToolCalls`; `liveParentContext` + `readChildTranscript` + `trashWorkspaceDelegation` +
+  `delegationRootDir()` (the delegation embedding); the skill catalog helpers
   `listSkillCommands(cwd, admission)` (filtered, pre-session autocomplete) / `listSkillCatalog(cwd, admission)`
   (unfiltered, the manager's `skills.state`) / `listProjectAliasSkillNames(cwd)` (present-alias count) /
-  `isProjectSkillPath(relativePath)` (watch-classification predicate) /
+  `isProjectSkillPath(relativePath)` (watch-classification predicate) / `PROJECT_SKILL_ROOTS` (the
+  repo-relative `.<alias>/skills` roots that predicate matches, the list the host's base-ref preview extracts) /
   `mayHoldProjectSkills(relativePath)` (the folders a project skill can sit in: an alias folder like
   `.claude` and its `skills/` tree without dot-folders, which pi never scans);
   `reloadSessionResources(sessionId)` (active-chat reload; throws while the reload gate is blocked) +
@@ -1509,24 +1580,27 @@ context-budget limitations and their upgrade checks live in [[pi-compatibility]]
 
 Pi owns provider retry; the host never adds one. Pi retries only errors that match its retryable
 patterns: "Anthropic stream ended before message_stop" does, "Could not parse Anthropic SSE event" does
-not. `patches/@earendil-works%2Fpi-ai@1.5.2.patch` (root `patchedDependencies`, upstream
-earendil-works/pi#10390, #564) fixes two defects in pi-ai's `anthropic-messages` SSE parser that end a
-turn with that parse error. The two fixes have different outcomes:
+not. `patches/@earendil-works%2Fpi-ai@1.6.1.patch` (root `patchedDependencies`, upstream
+earendil-works/pi#10390, #564) fixes the remaining defect in pi-ai's `anthropic-messages` SSE parser
+that ends a turn with that parse error:
 
-- **Split CRLF.** A `\r\n` after an `event:` line, split across two network chunks, read as two line
-  breaks. The blank line dispatched the event without its `data:` line, so a complete, valid CRLF stream
-  failed. A trailing `\r` now waits for the next chunk, and the stream succeeds. The final drain still
-  ends a line on a lone `\r`.
 - **Cut-off stream.** The event that a cut left without its blank line was dispatched with empty or
   partial data. It is now parsed strictly, never "repaired", and dropped when empty, unparsable or not an
   object, so the cut ends with a retryable truncation error such as "stream ended before message_stop".
   An unfinished event that does parse is still yielded, so a stream missing the final blank line after
-  `message_stop` still succeeds.
+  `message_stop` still succeeds. The patch tags every event `SseDecoder.end()` returns as unfinished,
+  in `anthropic-messages.js` only: the decoder's final flush cannot complete a terminated event, and
+  the other providers sharing `utils/sse.js` keep upstream behavior.
+
+**Post-mortem, split CRLF.** A `\r\n` after an `event:` line, split across two network chunks, read as
+two line breaks, so a complete, valid CRLF stream failed. The patch held a trailing `\r` until the next
+chunk; pi-ai 1.6.1's shared `SseDecoder` carries the pending CR itself, so that half of the patch was
+dropped and its guard case moved to the "behavior the patch keeps" group.
 
 A finished but malformed event keeps the non-retryable parse error. Observed failures carry an empty
 `data=` and only the `event:` line in `raw=`. A split CRLF always leaves that signature and a random cut
-rarely does, so the split CRLF is likely what users hit. Unconfirmed: whether api.anthropic.com or a
-proxy on the path sends CRLF. The guard test and removal gate live in [[pi-compatibility]].
+rarely does, so the split CRLF (now fixed upstream) was likely what users hit. Unconfirmed: whether
+api.anthropic.com or a proxy on the path sends CRLF. The guard test and removal gate live in [[pi-compatibility]].
 
 ## Billing warnings
 
@@ -2014,6 +2088,10 @@ the `/mcp` command stay pi's; ThinkRail owns what a multi-session GUI host owes 
   pre-session catalog maps only `resourceLoader.getSkills()` through the same skill→command helper and
   applies the **same project-trust gate**, so New Workspace preview and a real session cannot disagree
   except for the accepted base-branch/current-checkout timing difference.
+- That skill→command helper (`toSkillCommands`) also reads each skill's ThinkRail frontmatter key
+  `argument-completion` (pi ignores it) and sets `SlashCommandInfo.argumentCompletion` for a known
+  kind (`pull-request`); the read is cached per file and modification time, and an unknown kind or an
+  unreadable file simply omits it. Both catalogs therefore agree on which commands take a pull request.
 - Dialog promises honor abort/timeout and are settled (+ dismissed in the UI) on session disposal — a
   bridged `uiContext` call must never hang.
 - **Prompt-template `/name` expansion** — typed-through references like `/name args` in a prompt ride

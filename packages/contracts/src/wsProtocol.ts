@@ -1,3 +1,4 @@
+import type { ChatAttachmentResult } from "./attachments";
 import type {
 	AcpClientCheckResult,
 	AcpConfigOption,
@@ -35,7 +36,9 @@ import type {
 	DiffStats,
 	EditorInfo,
 	ExistingWorktreeCandidate,
+	ExtensionBrowseResult,
 	ExtensionCatalogEntry,
+	ExtensionQueryParams,
 	FileNode,
 	GitCommit,
 	GitControlBranches,
@@ -77,9 +80,9 @@ import type {
 	MergePrResult,
 	OpenBranchReview,
 	OpenPrResult,
+	PackageInstallResult,
 	PiPackageResourceType,
 	PiPackageScope,
-	PiPackageSummary,
 	PiPackagesCatalog,
 	PrBodySource,
 	Project,
@@ -91,6 +94,11 @@ import type {
 	ProviderStatusReport,
 	ProviderWarning,
 	PrPreview,
+	PullRequestAuthorPage,
+	PullRequestFilter,
+	PullRequestPage,
+	PullRequestSizeEntry,
+	PullRequestSummary,
 	ResourceHistoryCursor,
 	ResourceHistoryPage,
 	ResourceKind,
@@ -181,14 +189,23 @@ export interface TerminalTabsPush {
 }
 
 export type TemplateReadLocation =
-	| { workspaceId: string; projectId?: never }
-	| { projectId: string; workspaceId?: never }
-	| { workspaceId?: never; projectId?: never };
+	| { workspaceId: string; projectId?: never; baseRef?: never }
+	| { projectId: string; workspaceId?: never; baseRef?: string }
+	| { workspaceId?: never; projectId?: never; baseRef?: never };
 
-export const PROTOCOL_VERSION = 129;
+export const PROTOCOL_VERSION = 136;
+export const PROJECTS_FOLDER_PROTOCOL_VERSION = 136;
+export const REF_RESOURCE_PREVIEW_PROTOCOL_VERSION = 135;
+export const FS_REVEAL_PROTOCOL_VERSION = 134;
+export const PULL_REQUEST_REVIEW_PROTOCOL_VERSION = 133;
+export const EXTENSION_BROWSE_PROTOCOL_VERSION = 132;
+export const INSTALLED_EXTENSIONS_PROTOCOL_VERSION = 131;
+export const EXTENSION_QUERY_PROTOCOL_VERSION = 130;
+export const CHAT_ATTACHMENTS_PROTOCOL_VERSION = 129;
 export const BROWSER_DEVTOOLS_PROTOCOL_VERSION = 129;
 export const ANDROID_STREAM_PROTOCOL_VERSION = 129;
 export const EXTRA_PARAMS_PROTOCOL_VERSION = 128;
+export const ARTIFACT_OUTPUTS_PROTOCOL_VERSION = 128;
 export const SUBAGENT_CATALOG_PROTOCOL_VERSION = 127;
 export const SERVER_FALLBACK_PROTOCOL_VERSION = 126;
 export const MCP_USER_SERVERS_PROTOCOL_VERSION = 125;
@@ -519,12 +536,17 @@ export const WS_METHODS = {
 	prReady: "pr.ready",
 	prMerge: "pr.merge",
 	prReopen: "pr.reopen",
+	prList: "pr.list",
+	prGet: "pr.get",
+	prSizes: "pr.sizes",
+	prAuthors: "pr.authors",
 	fsReadDir: "fs.readDir",
 	fsReadFile: "fs.readFile",
 	fsCopy: "fs.copy",
 	fsDelete: "fs.delete",
 	fsRename: "fs.rename",
 	fsMove: "fs.move",
+	fsReveal: "fs.reveal",
 	artifactsList: "artifacts.list",
 	artifactsRestore: "artifacts.restore",
 	artifactsDiscard: "artifacts.discard",
@@ -554,6 +576,7 @@ export const WS_METHODS = {
 	skillList: "skill.list",
 	skillsState: "skills.state",
 	extensionList: "extension.list",
+	extensionQuery: "extension.query",
 	packagesList: "packages.list",
 	packagesInstall: "packages.install",
 	packagesRemove: "packages.remove",
@@ -561,11 +584,16 @@ export const WS_METHODS = {
 	packagesCheckUpdates: "packages.checkUpdates",
 	packagesSetResourceEnabled: "packages.setResourceEnabled",
 	packagesReveal: "packages.reveal",
+	extensionsRemove: "extensions.remove",
+	extensionsUpdate: "extensions.update",
+	extensionsCheckUpdates: "extensions.checkUpdates",
+	extensionsBrowse: "extensions.browse",
 	localesList: "locales.list",
 	localesReveal: "locales.reveal",
 	themesList: "themes.list",
 	themesReveal: "themes.reveal",
 	fontsList: "fonts.list",
+	attachmentsCopyLocal: "attachments.copyLocal",
 	fontsInstalled: "fonts.installed",
 	fontsReveal: "fonts.reveal",
 	speechInstall: "speech.install",
@@ -813,6 +841,7 @@ export const WS_CHANNELS = {
 	acpAuthTerminalData: "acp.authTerminal.data",
 	acpAuthTerminalExit: "acp.authTerminal.exit",
 	packagesChanged: "packages.changed",
+	extensionsChanged: "extensions.changed",
 	fontsChanged: "fonts.changed",
 	speechChanged: "speech.changed",
 } as const;
@@ -1303,6 +1332,19 @@ export interface WsMethodMap {
 		params: { workspaceId: string; branch: string; number: number };
 		result: Ack;
 	};
+	"pr.list": {
+		params: { projectId: string; filter: PullRequestFilter; query?: string; cursor?: string };
+		result: PullRequestPage;
+	};
+	"pr.get": { params: { projectId: string; number: number }; result: PullRequestSummary | null };
+	"pr.authors": {
+		params: { projectId: string; cursor?: string };
+		result: PullRequestAuthorPage;
+	};
+	"pr.sizes": {
+		params: { projectId: string; numbers: number[] };
+		result: PullRequestSizeEntry[];
+	};
 	"pr.open": {
 		params: {
 			workspaceId: string;
@@ -1344,6 +1386,7 @@ export interface WsMethodMap {
 		};
 		result: { path: string };
 	};
+	"fs.reveal": { params: { workspaceId: string; path: string }; result: Ack };
 	"artifacts.list": { params: { workspaceId: string }; result: WorkspaceArtifactsSnapshot };
 	"artifacts.restore": { params: { workspaceId: string; path: string }; result: Ack };
 	"artifacts.discard": { params: { workspaceId: string; path: string }; result: Ack };
@@ -1436,13 +1479,14 @@ export interface WsMethodMap {
 		result: { closed: boolean; busy: boolean };
 	};
 	"dialog.selectDirectory": { params: Record<string, never>; result: { path: string | null } };
-	"skill.list": { params: { projectId: string }; result: SlashCommandInfo[] };
+	"skill.list": { params: { projectId: string; baseRef?: string }; result: SlashCommandInfo[] };
 	"skills.state": { params: { workspaceId: string }; result: SkillCatalogEntry[] };
 	"extension.list": { params: Record<string, never>; result: ExtensionCatalogEntry[] };
+	"extension.query": { params: ExtensionQueryParams; result: unknown };
 	"packages.list": { params: { workspaceId?: string; force?: boolean }; result: PiPackagesCatalog };
 	"packages.install": {
 		params: { source: string; scope: PiPackageScope; workspaceId?: string };
-		result: PiPackageSummary;
+		result: PackageInstallResult;
 	};
 	"packages.remove": {
 		params: { source: string; scope: PiPackageScope; workspaceId?: string };
@@ -1467,11 +1511,19 @@ export interface WsMethodMap {
 		result: Ack;
 	};
 	"packages.reveal": { params: { path: string; workspaceId?: string }; result: Ack };
+	"extensions.remove": { params: { source: string }; result: Ack };
+	"extensions.update": { params: { source: string }; result: Ack };
+	"extensions.checkUpdates": { params: { force?: boolean }; result: { source: string }[] };
+	"extensions.browse": { params: { force?: boolean }; result: ExtensionBrowseResult };
 	"locales.list": { params: Record<string, never>; result: LocalLocalesSnapshot };
 	"locales.reveal": { params: Record<string, never>; result: Ack };
 	"themes.list": { params: Record<string, never>; result: UserThemesSnapshot };
 	"themes.reveal": { params: Record<string, never>; result: Ack };
 	"fonts.list": { params: Record<string, never>; result: UserFontsSnapshot };
+	"attachments.copyLocal": {
+		params: { workspaceId?: string; path: string };
+		result: ChatAttachmentResult;
+	};
 	"fonts.installed": { params: Record<string, never>; result: InstalledFontsResult };
 	"fonts.reveal": { params: Record<string, never>; result: Ack };
 	"speech.install": { params: { model: SpeechModel }; result: Ack };
@@ -2188,10 +2240,19 @@ export type WsErrorCode =
 	| "PACKAGE_UNTRUSTED"
 	| "PACKAGE_UNKNOWN"
 	| "PACKAGE_INSTALL_FAILED"
+	| "PACKAGE_NOT_FOUND"
+	| "PACKAGE_REGISTRY_UNREACHABLE"
 	| "PACKAGE_INSTALLED_UNLISTED"
 	| "PACKAGE_REMOVE_FAILED"
 	| "PACKAGE_UPDATE_FAILED"
 	| "PACKAGE_SETTINGS_WRITE_FAILED"
+	| "EXTENSION_SCOPE_UNSUPPORTED"
+	| "EXTENSION_UI_UNSUPPORTED"
+	| "EXTENSION_UNKNOWN"
+	| "EXTENSIONS_FILE_INVALID"
+	| "EXTENSION_CATALOG_OFFLINE"
+	| "EXTENSION_CATALOG_UNREACHABLE"
+	| "EXTENSION_CATALOG_INVALID"
 	| "CACHE_WARMING_WRITE_FAILED"
 	| "REQUEST_REPLAY_OVERFLOW"
 	| "INSTALLED_FONTS_UNAVAILABLE"
@@ -2219,8 +2280,12 @@ export type WsErrorCode =
 	| "TEXT_SEARCH_FAILED"
 	| "FRAME_TOO_LARGE"
 	| "KEYBINDINGS_INVALID"
+	| "PROJECTS_FOLDER_INVALID"
+	| "PROJECT_NOT_REPOSITORY"
 	| "SERVER_FALLBACK_NOT_USED"
 	| "SERVER_FALLBACK_STILL_ON"
+	| "EXTENSION_DISABLED"
+	| "UNKNOWN_EXTENSION_QUERY"
 	| SpeechErrorCode;
 
 export interface WsResponse {

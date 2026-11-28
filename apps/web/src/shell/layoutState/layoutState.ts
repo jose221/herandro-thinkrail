@@ -21,7 +21,9 @@ import {
 	emptyWorkspaceView,
 	ensureWorkbenchToolPlacementIds,
 	instantiateWorkbenchFrame,
+	keptPanelsToRestore,
 	LAYOUT_TOOLS,
+	type LayoutAuxiliaryRegion,
 	minimumBottomGroupLimit,
 	minimumSideGroupLimit,
 	normalizeWorkspaceView,
@@ -373,6 +375,15 @@ function isWorkspaceView(value: unknown): value is WorkspaceViewState {
 				);
 			case "terminal":
 				return hasOnlyKeys(tab, ["kind", "id", "name", "tabKey"]) && typeof tab.tabKey === "string";
+			case "extension":
+				return (
+					hasOnlyKeys(tab, ["kind", "id", "name", "extension", "panel", "titleKey", "params"]) &&
+					typeof tab.extension === "string" &&
+					typeof tab.panel === "string" &&
+					typeof tab.titleKey === "string" &&
+					isRecord(tab.params) &&
+					Object.values(tab.params).every((value) => typeof value === "string")
+				);
 			default:
 				return false;
 		}
@@ -587,6 +598,21 @@ function documentsForViews(
 	);
 }
 
+function installLocalLayout(
+	payload: LocalLayoutStatePayload,
+	invalidateProjection = false,
+	panelsToRestore?: readonly LayoutAuxiliaryRegion[],
+): void {
+	const state = useAppStore.getState();
+	state.applyLocalLayoutState(
+		{
+			...payload,
+			panelsToRestore: panelsToRestore ?? keptPanelsToRestore(state.panelsToRestore, payload.frame),
+		},
+		invalidateProjection,
+	);
+}
+
 export function initializeLocalLayoutState(): Promise<void> {
 	if (initialization) return initialization;
 	const run = (async () => {
@@ -657,7 +683,7 @@ function installWorkspaceView(workspaceId: string): WorkspaceLayoutDocument {
 		state.workbenchFrame,
 		workspaceProjectionReference(workspaceId),
 	);
-	state.applyLocalLayoutState({
+	installLocalLayout({
 		frame: state.workbenchFrame,
 		viewsByWorkspace: { ...state.workspaceViewsByWorkspace, [workspaceId]: projection.view },
 		documentsByWorkspace: {
@@ -709,7 +735,7 @@ export function applyLayoutPresetLocally(preset: LayoutPreset): void {
 			state.layoutDocumentsByWorkspace[workspaceId],
 		);
 	}
-	state.applyLocalLayoutState(
+	installLocalLayout(
 		{
 			frame: next.frame,
 			viewsByWorkspace: next.viewsByWorkspace,
@@ -779,7 +805,7 @@ export function applyLayoutAttention(workspaceId: string, next: LayoutAttention)
 			groups,
 		);
 	}
-	state.applyLocalLayoutState({
+	installLocalLayout({
 		frame: state.workbenchFrame,
 		viewsByWorkspace: state.workspaceViewsByWorkspace,
 		documentsByWorkspace: state.layoutDocumentsByWorkspace,
@@ -791,6 +817,7 @@ export function applyLayoutAttention(workspaceId: string, next: LayoutAttention)
 export interface LayoutCommitOptions {
 	baseDocument?: WorkspaceLayoutDocument;
 	attention?: LayoutAttention;
+	panelsToRestore?: readonly LayoutAuxiliaryRegion[];
 }
 
 export async function commitWorkspaceLayout(
@@ -859,7 +886,7 @@ export async function commitWorkspaceLayout(
 			}
 		}
 	}
-	state.applyLocalLayoutState(
+	installLocalLayout(
 		{
 			frame,
 			viewsByWorkspace: projected.viewsByWorkspace,
@@ -868,6 +895,7 @@ export async function commitWorkspaceLayout(
 			preferences: state.localLayoutPreferences,
 		},
 		frameChanged && !sameWorkbenchFrameShape(frame, state.workbenchFrame),
+		options.panelsToRestore,
 	);
 	return useAppStore.getState().layoutDocumentsByWorkspace[workspaceId] ?? document;
 }

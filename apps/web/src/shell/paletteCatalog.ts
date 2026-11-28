@@ -11,6 +11,7 @@ import {
 	RiDeleteBinLine,
 	RiDragMove2Line,
 	RiEdit2Line,
+	RiExpandDiagonalLine,
 	RiExternalLinkLine,
 	RiFileCopyLine,
 	RiFileEditLine,
@@ -20,6 +21,7 @@ import {
 	RiFolderLine,
 	RiFolderOpenLine,
 	RiGitBranchLine,
+	RiGitPullRequestLine,
 	RiGlobalLine,
 	RiHistoryLine,
 	RiHome4Line,
@@ -51,6 +53,7 @@ import type { EditorInfo, NativePageZoomBridge, Workspace } from "@thinkrail/con
 import type { MessageKey } from "@thinkrail/locales";
 import type { Translator } from "@thinkrail/locales/react";
 import type { Command, CommandShortcut } from "../commands";
+import type { RegisteredPanel } from "../extensions";
 import {
 	DESKTOP_KEYS,
 	FOCUS_GROUP_BINDINGS,
@@ -97,6 +100,7 @@ export interface PaletteCatalogDeps {
 	readonly t: Translator;
 	readonly contextProjectId: string | null;
 	readonly canStartChat: boolean;
+	readonly reviewAvailable: boolean;
 	readonly activeWorkspace: Workspace | null;
 	readonly editors: readonly EditorInfo[];
 	readonly historyAvailable: boolean;
@@ -114,11 +118,13 @@ export interface PaletteCatalogDeps {
 	readonly settingsGroups: readonly SettingsNavGroup[];
 	readonly settingEntries: readonly SettingEntry[];
 	readonly tabActions: readonly TabAction[];
+	readonly extensionPanels: readonly RegisteredPanel[];
 	readonly actions: PaletteCatalogActions;
 }
 
 export interface PaletteCatalogActions {
 	readonly newWorkspace: (projectId: string) => void;
+	readonly reviewPullRequest: () => void;
 	readonly newProjectlessChat: () => void;
 	readonly openDefaultWorkspace: (projectId: string) => void;
 	readonly openProject: () => void;
@@ -129,7 +135,10 @@ export interface PaletteCatalogActions {
 	readonly toggleLeft: () => void;
 	readonly toggleRight: () => void;
 	readonly toggleBottom: () => void;
+	readonly toggleAllPanels: () => void;
 	readonly showTool: (workspaceId: string, tool: PaletteTool) => void;
+	readonly openExtensionPanel: (workspaceId: string, panel: RegisteredPanel) => void;
+	readonly openExtensionPanelInProject: (projectId: string, panel: RegisteredPanel) => void;
 	readonly showFiles: (mode: "all" | "changed") => void;
 	readonly focusRegion: (delta: 1 | -1) => void;
 	readonly focusComposer: () => void;
@@ -152,7 +161,7 @@ export interface PaletteCatalogActions {
 
 function shortcutOf(
 	{ keybindings, nativeShortcuts }: PaletteCatalogDeps,
-	id: KeybindingId,
+	id: string,
 ): { shortcut?: CommandShortcut } {
 	const shortcut = keybindingShortcut(keybindings, id, { browser: !nativeShortcuts });
 	return shortcut ? { shortcut } : {};
@@ -171,6 +180,16 @@ function workCommands(deps: PaletteCatalogDeps): Command[] {
 			...shortcutOf(deps, "workspace.new"),
 			run: () => actions.newWorkspace(contextProjectId),
 		});
+		if (deps.reviewAvailable) {
+			commands.push({
+				id: "workspace.reviewPr",
+				title: t("commands.workspace.reviewPr"),
+				group: "work",
+				icon: RiGitPullRequestLine,
+				keywords: ["pull request", "pr", "review", "github", "code review"],
+				run: actions.reviewPullRequest,
+			});
+		}
 	}
 	if (activeWorkspace) {
 		commands.push({
@@ -391,6 +410,33 @@ function viewCommands(deps: PaletteCatalogDeps): Command[] {
 			});
 		}
 	}
+	const { contextProjectId } = deps;
+	const openPanel = activeWorkspace
+		? (panel: RegisteredPanel) => actions.openExtensionPanel(activeWorkspace.id, panel)
+		: contextProjectId !== null
+			? (panel: RegisteredPanel) => actions.openExtensionPanelInProject(contextProjectId, panel)
+			: null;
+	if (openPanel) {
+		for (const panel of deps.extensionPanels) {
+			const { declaration } = panel;
+			if (!declaration.scopes.includes("project")) continue;
+			commands.push({
+				id: `view.extension.${panel.extension}.${panel.panel}`,
+				title: t("commands.view.openPanel", { panel: t(declaration.title) }),
+				group: "view",
+				icon: declaration.icon,
+				keywords: [
+					"panel",
+					"extension",
+					panel.extension,
+					panel.panel,
+					...(declaration.keywords ? [t(declaration.keywords)] : []),
+				],
+				...(declaration.rail?.command ? shortcutOf(deps, declaration.rail.command) : {}),
+				run: () => openPanel(panel),
+			});
+		}
+	}
 	if (deps.changesAvailable) {
 		commands.push({
 			id: "view.changes",
@@ -430,6 +476,15 @@ function viewCommands(deps: PaletteCatalogDeps): Command[] {
 				keywords: ["terminal", "bottom", "hide", "show"],
 				...shortcutOf(deps, "view.toggleBottom"),
 				run: actions.toggleBottom,
+			},
+			{
+				id: "view.toggleAllPanels",
+				title: t("commands.view.toggleAllPanels"),
+				group: "view",
+				icon: RiExpandDiagonalLine,
+				keywords: ["panels", "sidebar", "bottom", "hide", "restore", "focus", "zen"],
+				...shortcutOf(deps, "view.toggleAllPanels"),
+				run: actions.toggleAllPanels,
 			},
 		);
 	}

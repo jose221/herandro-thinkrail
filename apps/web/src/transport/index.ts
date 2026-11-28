@@ -1,6 +1,12 @@
 export type { AcpWireNotice } from "./acpEvents";
 export { subscribeAcpWireEvents } from "./acpEvents";
 export {
+	attachmentFailureText,
+	type PromptFileUploadOptions,
+	supportsChatAttachments,
+	uploadPromptFiles,
+} from "./attachments";
+export {
 	clientErrorReport,
 	installClientErrorReporting,
 	reportClientError,
@@ -28,9 +34,12 @@ export {
 	getTransport,
 	initTransport,
 	loadInAppSurvey,
+	refreshExtensionCatalog,
+	rememberPullRequestFilter,
 	respondToTool,
 	runHostUpdate,
 	supportsChangeMutations,
+	supportsExtensionQuery,
 	supportsExtensionSettings,
 	supportsFonts,
 	supportsHostUpdateRun,
@@ -38,6 +47,7 @@ export {
 	supportsPiPackages,
 	supportsPlanReview,
 	supportsPlanSummaryGeneration,
+	supportsPullRequestReview,
 	supportsRichAnchors,
 	supportsSpeech,
 	supportsTextSearch,

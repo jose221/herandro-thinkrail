@@ -16,7 +16,6 @@ import {
 	chatName,
 	chatStateLabel,
 	clampFinalMessage,
-	composePrompt,
 	matchWorkspaces,
 	prepareAttachments,
 	resolveModel,
@@ -53,7 +52,7 @@ test("resolveProject defaults to the caller's project and matches open projects 
 	expect(resolveProject("backend-api", "p1", open).id).toBe("p2");
 	expect(resolveProject("thinkrail", "p2", open).id).toBe("p1");
 	expect(() => resolveProject("frontend", "p1", open)).toThrow(
-		'Unknown project "frontend". Open projects: ThinkRail (thinkrail), Backend (backend-api).',
+		'Unknown project "frontend". Open projects: ThinkRail (thinkrail), Backend (backend-api). To add a repository, call open_project.',
 	);
 	expect(() => resolveProject(undefined, "closed", open)).toThrow("not open");
 });
@@ -63,7 +62,7 @@ test("resolveProject never resolves or lists the Chats container, and a chat wit
 	const open = [chats, project("p1", "ThinkRail")];
 	expect(resolveProject("thinkrail", undefined, open).id).toBe("p1");
 	expect(() => resolveProject(undefined, undefined, open)).toThrow(
-		"This chat has no project: pass `project`. Open projects: ThinkRail (thinkrail).",
+		"This chat has no project: pass `project`. Open projects: ThinkRail (thinkrail). To add a repository, call open_project.",
 	);
 	expect(() => resolveProject("chats", "p1", open)).toThrow(
 		'Unknown project "chats". Open projects: ThinkRail (thinkrail).',
@@ -97,13 +96,6 @@ test("attachments: images become prompt images, other files absolute paths; miss
 		`Attachment not found or not a file: ${join(dir, "missing.txt")}`,
 	);
 	expect(() => prepareAttachments([dir], dir)).toThrow("not a file");
-});
-
-test("composePrompt lists non-image attachments after the prompt", () => {
-	expect(composePrompt("Do it", [])).toBe("Do it");
-	expect(composePrompt("Do it", ["/a/b.md", "/c.txt"])).toBe(
-		"Do it\n\nAttached files:\n- /a/b.md\n- /c.txt",
-	);
 });
 
 const state = (patch: Partial<SessionState>): SessionState => ({

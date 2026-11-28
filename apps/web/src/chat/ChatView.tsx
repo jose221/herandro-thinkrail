@@ -9,6 +9,7 @@ import {
 	sameModel,
 	type TemplateInfo,
 	type ThinkingLevel,
+	withAttachedFiles,
 } from "@thinkrail/contracts";
 import { t as translate, useT } from "@thinkrail/locales/react";
 import { Button } from "@thinkrail/ui/button";
@@ -32,13 +33,22 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useNow } from "@/components/useNow";
+import type { ChatAction } from "@/lib";
 import { MEDIA_CAPTURE_EVENT, type MediaCapturePayload } from "@/lib/mediaCapture";
-import { type ParsedTemplate, templateToSlashCommand, useTemplateCommandPicker } from "@/prompt";
+import {
+	type ParsedTemplate,
+	slashArgument,
+	templateToSlashCommand,
+	useTemplateCommandPicker,
+} from "@/prompt";
 import {
 	EMPTY_RUNTIME,
+	isChatWorkspace,
+	type PromptFile,
 	SettingsSection,
 	selectCanRenameChat,
 	selectCatalogModel,
+	selectChatPersisted,
 	selectCompactionTurnIds,
 	selectComposerFocusRequested,
 	selectPickerModels,
@@ -51,16 +61,28 @@ import {
 	useAppStore,
 	workspaceName,
 } from "@/store";
-import { errorText, getTransport, hostUrl, watchMcpWorkspace, wsErrorCode } from "@/transport";
+import {
+	attachmentFailureText,
+	errorText,
+	getTransport,
+	hostUrl,
+	supportsChatAttachments,
+	uploadPromptFiles,
+	watchMcpWorkspace,
+	wsErrorCode,
+} from "@/transport";
 import type { PromptImage } from "../store";
+import { withRestoredDraft } from "./attachments";
 import type { ResultTarget } from "./ChatActions";
-import { ChatHeader } from "./ChatHeader";
+import { ChatHeader, chatHeaderLinks } from "./ChatHeader";
 import { ChatMediaContext } from "./ChatImage";
+import { type ChatPaneSlot, ChatPaneSplit } from "./ChatPaneSplit";
 import ChatTranscript, { type ChatTranscriptHandle } from "./ChatTranscript";
 import {
 	Composer,
 	type ComposerHandle,
 	type ComposerSubmitDisposition,
+	type ComposerUpload,
 	type MentionCandidate,
 	type SubmitBehavior,
 } from "./Composer";
@@ -80,6 +102,8 @@ import {
 	prepareNameChatCommand,
 } from "./nativeCommands";
 import type { PromptImagesOwner } from "./promptImages";
+import { isPullRequestArgumentComplete } from "./pullRequestArguments";
+import { usePullRequestCompletion } from "./pullRequestCompletion";
 import { QueueStrip } from "./QueueStrip";
 import { deriveRecentPrompts } from "./recentPrompts";
 import {
@@ -93,8 +117,9 @@ import {
 } from "./resources";
 import { SkillsDialog } from "./SkillsDialog";
 import { SubagentTranscriptDialog, SubagentTranscriptPane } from "./SubagentTranscriptDialog";
-import { SuggestionChips } from "./SuggestionChips";
+import { SuggestionChips, type SuggestionShortcut } from "./SuggestionChips";
 import { TemplateEditorDialog } from "./TemplateEditorDialog";
+import { useToolRegistry } from "./toolRegistry";
 import { useChatResources, useCommandLog } from "./useChatResources";
 import { useModelCatalog } from "./useModelCatalog";
 import { useModelPreferences } from "./useModelPreferences";
@@ -113,18 +138,26 @@ function renderSubagentModel({ model, thinkingLevel }: SubagentResourceSummary) 
 
 const FOCUS_CLAIM = "[data-focus-claim]";
 
+const NO_CHAT_ACTIONS: readonly ChatAction[] = [];
+
 export default function ChatView({
 	sessionId,
 	workspaceId,
 	onOpenFile,
 	composerRightAction,
 	landingChord,
+	suggestionShortcuts,
+	chatActions = NO_CHAT_ACTIONS,
+	pane,
 }: {
 	sessionId: string;
 	workspaceId: string;
 	onOpenFile?: ((path: string) => void) | undefined;
 	composerRightAction?: ReactNode;
 	landingChord: string;
+	suggestionShortcuts: readonly SuggestionShortcut[];
+	chatActions?: readonly ChatAction[];
+	pane?: ChatPaneSlot | undefined;
 }) {
 	const t = useT();
 	const sessionExists = useAppStore((s) => s.sessions[sessionId] !== undefined);
@@ -137,6 +170,7 @@ export default function ChatView({
 	const imageDraft = useAppStore(
 		(s) => s.sessions[sessionId]?.promptImages ?? EMPTY_RUNTIME.promptImages,
 	);
+	const acceptsFiles = useAppStore((s) => supportsChatAttachments(s.protocolVersion));
 	const imageOwner = useMemo<PromptImagesOwner>(
 		() => ({
 			state: imageDraft,
@@ -147,8 +181,11 @@ export default function ChatView({
 		[imageDraft, sessionId],
 	);
 	const queue = useAppStore((s) => s.sessions[sessionId]?.queue ?? EMPTY_RUNTIME.queue);
+	const toolRegistry = useToolRegistry();
 	const suggestions = useAppStore(
-		useShallow((s) => deriveComposerSuggestions(s.sessions[sessionId], s.disabledExtensions)),
+		useShallow((s) =>
+			deriveComposerSuggestions(s.sessions[sessionId], s.disabledExtensions, toolRegistry),
+		),
 	);
 	const sessionModel = useAppStore((s) => s.sessions[sessionId]?.model ?? null);
 	const thinkingLevel = useAppStore(
@@ -208,8 +245,17 @@ export default function ChatView({
 				.flat()
 				.find((w) => w.id === workspaceId)?.projectId,
 	);
+	const repositoryProjectId = useAppStore((s) => {
+		const workspace = selectWorkspaceById(s, workspaceId);
+		return workspace && !isChatWorkspace(workspace) ? workspace.projectId : null;
+	});
 	const [skillsOpen, setSkillsOpen] = useState(false);
 	const skillsStale = useAppStore((s) => selectSkillsStale(s, workspaceId, sessionId));
+	const persisted = useAppStore((s) => selectChatPersisted(s, workspaceId, sessionId));
+	const headerLinks = useMemo(
+		() => (persisted ? chatHeaderLinks(chatActions, { workspaceId, sessionId }, pane) : []),
+		[chatActions, pane, persisted, sessionId, workspaceId],
+	);
 	const workspaceRoot = useAppStore(
 		(s) => selectWorkspaceById(s, workspaceId)?.worktreePath ?? undefined,
 	);
@@ -474,6 +520,15 @@ export default function ChatView({
 		};
 	}, [slashActive, workspaceId]);
 
+	const prArgument = slashArgument(draft, commands);
+	const pullRequests = usePullRequestCompletion(
+		repositoryProjectId,
+		prArgument?.command.argumentCompletion === "pull-request" &&
+			!isPullRequestArgumentComplete(prArgument.query)
+			? prArgument.query
+			: null,
+	);
+
 	const mergedCommands = useMemo(
 		() =>
 			mergeNativeChatCommands(
@@ -612,12 +667,13 @@ export default function ChatView({
 			.then(() => refreshStats());
 	};
 
+	const readDraft = () => useAppStore.getState().sessions[sessionId]?.draft ?? "";
+
 	const restoreTextToDraft = useCallback(
 		(text: string) => {
 			if (!text.trim()) return;
 			const current = useAppStore.getState().sessions[sessionId]?.draft ?? "";
-			const combined = [text, current].filter((t) => t.trim()).join("\n\n");
-			useAppStore.getState().setChatDraft(sessionId, combined);
+			useAppStore.getState().setChatDraft(sessionId, withRestoredDraft(text, current));
 			composerRef.current?.refocus();
 		},
 		[sessionId],
@@ -800,30 +856,11 @@ export default function ChatView({
 			});
 	};
 
-	const onSubmit = (
+	const abortThenSend = (
 		text: string,
 		attachments: ChatAttachment[],
 		videos: VideoAttachment[],
-		behavior: SubmitBehavior,
-	): ComposerSubmitDisposition => {
-		const hasAttachments = attachments.length > 0 || videos.length > 0;
-		const nativeCommand = parseNativeChatCommand(text, canRenameChat);
-		if (nativeCommand?.kind === "compact") {
-			const submissionError = compactSubmissionError(hasAttachments, queue.hasImages === true);
-			if (submissionError) return { accepted: false, reason: submissionError };
-			performCompact(nativeCommand.instructions);
-			return { accepted: true };
-		}
-		if (nativeCommand?.kind === "name") {
-			const prepared = prepareNameChatCommand(nativeCommand.title, hasAttachments);
-			if ("reason" in prepared) return { accepted: false, reason: prepared.reason };
-			performRename(prepared.title);
-			return { accepted: true };
-		}
-		if (behavior !== "interrupt") {
-			performSend(text, attachments, videos, behavior);
-			return { accepted: true };
-		}
+	) => {
 		getTransport()
 			.request("session.abort", { sessionId })
 			.then(() => performSend(text, attachments, videos, "send"))
@@ -831,6 +868,65 @@ export default function ChatView({
 				useAppStore.getState().appendErrorTurn(sessionId, errorText(err));
 				restoreTextToDraft(text);
 			});
+	};
+
+	const sendWithFiles = (
+		text: string,
+		attachments: ChatAttachment[],
+		videos: VideoAttachment[],
+		behavior: SubmitBehavior,
+		files: PromptFile[],
+		upload: ComposerUpload,
+	): Promise<ComposerSubmitDisposition> =>
+		uploadPromptFiles(workspaceId, files, upload).then(
+			(paths): ComposerSubmitDisposition => {
+				const full = withAttachedFiles(text, paths);
+				if (behavior === "interrupt") abortThenSend(full, attachments, videos);
+				else performSend(full, attachments, videos, behavior);
+				return { accepted: true };
+			},
+			(error: unknown): ComposerSubmitDisposition => ({
+				accepted: false,
+				reason: attachmentFailureText(error),
+			}),
+		);
+
+	const onSubmit = (
+		text: string,
+		attachments: ChatAttachment[],
+		videos: VideoAttachment[],
+		behavior: SubmitBehavior,
+		files: PromptFile[],
+		upload: ComposerUpload,
+	): ComposerSubmitDisposition | Promise<ComposerSubmitDisposition> => {
+		const hasImagesOrVideos = attachments.length > 0 || videos.length > 0;
+		const nativeCommand = parseNativeChatCommand(text, canRenameChat);
+		if (nativeCommand?.kind === "compact") {
+			const submissionError = compactSubmissionError(
+				hasImagesOrVideos,
+				queue.hasImages === true,
+				files.length > 0,
+			);
+			if (submissionError) return { accepted: false, reason: submissionError };
+			performCompact(nativeCommand.instructions);
+			return { accepted: true };
+		}
+		if (nativeCommand?.kind === "name") {
+			const prepared = prepareNameChatCommand(
+				nativeCommand.title,
+				hasImagesOrVideos,
+				files.length > 0,
+			);
+			if ("reason" in prepared) return { accepted: false, reason: prepared.reason };
+			performRename(prepared.title);
+			return { accepted: true };
+		}
+		if (files.length > 0) return sendWithFiles(text, attachments, videos, behavior, files, upload);
+		if (behavior !== "interrupt") {
+			performSend(text, attachments, videos, behavior);
+			return { accepted: true };
+		}
+		abortThenSend(text, attachments, videos);
 		return { accepted: true };
 	};
 
@@ -927,12 +1023,13 @@ export default function ChatView({
 		else composerRef.current?.openHistory();
 	}, [historyOpenRequest, sessionId, historyOverlayOpen, cycleScope]);
 
+	const composerHeld = imageDraft.upload !== null;
 	useLayoutEffect(() => {
 		const composer = composerRef.current;
-		if (!composerEdit || !composer) return;
+		if (!composerEdit || !composer || composerHeld) return;
 		composer.applyEdit(composerEdit.kind, composerEdit.text);
 		useAppStore.getState().consumeComposerEdit(sessionId, composerEdit.id);
-	}, [composerEdit, sessionId]);
+	}, [composerEdit, sessionId, composerHeld]);
 
 	const mayClaimFocus = useCallback(
 		(toolCallId: string) =>
@@ -1002,7 +1099,7 @@ export default function ChatView({
 		[],
 	);
 
-	return (
+	const chatBody = (
 		<div
 			ref={chatViewRef}
 			data-testid="chat-view"
@@ -1037,6 +1134,7 @@ export default function ChatView({
 					}
 					stats={stats}
 					statusEntries={Object.entries(extUiStatus)}
+					links={headerLinks}
 					skillsStale={skillsStale}
 					{...(projectId ? { onOpenSkills: () => setSkillsOpen(true) } : {})}
 				/>
@@ -1170,10 +1268,12 @@ export default function ChatView({
 				/>
 			) : null}
 			<SuggestionChips
+				sessionId={sessionId}
 				suggestions={suggestions}
 				onSend={sendSuggestion}
 				onEdit={editSuggestion}
-				shortcutScope={chatRoot}
+				shortcuts={suggestionShortcuts}
+				chatRoot={chatRoot}
 			/>
 			<div className="relative shrink-0">
 				<HistoryOverlay
@@ -1198,7 +1298,10 @@ export default function ChatView({
 					ref={composerRef}
 					value={draft}
 					onChange={(v) => useAppStore.getState().setChatDraft(sessionId, v)}
+					readDraft={readDraft}
 					imageOwner={imageOwner}
+					acceptsFiles={acceptsFiles}
+					onAttachmentNotice={toast.info}
 					isStreaming={isStreaming}
 					awaitingResponse={awaitingResponse}
 					growthLimit={composerGrowthLimit}
@@ -1230,6 +1333,8 @@ export default function ChatView({
 					templatesEmpty={templatesEmpty}
 					onImagesChange={handleImagesChange}
 					onVideoChange={handleVideoChange}
+					pullRequests={pullRequests}
+					pullRequestNotice={t("chat.prCompletion.busyWorkspace")}
 				/>
 			</div>
 			<TemplateEditorDialog
@@ -1295,4 +1400,5 @@ export default function ChatView({
 			) : null}
 		</div>
 	);
+	return <ChatPaneSplit pane={pane}>{chatBody}</ChatPaneSplit>;
 }

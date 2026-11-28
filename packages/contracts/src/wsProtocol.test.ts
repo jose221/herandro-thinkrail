@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
 	DEFAULT_CONFIG,
+	DEFAULT_PROJECTS_FOLDER,
+	isProjectsFolder,
 	isSettleIdleDays,
 	isSubagentMaxConcurrent,
 	RECENT_MODELS_LIMIT,
@@ -20,6 +22,7 @@ import {
 	ANALYTICS_CONSENT_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_CAPTURE_PROTOCOL_VERSION,
 	ANDROID_EMULATOR_PROTOCOL_VERSION,
+	ARTIFACT_OUTPUTS_PROTOCOL_VERSION,
 	ARTIFACT_ROLES_PROTOCOL_VERSION,
 	ARTIFACTS_PROTOCOL_VERSION,
 	ASK_DISCUSS_PROTOCOL_VERSION,
@@ -28,6 +31,7 @@ import {
 	CACHE_WARMING_MODES,
 	CACHE_WARMING_SETTINGS_PROTOCOL_VERSION,
 	CHANGE_MUTATIONS_PROTOCOL_VERSION,
+	CHAT_ATTACHMENTS_PROTOCOL_VERSION,
 	CHAT_RESOURCES_PROTOCOL_VERSION,
 	CHATS_PROTOCOL_VERSION,
 	CLIENT_ERROR_REPORT_PROTOCOL_VERSION,
@@ -41,15 +45,19 @@ import {
 	customMessageText,
 	DEFAULT_CACHE_WARMING_MODE,
 	DEFAULT_MODEL_PROTOCOL_VERSION,
+	EXTENSION_BROWSE_PROTOCOL_VERSION,
 	EXTENSION_CATALOG_PROTOCOL_VERSION,
 	EXTENSION_EDITOR_TEXT_PROTOCOL_VERSION,
+	EXTENSION_QUERY_PROTOCOL_VERSION,
 	EXTENSION_SETTINGS_PROTOCOL_VERSION,
 	FEEDBACK_SURVEY_PROTOCOL_VERSION,
 	FONTS_PROTOCOL_VERSION,
 	FS_MUTATIONS_PROTOCOL_VERSION,
+	FS_REVEAL_PROTOCOL_VERSION,
 	GITHUB_STAR_PROTOCOL_VERSION,
 	HOST_ENVIRONMENT_PROTOCOL_VERSION,
 	HOST_UPDATE_RUN_PROTOCOL_VERSION,
+	INSTALLED_EXTENSIONS_PROTOCOL_VERSION,
 	isBackgroundCommandCompletionMessage,
 	isCacheWarmingMode,
 	isCustomEndpointId,
@@ -77,12 +85,15 @@ import {
 	PROJECT_RENAME_PROTOCOL_VERSION,
 	PROJECT_TEMPLATE_PREVIEW_PROTOCOL_VERSION,
 	PROJECT_TRUST_PROTOCOL_VERSION,
+	PROJECTS_FOLDER_PROTOCOL_VERSION,
 	PROTOCOL_VERSION,
 	PROVIDER_CONFIG_OPEN_PROTOCOL_VERSION,
 	PROVIDER_CONFIG_PROTOCOL_VERSION,
 	PROVIDER_MODELS_PROTOCOL_VERSION,
 	PROVIDER_WARNINGS_PROTOCOL_VERSION,
+	PULL_REQUEST_REVIEW_PROTOCOL_VERSION,
 	QUESTION_PANEL_PROTOCOL_VERSION,
+	REF_RESOURCE_PREVIEW_PROTOCOL_VERSION,
 	RESOURCE_HISTORY_PROTOCOL_VERSION,
 	RESOURCE_META_PROTOCOL_VERSION,
 	REVIEW_ACTIONS_PROTOCOL_VERSION,
@@ -114,6 +125,7 @@ import {
 	WORKSPACE_TOOLS_PROTOCOL_VERSION,
 	WS_CHANNELS,
 	WS_METHODS,
+	type WsErrorCode,
 } from "./wsProtocol";
 
 test("retired workspace activity keeps only its empty snapshot compatibility method", () => {
@@ -400,6 +412,17 @@ test("Files tree copy and delete are pinned to v118", () => {
 	expect(WS_METHODS.fsDelete).toBe("fs.delete");
 });
 
+test("chat file attachments are pinned to v129", () => {
+	expect(CHAT_ATTACHMENTS_PROTOCOL_VERSION).toBe(129);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(CHAT_ATTACHMENTS_PROTOCOL_VERSION);
+	expect(WS_METHODS.attachmentsCopyLocal).toBe("attachments.copyLocal");
+});
+
+test("published artifact outputs are pinned to v128", () => {
+	expect(ARTIFACT_OUTPUTS_PROTOCOL_VERSION).toBe(128);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ARTIFACT_OUTPUTS_PROTOCOL_VERSION);
+});
+
 test("artifact roles and round markers are pinned to v124", () => {
 	expect(ARTIFACT_ROLES_PROTOCOL_VERSION).toBe(124);
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(ARTIFACT_ROLES_PROTOCOL_VERSION);
@@ -461,6 +484,58 @@ test("host search and its previews are pinned to v106", () => {
 	expect(WS_METHODS.searchPreview).toBe("search.preview");
 });
 
+test("revealing a worktree entry in the OS file manager is pinned to v134", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(FS_REVEAL_PROTOCOL_VERSION);
+	expect(FS_REVEAL_PROTOCOL_VERSION).toBe(134);
+	expect(FS_REVEAL_PROTOCOL_VERSION).toBeGreaterThan(PULL_REQUEST_REVIEW_PROTOCOL_VERSION);
+	expect(WS_METHODS.fsReveal).toBe("fs.reveal");
+});
+
+test("base-branch skill and template previews are pinned to v135", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(REF_RESOURCE_PREVIEW_PROTOCOL_VERSION);
+	expect(REF_RESOURCE_PREVIEW_PROTOCOL_VERSION).toBe(135);
+});
+
+test("the projects folder and open_project are pinned to v136", () => {
+	expect(PROTOCOL_VERSION).toBe(136);
+	expect(PROJECTS_FOLDER_PROTOCOL_VERSION).toBe(136);
+	expect(DEFAULT_CONFIG.projectsFolder).toBe(DEFAULT_PROJECTS_FOLDER);
+	expect(DEFAULT_CONFIG.projectsFolderNoticeShown).toBe(false);
+	for (const rooted of [
+		"~/thinkrail",
+		"~",
+		" ~/code ",
+		"/srv/code",
+		"C:\\code",
+		"D:/code",
+		"\\\\host\\share",
+	]) {
+		expect(isProjectsFolder(rooted)).toBe(true);
+	}
+	for (const relative of ["code", "./code", "../code", "~code", "C:code"]) {
+		expect(isProjectsFolder(relative)).toBe(false);
+	}
+	expect(isProjectsFolder("  ")).toBe(false);
+	expect(isProjectsFolder("~/a\0b")).toBe(false);
+	expect(isProjectsFolder("x".repeat(4097))).toBe(false);
+	expect(isProjectsFolder(42)).toBe(false);
+});
+
+test("the community catalog is pinned to v132", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(132);
+	expect(EXTENSION_BROWSE_PROTOCOL_VERSION).toBe(132);
+	expect(WS_METHODS.extensionsBrowse).toBe("extensions.browse");
+});
+
+test("installed extensions are pinned to v131", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(INSTALLED_EXTENSIONS_PROTOCOL_VERSION);
+	expect(INSTALLED_EXTENSIONS_PROTOCOL_VERSION).toBe(131);
+	expect(WS_METHODS.extensionsRemove).toBe("extensions.remove");
+	expect(WS_METHODS.extensionsUpdate).toBe("extensions.update");
+	expect(WS_METHODS.extensionsCheckUpdates).toBe("extensions.checkUpdates");
+	expect(WS_CHANNELS.extensionsChanged).toBe("extensions.changed");
+});
+
 test("spec sections in search are pinned to v113", () => {
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(SPEC_SECTIONS_PROTOCOL_VERSION);
 	expect(SPEC_SECTIONS_PROTOCOL_VERSION).toBe(113);
@@ -495,6 +570,16 @@ test("the question panel height setting is pinned to v114", () => {
 test("extension editor text is pinned to v115", () => {
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(EXTENSION_EDITOR_TEXT_PROTOCOL_VERSION);
 	expect(EXTENSION_EDITOR_TEXT_PROTOCOL_VERSION).toBe(115);
+});
+
+test("pull request review methods are pinned to v133", () => {
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(PULL_REQUEST_REVIEW_PROTOCOL_VERSION);
+	expect(PULL_REQUEST_REVIEW_PROTOCOL_VERSION).toBe(133);
+	expect(PULL_REQUEST_REVIEW_PROTOCOL_VERSION).toBeGreaterThan(EXTENSION_BROWSE_PROTOCOL_VERSION);
+	expect(WS_METHODS.prList).toBe("pr.list");
+	expect(WS_METHODS.prGet).toBe("pr.get");
+	expect(WS_METHODS.prSizes).toBe("pr.sizes");
+	expect(WS_METHODS.prAuthors).toBe("pr.authors");
 });
 
 test("turning off server-side fallback is pinned to v126", () => {
@@ -856,6 +941,14 @@ test("extension settings are pinned to v105", () => {
 	expect(EXTENSION_SETTINGS_PROTOCOL_VERSION).toBe(105);
 	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(EXTENSION_SETTINGS_PROTOCOL_VERSION);
 	expect(DEFAULT_CONFIG.extensionSettings).toEqual({});
+});
+
+test("extension queries are pinned to v130 with their two refusal codes", () => {
+	expect(EXTENSION_QUERY_PROTOCOL_VERSION).toBe(130);
+	expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(EXTENSION_QUERY_PROTOCOL_VERSION);
+	expect(WS_METHODS.extensionQuery).toBe("extension.query");
+	const refusals: WsErrorCode[] = ["EXTENSION_DISABLED", "UNKNOWN_EXTENSION_QUERY"];
+	expect(refusals).toHaveLength(2);
 });
 
 test("ask_user_question discuss answers are pinned to v105, after background workspace creation", () => {

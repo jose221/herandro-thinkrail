@@ -21,6 +21,7 @@ import {
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
+import { isImeComposing } from "@thinkrail/ui/keyboard";
 import { cn } from "@thinkrail/ui/utils";
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -551,6 +552,7 @@ export function RequestsPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const onUrlKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (isImeComposing(event.nativeEvent)) return;
 		if (urlOpen && urlSuggestions.length > 0) {
 			if (event.key === "ArrowDown") {
 				event.preventDefault();
@@ -580,6 +582,7 @@ export function RequestsPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const onBodyKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+		if (isImeComposing(event.nativeEvent)) return;
 		if (draft.bodyType !== "json") return;
 		const element = event.currentTarget;
 		if (element.selectionStart !== element.selectionEnd) return;

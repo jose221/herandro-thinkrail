@@ -1,3 +1,15 @@
+export type * from "./attachments";
+export {
+	attachmentImageType,
+	CHAT_ATTACHMENT_ERROR_CODES,
+	CHAT_ATTACHMENT_MAX_BYTES,
+	CHAT_ATTACHMENT_UPLOAD_HEADER,
+	CHAT_ATTACHMENT_WORKSPACE_PARAM,
+	CHAT_ATTACHMENTS_ROUTE,
+	copiedFilePaths,
+	isChatAttachmentResult,
+	withAttachedFiles,
+} from "./attachments";
 export type * from "./domain";
 export {
 	ACCEPTED_IMAGE_TYPES,
@@ -15,7 +27,10 @@ export {
 	DEFAULT_ACP_CLIENTS,
 	DEFAULT_ACP_START_TIMEOUT_MS,
 	DEFAULT_CONFIG,
+	DEFAULT_PROJECTS_FOLDER,
+	DEFAULT_PULL_REQUEST_FILTER,
 	DEFAULT_WORKSPACE_NAME,
+	EXTENSION_ASSETS_ROUTE,
 	FIRST_PROMPT_MAX_LENGTH,
 	FONT_FALLBACKS_MAX,
 	FONT_FAMILY_NAME_MAX_LENGTH,
@@ -49,7 +64,9 @@ export {
 	isModelExtraParams,
 	isModelExtraParamValues,
 	isPlanReviewResult,
+	isProjectsFolder,
 	isProviderModelDefinitions,
+	isPullRequestFilter,
 	isQuestionPanelHeight,
 	isRetriedAttempt,
 	isSettleIdleDays,
@@ -72,6 +89,7 @@ export {
 	normalizeThemePreference,
 	OTHER_AGENT_SKILL_GROUPS,
 	PLAN_REVIEW_VERDICTS,
+	PROJECTS_FOLDER_MAX_LENGTH,
 	PROVIDER_CONFIG_LIMITS,
 	parsePiPackageInput,
 	projectRank,

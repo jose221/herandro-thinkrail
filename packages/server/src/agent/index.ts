@@ -23,6 +23,7 @@ export {
 	saveCustomEndpoint,
 } from "./customEndpoints";
 export {
+	delegationRootDir,
 	type ReviewSubagentRun,
 	readChildTranscript,
 	refreshSubagentConcurrency,
@@ -34,6 +35,7 @@ export {
 	type BundledExtensionFactory,
 	type BundledExtensions,
 	bumpPackageSwitchGeneration,
+	HOST_INLINE_FACTORIES,
 	listProjectAliasSkillNames,
 	listSkillCatalog,
 	listSkillCommands,
@@ -45,6 +47,7 @@ export {
 } from "./extensions";
 export {
 	effectiveMcpServerConfig,
+	HOST_BUILTIN_EXTENSION_NAMES,
 	type McpConfigFile,
 	mcpEntryFingerprint,
 	mcpPolicyOf,
@@ -96,7 +99,9 @@ export * from "./oneshot";
 export {
 	handlePiSettingsFileChanged,
 	handleProjectPiSettingsChanged,
+	type PiPackagesInstallOutcome,
 	type PiPackagesTarget,
+	piNpmCommand,
 	piPackagesCatalog,
 	piPackagesCheckUpdates,
 	piPackagesInstall,
@@ -107,6 +112,7 @@ export {
 	primeProjectPiSettings,
 	primeUserPiSettings,
 	publishPiPackagesChanged,
+	refreshInstalledExtensions,
 	refreshPiPackages,
 	setPiPackagesPublisher,
 } from "./piPackages";
@@ -124,6 +130,16 @@ export {
 	preparePiRuntimeGeneration,
 	settledAvailableModels,
 } from "./piRuntime";
+export {
+	type ClonePlan,
+	OPEN_PROJECT_TOOL_NAME,
+	type OpenedProject,
+	type OpenProjectOutcome,
+	type OpenProjectParams,
+	type OpenProjectPlan,
+	type ProjectToolsHost,
+	setProjectToolsHost,
+} from "./projectTools";
 export { piTrustsProjectPath, projectTrustSummary } from "./projectTrust";
 export { describeProviderAuth, type ProviderAuthFacts } from "./providerAuth";
 export {
@@ -146,7 +162,7 @@ export {
 	type SkillDecision,
 	type SkillFacts,
 } from "./skillAdmission";
-export { isProjectSkillPath, mayHoldProjectSkills } from "./skillSources";
+export { isProjectSkillPath, mayHoldProjectSkills, PROJECT_SKILL_ROOTS } from "./skillSources";
 export { listSubagentCatalog } from "./subagentCatalog";
 export {
 	SET_TITLE_TOOL_NAME,

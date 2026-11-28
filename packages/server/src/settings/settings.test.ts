@@ -12,6 +12,7 @@ import {
 import { validateCustomLayoutPresets } from "./layoutPresets";
 import {
 	getConfig,
+	markProjectsFolderNoticeShown,
 	noteRecentModel,
 	resetConfigCache,
 	type SettingsPublisher,
@@ -706,6 +707,45 @@ test("disabled packages default empty, round-trip deduped, and reject a malforme
 	expect(getConfig().disabledPackages).toEqual(["npm:x"]);
 });
 
+test("pull-request filters merge per project, forget with null, persist, and drop malformed values", () => {
+	expect(DEFAULT_CONFIG.pullRequestFilters).toEqual({});
+	expect(getConfig().pullRequestFilters).toEqual({});
+	updateConfig({ pullRequestFilters: { p1: { scope: "mine", drafts: false } } });
+	const next = updateConfig({
+		pullRequestFilters: { p2: { scope: "all", drafts: true, author: "ada" } },
+	});
+	expect(next.pullRequestFilters).toEqual({
+		p1: { scope: "mine", drafts: false },
+		p2: { scope: "all", drafts: true, author: "ada" },
+	});
+	expect(updateConfig({ pullRequestFilters: { p1: null } }).pullRequestFilters).toEqual({
+		p2: { scope: "all", drafts: true, author: "ada" },
+	});
+	resetConfigCache();
+	expect(getConfig().pullRequestFilters).toEqual({
+		p2: { scope: "all", drafts: true, author: "ada" },
+	});
+	for (const value of [
+		[],
+		"x",
+		{ p: { scope: "closed", drafts: true } },
+		{ p: { scope: "all" } },
+	]) {
+		const invalid = { pullRequestFilters: value } as unknown as AppConfigUpdate;
+		expect(() => updateConfig(invalid)).toThrow(
+			"pullRequestFilters must map project ids to pull-request filters or null",
+		);
+	}
+	writeFileSync(
+		join(dataDir, "config.json"),
+		JSON.stringify({
+			pullRequestFilters: { a: { scope: "all", drafts: true }, b: { scope: "x" }, c: 1 },
+		}),
+	);
+	resetConfigCache();
+	expect(getConfig().pullRequestFilters).toEqual({ a: { scope: "all", drafts: true } });
+});
+
 test("an out-of-range subagent limit is rejected before persistence or broadcast", () => {
 	const published: AppConfig[] = [];
 	setSettingsPublisher((config) => published.push(config));
@@ -1211,6 +1251,36 @@ test("the settle idle window defaults to 7 days, accepts null for never, and rej
 	expect(updateConfig({ settleIdleDays: null }).settleIdleDays).toBeNull();
 	resetConfigCache();
 	expect(getConfig().settleIdleDays).toBeNull();
+});
+
+test("the projects folder defaults to ~/thinkrail, is trimmed, and rejects blank or relative paths", () => {
+	writeFileSync(join(dataDir, "config.json"), JSON.stringify({ projectsFolder: "  " }));
+	resetConfigCache();
+	expect(getConfig().projectsFolder).toBe("~/thinkrail");
+
+	const before = getConfig();
+	expect(() => updateConfig({ projectsFolder: " " })).toThrow("projectsFolder must be");
+	expect(() => updateConfig({ projectsFolder: "code" })).toThrow(
+		"projectsFolder must be an absolute host folder or start with ~/",
+	);
+	if (process.platform !== "win32") {
+		for (const foreign of ["C:\\code", "~\\code", "\\\\host\\share"]) {
+			expect(() => updateConfig({ projectsFolder: foreign })).toThrow("projectsFolder must be");
+		}
+	}
+	expect(() => updateConfig({ projectsFolder: 7 as unknown as string })).toThrow(
+		"projectsFolder must be",
+	);
+	expect(getConfig()).toEqual(before);
+
+	expect(updateConfig({ projectsFolder: " ~/code " }).projectsFolder).toBe("~/code");
+	expect(() =>
+		updateConfig({ projectsFolderNoticeShown: true } as unknown as AppConfigUpdate),
+	).toThrow("Unknown setting: projectsFolderNoticeShown");
+	expect(getConfig().projectsFolderNoticeShown).toBe(false);
+	expect(markProjectsFolderNoticeShown().projectsFolderNoticeShown).toBe(true);
+	resetConfigCache();
+	expect(getConfig().projectsFolder).toBe("~/code");
 });
 
 test("locale defaults to system, keeps an unavailable tag, and rejects non-canonical values", () => {

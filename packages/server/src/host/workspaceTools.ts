@@ -9,6 +9,7 @@ import type {
 	Workspace,
 	WorkspaceKickoff,
 } from "@thinkrail/contracts";
+import { withAttachedFiles } from "@thinkrail/contracts";
 import {
 	getSessionWorkspaceId,
 	listSessions,
@@ -81,7 +82,7 @@ export function resolveProject(
 	if (!needle) {
 		if (fallbackProjectId === undefined) {
 			throw new Error(
-				`This chat has no project: pass \`project\`. Open projects: ${describeProjects(open)}.`,
+				`This chat has no project: pass \`project\`. Open projects: ${describeProjects(open)}. To add a repository, call open_project.`,
 			);
 		}
 		const own = open.find((project) => project.id === fallbackProjectId);
@@ -98,7 +99,7 @@ export function resolveProject(
 	const [only] = matches;
 	if (only && matches.length === 1) return only;
 	throw new Error(
-		`${matches.length > 1 ? "Ambiguous" : "Unknown"} project "${needle}". Open projects: ${describeProjects(open)}.`,
+		`${matches.length > 1 ? "Ambiguous" : "Unknown"} project "${needle}". Open projects: ${describeProjects(open)}.${matches.length > 1 ? "" : " To add a repository, call open_project."}`,
 	);
 }
 
@@ -143,11 +144,6 @@ export function prepareAttachments(paths: readonly string[], cwd: string): Prepa
 		}
 	}
 	return prepared;
-}
-
-export function composePrompt(prompt: string, files: readonly string[]): string {
-	if (files.length === 0) return prompt;
-	return `${prompt}\n\nAttached files:\n${files.map((file) => `- ${file}`).join("\n")}`;
 }
 
 async function defaultBaseBranch(projectId: string, signal?: AbortSignal): Promise<string> {
@@ -202,7 +198,7 @@ export async function startWorkspace(
 	const baseRef = params.base_branch?.trim() || (await deps.defaultBaseBranch(project.id, signal));
 	if (signal?.aborted) throw new Error(NOTHING_CREATED);
 	const kickoff: WorkspaceKickoff = {
-		text: composePrompt(prompt, files),
+		text: withAttachedFiles(prompt, files),
 		...(images.length > 0 ? { images } : {}),
 		...(model ? { model } : {}),
 		...(params.effort ? { thinkingLevel: params.effort } : {}),

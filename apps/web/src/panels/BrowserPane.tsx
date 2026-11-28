@@ -41,6 +41,7 @@ import {
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
+import { isImeComposing } from "@thinkrail/ui/keyboard";
 import { cn } from "@thinkrail/ui/utils";
 import {
 	type ReactNode,
@@ -1715,6 +1716,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 												aria-label={t("browser.frameTitle", { url: activeTab.url })}
 												className="sr-only"
 												onKeyDown={(event) => {
+													if (isImeComposing(event.nativeEvent)) return;
 													if (
 														event.key.length === 1 &&
 														!event.ctrlKey &&

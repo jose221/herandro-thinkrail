@@ -29,6 +29,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@thinkrail/ui/dialog";
+import { isImeComposing } from "@thinkrail/ui/keyboard";
 import { Textarea } from "@thinkrail/ui/textarea";
 import { cn } from "@thinkrail/ui/utils";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -510,6 +511,7 @@ export function AcpChatPane({
 	};
 
 	const submitOnShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+		if (isImeComposing(event.nativeEvent)) return;
 		if (event.key !== "Enter" || (!event.metaKey && !event.ctrlKey)) return;
 		event.preventDefault();
 		void send();

@@ -7,6 +7,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { focusUnitStop } from "./settingsWalk";
 
 export const SETTINGS_INPUT =
 	"h-32 rounded-sm border border-control-border-default bg-control-bg px-8 tr-text-ui text-text-default placeholder:text-text-subtle focus:border-control-border-active focus-visible:focus-ring disabled:border-control-disabled-border disabled:bg-control-disabled-bg disabled:text-control-disabled-text aria-invalid:border-feedback-error";
@@ -39,8 +40,8 @@ export function shouldCommitDraft({
 export interface SettingsDraftOptions {
 	saved: string;
 	isValid: (draft: string) => boolean;
+	normalize?: (draft: string) => string;
 	commit: (draft: string) => undefined | Promise<boolean>;
-	enterBlurs?: boolean;
 	onEdit?: () => void;
 }
 
@@ -63,8 +64,8 @@ export interface SettingsDraft {
 export function useSettingsDraft({
 	saved,
 	isValid,
+	normalize,
 	commit,
-	enterBlurs = false,
 	onEdit,
 }: SettingsDraftOptions): SettingsDraft {
 	const [draft, setDraftState] = useState(saved);
@@ -110,13 +111,15 @@ export function useSettingsDraft({
 	};
 	const commitDraft = () => {
 		editingRef.current = false;
+		const next = normalize && !invalid ? normalize(draft) : draft;
 		const go = shouldCommitDraft({
-			draft,
+			draft: next,
 			invalid,
 			submitted: submittedRef.current,
 			authoritative: authoritative(),
 		});
-		if (go) submit(draft);
+		if (go) submit(next);
+		else if (next !== draft) setDraftState(next);
 	};
 
 	return {
@@ -135,8 +138,8 @@ export function useSettingsDraft({
 				if (isImeComposing(event.nativeEvent)) return;
 				if (event.key === "Enter") {
 					event.preventDefault();
-					if (enterBlurs) event.currentTarget.blur();
-					else commitDraft();
+					commitDraft();
+					if (!invalid) focusUnitStop<HTMLElement>(event.currentTarget);
 					return;
 				}
 				if (event.key !== "Escape") return;
