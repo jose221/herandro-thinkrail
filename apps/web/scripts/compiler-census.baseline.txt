@@ -13,9 +13,11 @@
 ../../packages/resource-renderers/src/support/useScrollViewState.ts useScrollViewState
 ../../thinkrail-extensions/ask-user-question/web/AskUserQuestionCard.tsx AskUserQuestionCard
 src/chat/ChatTranscript.tsx useVirtualRows
+src/chat/Composer.tsx Composer
 src/chat/HistoryOverlay.tsx Highlight
 src/chat/resources/ResourcesInspector.tsx ResourcesInspector
 src/panels/AndroidEmulatorPane.tsx AndroidEmulatorPane
+src/panels/BrowserPane.tsx BrowserPane
 src/panels/branches.ts useBranchList
 src/panels/useBranchStatus.ts useBranchStatus
 src/panels/useLiveTabContent.ts useLiveTabContent

@@ -30,6 +30,7 @@ import {
 	hasLayer,
 	isInCodeEditor,
 	isInEditorFind,
+	isInLiveBrowser,
 	isInTerminal,
 	MODAL_LAYER_SELECTOR,
 } from "./shortcutLayers";
@@ -252,6 +253,7 @@ export function useGlobalHotkeys(actions: GlobalHotkeyActions): void {
 		const onKeyDown = (event: KeyboardEvent) => {
 			if (keyboardClaimed()) return;
 			const target = event.composedPath()[0] ?? event.target;
+			if (isInLiveBrowser(target) && event.key !== "F6") return;
 			const current = actionsRef.current;
 			const chips = chipsFor(event.target);
 			const route = routeHotkey(event, current, {

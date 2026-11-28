@@ -64,6 +64,7 @@ interface WorkspaceEngineState {
 	requestStarts: Map<string, number>;
 	dialog: BrowserDialogState | null;
 	lastFrameAt: number;
+	inputQueue: Promise<void>;
 }
 
 export interface BrowserRealtimePublishers {
@@ -217,9 +218,21 @@ function editingCommandsForKey(key: string, modifiers: number): string[] | undef
 			if (meta && !ctrl && !alt) return ["deleteToBeginningOfLine"];
 			if (alt && !ctrl && !meta) return ["deleteWordBackward"];
 			return undefined;
+		case "Delete":
+			if (alt && !ctrl && !meta) return ["deleteWordForward"];
+			if (!ctrl && !meta && !alt) return ["deleteForward"];
+			return undefined;
 		case "a":
 		case "A":
 			if ((meta || ctrl) && !alt && !shift) return ["selectAll"];
+			return undefined;
+		case "c":
+		case "C":
+			if ((meta || ctrl) && !alt && !shift) return ["copy"];
+			return undefined;
+		case "x":
+		case "X":
+			if ((meta || ctrl) && !alt && !shift) return ["cut"];
 			return undefined;
 		case "z":
 		case "Z":
@@ -494,7 +507,7 @@ class CdpBrowserDaemon {
 				}
 				if (!data || owner.tabId !== state.activeTabId) return;
 				const now = Date.now();
-				if (now - state.lastFrameAt < 35) return;
+				if (now - state.lastFrameAt < 25) return;
 				state.lastFrameAt = now;
 				const meta = isRecord(params.metadata) ? params.metadata : {};
 				const width =
@@ -705,10 +718,21 @@ class CdpBrowserDaemon {
 				requestStarts: new Map(),
 				dialog: null,
 				lastFrameAt: 0,
+				inputQueue: Promise.resolve(),
 			};
 			this.workspaces.set(workspaceId, state);
 		}
 		return state;
+	}
+
+	private enqueueInput<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+		const state = this.ensureWorkspaceState(workspaceId);
+		const run = state.inputQueue.then(fn, fn);
+		state.inputQueue = run.then(
+			() => undefined,
+			() => undefined,
+		);
+		return run;
 	}
 
 	private async ensureActiveTab(workspaceId: string): Promise<{
@@ -785,7 +809,7 @@ class CdpBrowserDaemon {
 				"Page.startScreencast",
 				{
 					format: "jpeg",
-					quality: 75,
+					quality: 82,
 					maxWidth: state.viewport.width,
 					maxHeight: state.viewport.height,
 					everyNthFrame: 1,
@@ -965,7 +989,7 @@ class CdpBrowserDaemon {
 		await this.sendCdp("Page.reload", {}, tab.sessionId);
 	}
 
-	async pointer(
+	pointer(
 		workspaceId: string,
 		action: "down" | "up" | "move",
 		x: number,
@@ -973,44 +997,42 @@ class CdpBrowserDaemon {
 		button: "left" | "middle" | "right" = "left",
 		clickCount = 1,
 	): Promise<void> {
-		const { tab } = await this.ensureActiveTab(workspaceId);
-		const type =
-			action === "down" ? "mousePressed" : action === "up" ? "mouseReleased" : "mouseMoved";
-		await this.sendCdp(
-			"Input.dispatchMouseEvent",
-			{
-				type,
-				x: Math.round(x),
-				y: Math.round(y),
-				button: action === "move" ? "none" : button,
-				clickCount: action === "move" ? 0 : clickCount,
-			},
-			tab.sessionId,
-		);
+		return this.enqueueInput(workspaceId, async () => {
+			const { tab } = await this.ensureActiveTab(workspaceId);
+			const type =
+				action === "down" ? "mousePressed" : action === "up" ? "mouseReleased" : "mouseMoved";
+			await this.sendCdp(
+				"Input.dispatchMouseEvent",
+				{
+					type,
+					x: Math.round(x),
+					y: Math.round(y),
+					button: action === "move" ? "none" : button,
+					clickCount: action === "move" ? 0 : clickCount,
+				},
+				tab.sessionId,
+			);
+		});
 	}
 
-	async wheel(
-		workspaceId: string,
-		x: number,
-		y: number,
-		deltaX: number,
-		deltaY: number,
-	): Promise<void> {
-		const { tab } = await this.ensureActiveTab(workspaceId);
-		await this.sendCdp(
-			"Input.dispatchMouseEvent",
-			{
-				type: "mouseWheel",
-				x: Math.round(x),
-				y: Math.round(y),
-				deltaX,
-				deltaY,
-			},
-			tab.sessionId,
-		);
+	wheel(workspaceId: string, x: number, y: number, deltaX: number, deltaY: number): Promise<void> {
+		return this.enqueueInput(workspaceId, async () => {
+			const { tab } = await this.ensureActiveTab(workspaceId);
+			await this.sendCdp(
+				"Input.dispatchMouseEvent",
+				{
+					type: "mouseWheel",
+					x: Math.round(x),
+					y: Math.round(y),
+					deltaX,
+					deltaY,
+				},
+				tab.sessionId,
+			);
+		});
 	}
 
-	async key(
+	key(
 		workspaceId: string,
 		action: "down" | "up",
 		key: string,
@@ -1018,31 +1040,36 @@ class CdpBrowserDaemon {
 		keyCode?: number,
 		modifiers = 0,
 	): Promise<void> {
-		if (MODIFIER_KEYS.has(key)) return;
-		const { tab } = await this.ensureActiveTab(workspaceId);
-		const mapped = KEY_DEFS[key];
-		const resolvedKey = mapped?.key ?? key;
-		const type = action === "down" ? "keyDown" : "keyUp";
-		const commands = action === "down" ? editingCommandsForKey(resolvedKey, modifiers) : undefined;
-		await this.sendCdp(
-			"Input.dispatchKeyEvent",
-			{
-				type,
-				key: resolvedKey,
-				code: code ?? mapped?.code ?? key,
-				windowsVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
-				nativeVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
-				modifiers,
-				...(action === "down" && mapped?.text ? { text: mapped.text } : {}),
-				...(commands ? { commands } : {}),
-			},
-			tab.sessionId,
-		);
+		if (MODIFIER_KEYS.has(key)) return Promise.resolve();
+		return this.enqueueInput(workspaceId, async () => {
+			const { tab } = await this.ensureActiveTab(workspaceId);
+			const mapped = KEY_DEFS[key];
+			const resolvedKey = mapped?.key ?? key;
+			const type = action === "down" ? "keyDown" : "keyUp";
+			const commands =
+				action === "down" ? editingCommandsForKey(resolvedKey, modifiers) : undefined;
+			await this.sendCdp(
+				"Input.dispatchKeyEvent",
+				{
+					type,
+					key: resolvedKey,
+					code: code ?? mapped?.code ?? key,
+					windowsVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
+					nativeVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
+					modifiers,
+					...(action === "down" && mapped?.text ? { text: mapped.text } : {}),
+					...(commands ? { commands } : {}),
+				},
+				tab.sessionId,
+			);
+		});
 	}
 
-	async insertText(workspaceId: string, text: string): Promise<void> {
-		const { tab } = await this.ensureActiveTab(workspaceId);
-		await this.sendCdp("Input.insertText", { text }, tab.sessionId);
+	insertText(workspaceId: string, text: string): Promise<void> {
+		return this.enqueueInput(workspaceId, async () => {
+			const { tab } = await this.ensureActiveTab(workspaceId);
+			await this.sendCdp("Input.insertText", { text }, tab.sessionId);
+		});
 	}
 
 	async pressKey(workspaceId: string, keyName: string): Promise<void> {

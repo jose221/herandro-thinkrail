@@ -25,7 +25,6 @@ import {
 	type BrowserDialogPush,
 	type BrowserDialogState,
 	type BrowserEngineStatus,
-	type BrowserFramePush,
 	type BrowserNetworkEntry,
 	type BrowserNetworkPush,
 	type BrowserPageSnapshot,
@@ -41,7 +40,6 @@ import {
 import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { Button, IconButton } from "@thinkrail/ui/button";
-import { isImeComposing } from "@thinkrail/ui/keyboard";
 import { cn } from "@thinkrail/ui/utils";
 import {
 	type ReactNode,
@@ -58,6 +56,7 @@ import { announceMediaCapture } from "../lib/mediaCapture";
 import { toast, useAppStore } from "../store";
 import { errorText, getTransport } from "../transport";
 import { BrowserDevTools } from "./BrowserDevTools";
+import { BrowserLiveStage, type BrowserLiveStageHandle } from "./BrowserLiveStage";
 import { CaptureAnnotator } from "./CaptureAnnotator";
 import { ConfirmDialog } from "./ConfirmDialog";
 
@@ -345,37 +344,6 @@ export function supportsWorkspaceTools(protocolVersion: number | null): boolean 
 	return protocolVersion !== null && protocolVersion >= WORKSPACE_TOOLS_PROTOCOL_VERSION;
 }
 
-function eventModifiers(event: {
-	altKey: boolean;
-	ctrlKey: boolean;
-	metaKey: boolean;
-	shiftKey: boolean;
-}): number {
-	return (
-		(event.altKey ? 1 : 0) |
-		(event.ctrlKey ? 2 : 0) |
-		(event.metaKey ? 4 : 0) |
-		(event.shiftKey ? 8 : 0)
-	);
-}
-
-function pointOnLiveElement(
-	clientX: number,
-	clientY: number,
-	element: HTMLImageElement | null,
-	frame: BrowserFramePush | null,
-): { x: number; y: number } | null {
-	if (!element || !frame || frame.width <= 0 || frame.height <= 0) return null;
-	const rect = element.getBoundingClientRect();
-	if (rect.width <= 0 || rect.height <= 0) return null;
-	const x = Math.round(((clientX - rect.left) / rect.width) * frame.width);
-	const y = Math.round(((clientY - rect.top) / rect.height) * frame.height);
-	return {
-		x: Math.max(0, Math.min(frame.width - 1, x)),
-		y: Math.max(0, Math.min(frame.height - 1, y)),
-	};
-}
-
 function displayUrl(url: string): string {
 	if (url === "about:blank") return "";
 	try {
@@ -423,7 +391,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const [readFailed, setReadFailed] = useState(false);
 	const [historyInfo, setHistoryInfo] = useState({ index: -1, length: 0 });
 	const [engineStatus, setEngineStatus] = useState<BrowserEngineStatus | null>(null);
-	const [liveFrame, setLiveFrame] = useState<BrowserFramePush | null>(null);
 	const [consoleLogs, setConsoleLogs] = useState<BrowserConsoleEntry[]>([]);
 	const [networkLogs, setNetworkLogs] = useState<BrowserNetworkEntry[]>([]);
 	const [pageDialog, setPageDialog] = useState<BrowserDialogState | null>(null);
@@ -433,10 +400,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const [annotatingBusy, setAnnotatingBusy] = useState(false);
 	const rootRef = useRef<HTMLDivElement>(null);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
-	const liveHostRef = useRef<HTMLDivElement>(null);
-	const liveInputRef = useRef<HTMLInputElement>(null);
-	const liveImgRef = useRef<HTMLImageElement>(null);
-	const lastMoveSentRef = useRef(0);
+	const liveStageRef = useRef<BrowserLiveStageHandle>(null);
 	const deviceFrameRef = useRef<HTMLDivElement>(null);
 	const deviceHostRef = useRef<HTMLDivElement>(null);
 	const captureVideo = useRef<HTMLVideoElement>(null);
@@ -541,18 +505,12 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	useEffect(() => {
 		if (!supported || !devToolsSupported) {
 			setEngineStatus(null);
-			setLiveFrame(null);
 			setConsoleLogs([]);
 			setNetworkLogs([]);
 			setPageDialog(null);
 			return;
 		}
 		const transport = getTransport();
-		const unsubFrame = transport.subscribe(WS_CHANNELS.browserFrame, (data) => {
-			const push = data as BrowserFramePush;
-			if (push?.workspaceId !== workspaceId) return;
-			setLiveFrame(push);
-		});
 		const unsubConsole = transport.subscribe(WS_CHANNELS.browserConsole, (data) => {
 			const push = data as BrowserConsolePush;
 			if (push?.workspaceId !== workspaceId || !push.entry) return;
@@ -578,7 +536,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			setDialogPrompt(push.dialog?.defaultValue ?? "");
 		});
 		return () => {
-			unsubFrame();
 			unsubConsole();
 			unsubNetwork();
 			unsubDialog();
@@ -586,27 +543,23 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	}, [devToolsSupported, supported, workspaceId]);
 
 	const activeTabUrl = activeTab?.url ?? "about:blank";
+	const hasOpenPage = activeTabUrl !== "about:blank";
 	const activeDeviceWidth = device?.width;
 	const activeDeviceHeight = device?.height;
 
 	useEffect(() => {
-		if (
-			!supported ||
-			!devToolsSupported ||
-			suspended ||
-			!panelVisible ||
-			activeTabUrl === "about:blank"
-		) {
+		if (!supported || !devToolsSupported || suspended || !panelVisible || !hasOpenPage) {
 			return;
 		}
 		let cancelled = false;
+		const stageHost = liveStageRef.current?.getImageElement()?.parentElement;
 		const desiredWidth =
 			viewport === "desktop"
-				? Math.max(480, Math.round(liveHostRef.current?.clientWidth || 1280))
+				? Math.max(480, Math.round(stageHost?.clientWidth || rootRef.current?.clientWidth || 1280))
 				: (activeDeviceWidth ?? 412);
 		const desiredHeight =
 			viewport === "desktop"
-				? Math.max(360, Math.round(liveHostRef.current?.clientHeight || 800))
+				? Math.max(360, Math.round(stageHost?.clientHeight || rootRef.current?.clientHeight || 800))
 				: (activeDeviceHeight ?? 732);
 
 		const start = async () => {
@@ -643,8 +596,8 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	}, [
 		activeDeviceHeight,
 		activeDeviceWidth,
-		activeTabUrl,
 		devToolsSupported,
+		hasOpenPage,
 		panelVisible,
 		supported,
 		suspended,
@@ -665,7 +618,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 				.catch(() => {});
 			return;
 		}
-		const host = liveHostRef.current;
+		const host = liveStageRef.current?.getImageElement()?.parentElement ?? rootRef.current;
 		if (!host) return;
 		let timer: number | null = null;
 		const syncSize = () => {
@@ -827,7 +780,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		const target =
 			viewport === "desktop"
 				? cdpActive
-					? liveImgRef.current
+					? (liveStageRef.current?.getImageElement() ?? null)
 					: iframeRef.current
 				: deviceFrameRef.current;
 		const clip = viewport === "desktop" ? null : deviceHostRef.current;
@@ -883,14 +836,15 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		const clip = viewport === "desktop" ? null : deviceHostRef.current;
 		setCapturing(true);
 		try {
+			const latestFrame = liveStageRef.current?.getLatestFrame() ?? null;
 			if (cdpActive) {
 				setAnnotatingFrame(await getTransport().request("browser.screenshot", { workspaceId }));
-			} else if (liveFrame) {
+			} else if (latestFrame) {
 				setAnnotatingFrame({
-					mimeType: liveFrame.mimeType,
-					data: liveFrame.data,
-					width: liveFrame.width,
-					height: liveFrame.height,
+					mimeType: latestFrame.mimeType,
+					data: latestFrame.data,
+					width: latestFrame.width,
+					height: latestFrame.height,
 				});
 			} else {
 				await ensureCaptureStream();
@@ -1263,125 +1217,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		setCaptureIntroOpen(true);
 	};
 
-	const focusLiveInput = () => {
-		liveInputRef.current?.focus({ preventScroll: true });
-	};
-
-	const handleLiveKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-		if (isImeComposing(event.nativeEvent) || event.key === "Dead" || event.key === "Process") {
-			return;
-		}
-		event.stopPropagation();
-		if (
-			event.key === "Alt" ||
-			event.key === "Control" ||
-			event.key === "Meta" ||
-			event.key === "Shift"
-		) {
-			return;
-		}
-		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
-			return;
-		}
-		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
-			event.preventDefault();
-			void getTransport()
-				.request("browser.text", { workspaceId, text: event.key })
-				.catch(() => {});
-			return;
-		}
-		event.preventDefault();
-		void getTransport()
-			.request("browser.key", {
-				workspaceId,
-				action: "down",
-				key: event.key,
-				code: event.code,
-				keyCode: event.keyCode,
-				modifiers: eventModifiers(event),
-			})
-			.catch(() => {});
-	};
-
-	const handleLiveKeyUp = (event: React.KeyboardEvent<HTMLInputElement>) => {
-		if (isImeComposing(event.nativeEvent)) return;
-		event.stopPropagation();
-		if (
-			event.key === "Alt" ||
-			event.key === "Control" ||
-			event.key === "Meta" ||
-			event.key === "Shift"
-		) {
-			return;
-		}
-		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
-			return;
-		}
-		void getTransport()
-			.request("browser.key", {
-				workspaceId,
-				action: "up",
-				key: event.key,
-				code: event.code,
-				keyCode: event.keyCode,
-				modifiers: eventModifiers(event),
-			})
-			.catch(() => {});
-	};
-
-	const handleLiveCompositionEnd = (event: React.CompositionEvent<HTMLInputElement>) => {
-		if (event.data) {
-			void getTransport()
-				.request("browser.text", { workspaceId, text: event.data })
-				.catch(() => {});
-		}
-		event.currentTarget.value = "";
-	};
-
-	const handleLiveInput = (event: React.FormEvent<HTMLInputElement>) => {
-		if (event.nativeEvent instanceof InputEvent && event.nativeEvent.isComposing) return;
-		const val = event.currentTarget.value;
-		if (!val) return;
-		event.currentTarget.value = "";
-		void getTransport()
-			.request("browser.text", { workspaceId, text: val })
-			.catch(() => {});
-	};
-
-	const handleLivePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
-		event.preventDefault();
-		event.stopPropagation();
-		const pasted = event.clipboardData?.getData("text");
-		if (!pasted) return;
-		void getTransport()
-			.request("browser.text", { workspaceId, text: pasted })
-			.catch(() => {});
-	};
-
-	const sendPointer = (
-		action: "down" | "up" | "move",
-		event: React.PointerEvent<HTMLImageElement>,
-	) => {
-		if (!cdpActive) return;
-		const point = pointOnLiveElement(event.clientX, event.clientY, liveImgRef.current, liveFrame);
-		if (!point) return;
-		if (action === "move") {
-			const now = Date.now();
-			if (now - lastMoveSentRef.current < 32) return;
-			lastMoveSentRef.current = now;
-		}
-		const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
-		void getTransport()
-			.request("browser.pointer", {
-				workspaceId,
-				action,
-				x: point.x,
-				y: point.y,
-				...(action === "move" ? {} : { button, clickCount: event.detail || 1 }),
-			})
-			.catch(() => {});
-	};
-
 	const replyPageDialog = (accept: boolean) => {
 		void getTransport()
 			.request("browser.dialog.reply", {
@@ -1694,138 +1529,19 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 							) : null}
 							{cdpActive ? (
 								viewport === "desktop" ? (
-									<div
-										ref={liveHostRef}
-										data-testid="browser-live-stage"
-										className="relative mx-auto flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-container-elevated-bg focus-within:focus-ring-inset"
-									>
-										<input
-											ref={liveInputRef}
-											type="text"
-											autoComplete="off"
-											autoCorrect="off"
-											autoCapitalize="off"
-											spellCheck={false}
-											aria-label={t("browser.frameTitle", { url: activeTab.url })}
-											className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-											onCompositionEnd={handleLiveCompositionEnd}
-											onInput={handleLiveInput}
-											onKeyDown={handleLiveKeyDown}
-											onKeyUp={handleLiveKeyUp}
-											onPaste={handleLivePaste}
-										/>
-										{liveFrame ? (
-											<img
-												ref={liveImgRef}
-												src={`data:${liveFrame.mimeType};base64,${liveFrame.data}`}
-												alt={t("browser.frameTitle", { url: activeTab.url })}
-												data-testid="browser-live-frame"
-												draggable={false}
-												onMouseDown={(event) => {
-													event.preventDefault();
-													focusLiveInput();
-												}}
-												onPointerDown={(event) => {
-													event.preventDefault();
-													focusLiveInput();
-													sendPointer("down", event);
-												}}
-												onPointerMove={(event) => sendPointer("move", event)}
-												onPointerUp={(event) => sendPointer("up", event)}
-												onWheel={(event) => {
-													const pt = pointOnLiveElement(
-														event.clientX,
-														event.clientY,
-														liveImgRef.current,
-														liveFrame,
-													);
-													if (!pt) return;
-													void getTransport()
-														.request("browser.wheel", {
-															workspaceId,
-															x: pt.x,
-															y: pt.y,
-															deltaX: event.deltaX,
-															deltaY: event.deltaY,
-														})
-														.catch(() => {});
-												}}
-												onContextMenu={(event) => event.preventDefault()}
-												className="max-h-full max-w-full cursor-pointer select-none object-contain"
-											/>
-										) : (
-											<span className="text-text-muted tr-text-ui">
-												{t("browser.engine.starting")}
-											</span>
-										)}
-									</div>
+									<BrowserLiveStage
+										ref={liveStageRef}
+										workspaceId={workspaceId}
+										url={activeTab.url}
+									/>
 								) : device ? (
 									<DevicePreview device={device} frameRef={deviceFrameRef} hostRef={deviceHostRef}>
-										<div
-											ref={liveHostRef}
-											data-testid="browser-live-stage"
-											className="relative flex h-full w-full items-center justify-center bg-container-elevated-bg focus-within:focus-ring-inset"
-										>
-											<input
-												ref={liveInputRef}
-												type="text"
-												autoComplete="off"
-												autoCorrect="off"
-												autoCapitalize="off"
-												spellCheck={false}
-												aria-label={t("browser.frameTitle", { url: activeTab.url })}
-												className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-												onCompositionEnd={handleLiveCompositionEnd}
-												onInput={handleLiveInput}
-												onKeyDown={handleLiveKeyDown}
-												onKeyUp={handleLiveKeyUp}
-												onPaste={handleLivePaste}
-											/>
-											{liveFrame ? (
-												<img
-													ref={liveImgRef}
-													src={`data:${liveFrame.mimeType};base64,${liveFrame.data}`}
-													alt={t("browser.frameTitle", { url: activeTab.url })}
-													data-testid="browser-live-frame"
-													draggable={false}
-													onMouseDown={(event) => {
-														event.preventDefault();
-														focusLiveInput();
-													}}
-													onPointerDown={(event) => {
-														event.preventDefault();
-														focusLiveInput();
-														sendPointer("down", event);
-													}}
-													onPointerMove={(event) => sendPointer("move", event)}
-													onPointerUp={(event) => sendPointer("up", event)}
-													onWheel={(event) => {
-														const pt = pointOnLiveElement(
-															event.clientX,
-															event.clientY,
-															liveImgRef.current,
-															liveFrame,
-														);
-														if (!pt) return;
-														void getTransport()
-															.request("browser.wheel", {
-																workspaceId,
-																x: pt.x,
-																y: pt.y,
-																deltaX: event.deltaX,
-																deltaY: event.deltaY,
-															})
-															.catch(() => {});
-													}}
-													onContextMenu={(event) => event.preventDefault()}
-													className="h-full w-full cursor-pointer select-none object-contain"
-												/>
-											) : (
-												<span className="text-text-muted tr-text-ui">
-													{t("browser.engine.starting")}
-												</span>
-											)}
-										</div>
+										<BrowserLiveStage
+											ref={liveStageRef}
+											workspaceId={workspaceId}
+											url={activeTab.url}
+											fill
+										/>
 									</DevicePreview>
 								) : null
 							) : viewport === "desktop" ? (

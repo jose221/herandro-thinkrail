@@ -51,3 +51,9 @@ const EDITOR_FIND_SELECTOR = ".monaco-editor .find-widget";
 export function isInEditorFind(target: EventTarget | null) {
 	return target instanceof Element && target.closest(EDITOR_FIND_SELECTOR) !== null;
 }
+
+const LIVE_BROWSER_SELECTOR = '[data-testid="browser-live-stage"]';
+
+export function isInLiveBrowser(target: EventTarget | null) {
+	return target instanceof Element && target.closest(LIVE_BROWSER_SELECTOR) !== null;
+}
