@@ -437,7 +437,6 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const liveInputRef = useRef<HTMLInputElement>(null);
 	const liveImgRef = useRef<HTMLImageElement>(null);
 	const lastMoveSentRef = useRef(0);
-	const composingRef = useRef(false);
 	const deviceFrameRef = useRef<HTMLDivElement>(null);
 	const deviceHostRef = useRef<HTMLDivElement>(null);
 	const captureVideo = useRef<HTMLVideoElement>(null);
@@ -1269,12 +1268,14 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const handleLiveKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-		if (isImeComposing(event.nativeEvent) || composingRef.current) return;
+		if (isImeComposing(event.nativeEvent) || event.key === "Dead" || event.key === "Process") {
+			return;
+		}
 		event.stopPropagation();
 		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
 			return;
 		}
-		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
 			event.preventDefault();
 			void getTransport()
 				.request("browser.text", { workspaceId, text: event.key })
@@ -1295,7 +1296,7 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	};
 
 	const handleLiveKeyUp = (event: React.KeyboardEvent<HTMLInputElement>) => {
-		if (isImeComposing(event.nativeEvent) || composingRef.current) return;
+		if (isImeComposing(event.nativeEvent)) return;
 		event.stopPropagation();
 		void getTransport()
 			.request("browser.key", {
@@ -1306,6 +1307,25 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 				keyCode: event.keyCode,
 				modifiers: eventModifiers(event),
 			})
+			.catch(() => {});
+	};
+
+	const handleLiveCompositionEnd = (event: React.CompositionEvent<HTMLInputElement>) => {
+		if (event.data) {
+			void getTransport()
+				.request("browser.text", { workspaceId, text: event.data })
+				.catch(() => {});
+		}
+		event.currentTarget.value = "";
+	};
+
+	const handleLiveInput = (event: React.FormEvent<HTMLInputElement>) => {
+		if (event.nativeEvent instanceof InputEvent && event.nativeEvent.isComposing) return;
+		const val = event.currentTarget.value;
+		if (!val) return;
+		event.currentTarget.value = "";
+		void getTransport()
+			.request("browser.text", { workspaceId, text: val })
 			.catch(() => {});
 	};
 
@@ -1663,25 +1683,14 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 										<input
 											ref={liveInputRef}
 											type="text"
-											value=""
-											onChange={() => {}}
 											autoComplete="off"
 											autoCorrect="off"
 											autoCapitalize="off"
 											spellCheck={false}
 											aria-label={t("browser.frameTitle", { url: activeTab.url })}
 											className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-											onCompositionStart={() => {
-												composingRef.current = true;
-											}}
-											onCompositionEnd={(event) => {
-												composingRef.current = false;
-												if (event.data) {
-													void getTransport()
-														.request("browser.text", { workspaceId, text: event.data })
-														.catch(() => {});
-												}
-											}}
+											onCompositionEnd={handleLiveCompositionEnd}
+											onInput={handleLiveInput}
 											onKeyDown={handleLiveKeyDown}
 											onKeyUp={handleLiveKeyUp}
 											onPaste={handleLivePaste}
@@ -1741,25 +1750,14 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 											<input
 												ref={liveInputRef}
 												type="text"
-												value=""
-												onChange={() => {}}
 												autoComplete="off"
 												autoCorrect="off"
 												autoCapitalize="off"
 												spellCheck={false}
 												aria-label={t("browser.frameTitle", { url: activeTab.url })}
 												className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
-												onCompositionStart={() => {
-													composingRef.current = true;
-												}}
-												onCompositionEnd={(event) => {
-													composingRef.current = false;
-													if (event.data) {
-														void getTransport()
-															.request("browser.text", { workspaceId, text: event.data })
-															.catch(() => {});
-													}
-												}}
+												onCompositionEnd={handleLiveCompositionEnd}
+												onInput={handleLiveInput}
 												onKeyDown={handleLiveKeyDown}
 												onKeyUp={handleLiveKeyUp}
 												onPaste={handleLivePaste}
