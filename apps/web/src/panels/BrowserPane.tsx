@@ -1272,6 +1272,14 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 			return;
 		}
 		event.stopPropagation();
+		if (
+			event.key === "Alt" ||
+			event.key === "Control" ||
+			event.key === "Meta" ||
+			event.key === "Shift"
+		) {
+			return;
+		}
 		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
 			return;
 		}
@@ -1298,6 +1306,17 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 	const handleLiveKeyUp = (event: React.KeyboardEvent<HTMLInputElement>) => {
 		if (isImeComposing(event.nativeEvent)) return;
 		event.stopPropagation();
+		if (
+			event.key === "Alt" ||
+			event.key === "Control" ||
+			event.key === "Meta" ||
+			event.key === "Shift"
+		) {
+			return;
+		}
+		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+			return;
+		}
 		void getTransport()
 			.request("browser.key", {
 				workspaceId,

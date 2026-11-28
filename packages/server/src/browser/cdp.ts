@@ -189,6 +189,47 @@ const KEY_DEFS: Readonly<
 	" ": { key: " ", code: "Space", keyCode: 32, text: " " },
 };
 
+const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
+
+function editingCommandsForKey(key: string, modifiers: number): string[] | undefined {
+	const alt = (modifiers & 1) !== 0;
+	const ctrl = (modifiers & 2) !== 0;
+	const meta = (modifiers & 4) !== 0;
+	const shift = (modifiers & 8) !== 0;
+	switch (key) {
+		case "ArrowLeft":
+			if (meta && !ctrl && !alt) {
+				return [shift ? "moveToBeginningOfLineAndModifySelection" : "moveToBeginningOfLine"];
+			}
+			if (alt && !ctrl && !meta) {
+				return [shift ? "moveWordBackwardAndModifySelection" : "moveWordBackward"];
+			}
+			return undefined;
+		case "ArrowRight":
+			if (meta && !ctrl && !alt) {
+				return [shift ? "moveToEndOfLineAndModifySelection" : "moveToEndOfLine"];
+			}
+			if (alt && !ctrl && !meta) {
+				return [shift ? "moveWordForwardAndModifySelection" : "moveWordForward"];
+			}
+			return undefined;
+		case "Backspace":
+			if (meta && !ctrl && !alt) return ["deleteToBeginningOfLine"];
+			if (alt && !ctrl && !meta) return ["deleteWordBackward"];
+			return undefined;
+		case "a":
+		case "A":
+			if ((meta || ctrl) && !alt && !shift) return ["selectAll"];
+			return undefined;
+		case "z":
+		case "Z":
+			if ((meta || ctrl) && !alt) return [shift ? "redo" : "undo"];
+			return undefined;
+		default:
+			return undefined;
+	}
+}
+
 class CdpBrowserDaemon {
 	private proc: ReturnType<typeof Bun.spawn> | null = null;
 	private ws: WebSocket | null = null;
@@ -977,19 +1018,23 @@ class CdpBrowserDaemon {
 		keyCode?: number,
 		modifiers = 0,
 	): Promise<void> {
+		if (MODIFIER_KEYS.has(key)) return;
 		const { tab } = await this.ensureActiveTab(workspaceId);
 		const mapped = KEY_DEFS[key];
+		const resolvedKey = mapped?.key ?? key;
 		const type = action === "down" ? "keyDown" : "keyUp";
+		const commands = action === "down" ? editingCommandsForKey(resolvedKey, modifiers) : undefined;
 		await this.sendCdp(
 			"Input.dispatchKeyEvent",
 			{
 				type,
-				key: mapped?.key ?? key,
+				key: resolvedKey,
 				code: code ?? mapped?.code ?? key,
 				windowsVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
 				nativeVirtualKeyCode: keyCode ?? mapped?.keyCode ?? 0,
 				modifiers,
 				...(action === "down" && mapped?.text ? { text: mapped.text } : {}),
+				...(commands ? { commands } : {}),
 			},
 			tab.sessionId,
 		);
