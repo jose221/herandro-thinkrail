@@ -700,8 +700,6 @@ class CdpBrowserDaemon {
 	): Promise<TabTarget> {
 		const created = await this.sendCdp("Target.createTarget", {
 			url: url === "about:blank" ? "about:blank" : url,
-			width: state.viewport.width,
-			height: state.viewport.height,
 		});
 		const targetId = typeof created.targetId === "string" ? created.targetId : "";
 		if (!targetId) throw new Error("Failed to create browser target");
@@ -741,17 +739,22 @@ class CdpBrowserDaemon {
 	}
 
 	private async startScreencast(state: WorkspaceEngineState, tab: TabTarget): Promise<void> {
-		await this.sendCdp(
-			"Page.startScreencast",
-			{
-				format: "jpeg",
-				quality: 75,
-				maxWidth: state.viewport.width,
-				maxHeight: state.viewport.height,
-				everyNthFrame: 1,
-			},
-			tab.sessionId,
-		);
+		try {
+			await this.sendCdp(
+				"Page.startScreencast",
+				{
+					format: "jpeg",
+					quality: 75,
+					maxWidth: state.viewport.width,
+					maxHeight: state.viewport.height,
+					everyNthFrame: 1,
+				},
+				tab.sessionId,
+			);
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("already active")) return;
+			throw error;
+		}
 	}
 
 	private async navigateTarget(

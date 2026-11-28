@@ -628,9 +628,9 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 					setConsoleLogs(logs);
 					setNetworkLogs(net);
 				}
-			} catch {
+			} catch (error) {
 				if (!cancelled) {
-					setEngineStatus({ available: false, running: false });
+					setEngineStatus({ available: false, running: false, error: errorText(error) });
 				}
 			}
 		};
@@ -1593,7 +1593,9 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 							) : null}
 							{devToolsSupported && engineStatus?.available === false ? (
 								<p className="border-border-default border-b bg-container-content-bg px-12 py-4 text-text-subtle tr-text-metadata">
-									{t("browser.engine.fallbackHint")}
+									{engineStatus.error
+										? `${t("browser.engine.fallbackHint")} (${engineStatus.error})`
+										: t("browser.engine.fallbackHint")}
 								</p>
 							) : null}
 							{cdpActive ? (
