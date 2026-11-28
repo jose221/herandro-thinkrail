@@ -1264,6 +1264,61 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 		setCaptureIntroOpen(true);
 	};
 
+	const focusLiveInput = () => {
+		liveInputRef.current?.focus({ preventScroll: true });
+	};
+
+	const handleLiveKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (isImeComposing(event.nativeEvent) || composingRef.current) return;
+		event.stopPropagation();
+		if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+			return;
+		}
+		if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+			event.preventDefault();
+			void getTransport()
+				.request("browser.text", { workspaceId, text: event.key })
+				.catch(() => {});
+			return;
+		}
+		event.preventDefault();
+		void getTransport()
+			.request("browser.key", {
+				workspaceId,
+				action: "down",
+				key: event.key,
+				code: event.code,
+				keyCode: event.keyCode,
+				modifiers: eventModifiers(event),
+			})
+			.catch(() => {});
+	};
+
+	const handleLiveKeyUp = (event: React.KeyboardEvent<HTMLInputElement>) => {
+		if (isImeComposing(event.nativeEvent) || composingRef.current) return;
+		event.stopPropagation();
+		void getTransport()
+			.request("browser.key", {
+				workspaceId,
+				action: "up",
+				key: event.key,
+				code: event.code,
+				keyCode: event.keyCode,
+				modifiers: eventModifiers(event),
+			})
+			.catch(() => {});
+	};
+
+	const handleLivePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+		event.preventDefault();
+		event.stopPropagation();
+		const pasted = event.clipboardData?.getData("text");
+		if (!pasted) return;
+		void getTransport()
+			.request("browser.text", { workspaceId, text: pasted })
+			.catch(() => {});
+	};
+
 	const sendPointer = (
 		action: "down" | "up" | "move",
 		event: React.PointerEvent<HTMLImageElement>,
@@ -1603,15 +1658,19 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 									<div
 										ref={liveHostRef}
 										data-testid="browser-live-stage"
-										className="mx-auto flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-container-elevated-bg focus-within:focus-ring-inset"
+										className="relative mx-auto flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden bg-container-elevated-bg focus-within:focus-ring-inset"
 									>
 										<input
 											ref={liveInputRef}
 											type="text"
 											value=""
-											readOnly
+											onChange={() => {}}
+											autoComplete="off"
+											autoCorrect="off"
+											autoCapitalize="off"
+											spellCheck={false}
 											aria-label={t("browser.frameTitle", { url: activeTab.url })}
-											className="sr-only"
+											className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
 											onCompositionStart={() => {
 												composingRef.current = true;
 											}}
@@ -1623,45 +1682,9 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 														.catch(() => {});
 												}
 											}}
-											onKeyDown={(event) => {
-												if (composingRef.current) return;
-												if (
-													event.key.length === 1 &&
-													!event.ctrlKey &&
-													!event.metaKey &&
-													!event.altKey
-												) {
-													event.preventDefault();
-													void getTransport()
-														.request("browser.text", { workspaceId, text: event.key })
-														.catch(() => {});
-													return;
-												}
-												event.preventDefault();
-												void getTransport()
-													.request("browser.key", {
-														workspaceId,
-														action: "down",
-														key: event.key,
-														code: event.code,
-														keyCode: event.keyCode,
-														modifiers: eventModifiers(event),
-													})
-													.catch(() => {});
-											}}
-											onKeyUp={(event) => {
-												if (composingRef.current) return;
-												void getTransport()
-													.request("browser.key", {
-														workspaceId,
-														action: "up",
-														key: event.key,
-														code: event.code,
-														keyCode: event.keyCode,
-														modifiers: eventModifiers(event),
-													})
-													.catch(() => {});
-											}}
+											onKeyDown={handleLiveKeyDown}
+											onKeyUp={handleLiveKeyUp}
+											onPaste={handleLivePaste}
 										/>
 										{liveFrame ? (
 											<img
@@ -1670,8 +1693,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 												alt={t("browser.frameTitle", { url: activeTab.url })}
 												data-testid="browser-live-frame"
 												draggable={false}
+												onMouseDown={(event) => {
+													event.preventDefault();
+													focusLiveInput();
+												}}
 												onPointerDown={(event) => {
-													liveInputRef.current?.focus();
+													event.preventDefault();
+													focusLiveInput();
 													sendPointer("down", event);
 												}}
 												onPointerMove={(event) => sendPointer("move", event)}
@@ -1708,41 +1736,33 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 										<div
 											ref={liveHostRef}
 											data-testid="browser-live-stage"
-											className="flex h-full w-full items-center justify-center bg-container-elevated-bg focus-within:focus-ring-inset"
+											className="relative flex h-full w-full items-center justify-center bg-container-elevated-bg focus-within:focus-ring-inset"
 										>
 											<input
 												ref={liveInputRef}
 												type="text"
 												value=""
-												readOnly
+												onChange={() => {}}
+												autoComplete="off"
+												autoCorrect="off"
+												autoCapitalize="off"
+												spellCheck={false}
 												aria-label={t("browser.frameTitle", { url: activeTab.url })}
-												className="sr-only"
-												onKeyDown={(event) => {
-													if (isImeComposing(event.nativeEvent)) return;
-													if (
-														event.key.length === 1 &&
-														!event.ctrlKey &&
-														!event.metaKey &&
-														!event.altKey
-													) {
-														event.preventDefault();
-														void getTransport()
-															.request("browser.text", { workspaceId, text: event.key })
-															.catch(() => {});
-														return;
-													}
-													event.preventDefault();
-													void getTransport()
-														.request("browser.key", {
-															workspaceId,
-															action: "down",
-															key: event.key,
-															code: event.code,
-															keyCode: event.keyCode,
-															modifiers: eventModifiers(event),
-														})
-														.catch(() => {});
+												className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+												onCompositionStart={() => {
+													composingRef.current = true;
 												}}
+												onCompositionEnd={(event) => {
+													composingRef.current = false;
+													if (event.data) {
+														void getTransport()
+															.request("browser.text", { workspaceId, text: event.data })
+															.catch(() => {});
+													}
+												}}
+												onKeyDown={handleLiveKeyDown}
+												onKeyUp={handleLiveKeyUp}
+												onPaste={handleLivePaste}
 											/>
 											{liveFrame ? (
 												<img
@@ -1751,8 +1771,13 @@ export function BrowserPane({ workspaceId }: { workspaceId: string }) {
 													alt={t("browser.frameTitle", { url: activeTab.url })}
 													data-testid="browser-live-frame"
 													draggable={false}
+													onMouseDown={(event) => {
+														event.preventDefault();
+														focusLiveInput();
+													}}
 													onPointerDown={(event) => {
-														liveInputRef.current?.focus();
+														event.preventDefault();
+														focusLiveInput();
 														sendPointer("down", event);
 													}}
 													onPointerMove={(event) => sendPointer("move", event)}
