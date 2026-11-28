@@ -26,6 +26,7 @@ interface BrowserLiveStageProps {
 }
 
 const BARE_MODIFIERS = new Set(["Alt", "Control", "Meta", "Shift"]);
+const INPUT_TIMEOUT_MS = 5_000;
 
 function eventModifiers(event: {
 	altKey: boolean;
@@ -142,17 +143,106 @@ export const BrowserLiveStage = memo(
 				event.preventDefault();
 				event.stopPropagation();
 				enqueue(() =>
-					getTransport().request("browser.wheel", {
-						workspaceId,
-						x: pt.x,
-						y: pt.y,
-						deltaX: event.deltaX,
-						deltaY: event.deltaY,
-					}),
+					getTransport().request(
+						"browser.wheel",
+						{
+							workspaceId,
+							x: pt.x,
+							y: pt.y,
+							deltaX: event.deltaX,
+							deltaY: event.deltaY,
+						},
+						{ timeoutMs: INPUT_TIMEOUT_MS },
+					),
 				);
 			};
 			stage.addEventListener("wheel", onWheel, { passive: false });
 			return () => stage.removeEventListener("wheel", onWheel);
+		}, [enqueue, workspaceId]);
+
+		useEffect(() => {
+			const isActiveInStage = () => {
+				const input = inputRef.current;
+				const stage = stageRef.current;
+				const active = document.activeElement;
+				return Boolean(input && stage && (active === input || stage.contains(active)));
+			};
+
+			const onKeyDown = (event: KeyboardEvent) => {
+				if (!isActiveInStage()) return;
+				if (isImeComposing(event) || event.key === "Dead" || event.key === "Process") {
+					return;
+				}
+				if (event.key === "F6") return;
+				if (BARE_MODIFIERS.has(event.key)) {
+					event.stopPropagation();
+					return;
+				}
+				if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
+					event.stopPropagation();
+					return;
+				}
+				if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+					event.preventDefault();
+					event.stopImmediatePropagation();
+					const text = event.key;
+					enqueue(() =>
+						getTransport().request(
+							"browser.text",
+							{ workspaceId, text },
+							{ timeoutMs: INPUT_TIMEOUT_MS },
+						),
+					);
+					return;
+				}
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				const payload = {
+					workspaceId,
+					action: "down" as const,
+					key: event.key,
+					code: event.code,
+					keyCode: event.keyCode,
+					modifiers: eventModifiers(event),
+				};
+				enqueue(() =>
+					getTransport().request("browser.key", payload, { timeoutMs: INPUT_TIMEOUT_MS }),
+				);
+			};
+
+			const onKeyUp = (event: KeyboardEvent) => {
+				if (!isActiveInStage()) return;
+				if (isImeComposing(event)) return;
+				if (event.key === "F6") return;
+				if (BARE_MODIFIERS.has(event.key)) {
+					event.stopPropagation();
+					return;
+				}
+				if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+					event.stopPropagation();
+					return;
+				}
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				const payload = {
+					workspaceId,
+					action: "up" as const,
+					key: event.key,
+					code: event.code,
+					keyCode: event.keyCode,
+					modifiers: eventModifiers(event),
+				};
+				enqueue(() =>
+					getTransport().request("browser.key", payload, { timeoutMs: INPUT_TIMEOUT_MS }),
+				);
+			};
+
+			window.addEventListener("keydown", onKeyDown, true);
+			window.addEventListener("keyup", onKeyUp, true);
+			return () => {
+				window.removeEventListener("keydown", onKeyDown, true);
+				window.removeEventListener("keyup", onKeyUp, true);
+			};
 		}, [enqueue, workspaceId]);
 
 		const sendPointer = useCallback(
@@ -168,71 +258,50 @@ export const BrowserLiveStage = memo(
 					const now = Date.now();
 					if (now - lastMoveSentRef.current < 24) return;
 					lastMoveSentRef.current = now;
+					void getTransport()
+						.request(
+							"browser.pointer",
+							{
+								workspaceId,
+								action,
+								x: point.x,
+								y: point.y,
+							},
+							{ timeoutMs: INPUT_TIMEOUT_MS },
+						)
+						.catch(() => undefined);
+					return;
 				}
 				const button = event.button === 2 ? "right" : event.button === 1 ? "middle" : "left";
 				enqueue(() =>
-					getTransport().request("browser.pointer", {
-						workspaceId,
-						action,
-						x: point.x,
-						y: point.y,
-						...(action === "move" ? {} : { button, clickCount: event.detail || 1 }),
-					}),
+					getTransport().request(
+						"browser.pointer",
+						{
+							workspaceId,
+							action,
+							x: point.x,
+							y: point.y,
+							button,
+							clickCount: event.detail || 1,
+						},
+						{ timeoutMs: INPUT_TIMEOUT_MS },
+					),
 				);
 			},
 			[enqueue, workspaceId],
 		);
 
-		const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-			if (isImeComposing(event.nativeEvent) || event.key === "Dead" || event.key === "Process") {
-				return;
-			}
-			if (event.key === "F6") return;
-			event.stopPropagation();
-			if (BARE_MODIFIERS.has(event.key)) return;
-			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "v") {
-				return;
-			}
-			if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
-				event.preventDefault();
-				const text = event.key;
-				enqueue(() => getTransport().request("browser.text", { workspaceId, text }));
-				return;
-			}
-			event.preventDefault();
-			const payload = {
-				workspaceId,
-				action: "down" as const,
-				key: event.key,
-				code: event.code,
-				keyCode: event.keyCode,
-				modifiers: eventModifiers(event),
-			};
-			enqueue(() => getTransport().request("browser.key", payload));
-		};
-
-		const handleKeyUp = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-			if (isImeComposing(event.nativeEvent)) return;
-			if (event.key === "F6") return;
-			event.stopPropagation();
-			if (BARE_MODIFIERS.has(event.key)) return;
-			if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) return;
-			const payload = {
-				workspaceId,
-				action: "up" as const,
-				key: event.key,
-				code: event.code,
-				keyCode: event.keyCode,
-				modifiers: eventModifiers(event),
-			};
-			enqueue(() => getTransport().request("browser.key", payload));
-		};
-
 		const handleCompositionEnd = (event: React.CompositionEvent<HTMLTextAreaElement>) => {
 			const data = event.data;
 			event.currentTarget.value = "";
 			if (!data) return;
-			enqueue(() => getTransport().request("browser.text", { workspaceId, text: data }));
+			enqueue(() =>
+				getTransport().request(
+					"browser.text",
+					{ workspaceId, text: data },
+					{ timeoutMs: INPUT_TIMEOUT_MS },
+				),
+			);
 		};
 
 		const handleInput = (event: React.FormEvent<HTMLTextAreaElement>) => {
@@ -240,7 +309,13 @@ export const BrowserLiveStage = memo(
 			const val = event.currentTarget.value;
 			if (!val) return;
 			event.currentTarget.value = "";
-			enqueue(() => getTransport().request("browser.text", { workspaceId, text: val }));
+			enqueue(() =>
+				getTransport().request(
+					"browser.text",
+					{ workspaceId, text: val },
+					{ timeoutMs: INPUT_TIMEOUT_MS },
+				),
+			);
 		};
 
 		const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -248,7 +323,13 @@ export const BrowserLiveStage = memo(
 			event.stopPropagation();
 			const pasted = event.clipboardData?.getData("text");
 			if (!pasted) return;
-			enqueue(() => getTransport().request("browser.text", { workspaceId, text: pasted }));
+			enqueue(() =>
+				getTransport().request(
+					"browser.text",
+					{ workspaceId, text: pasted },
+					{ timeoutMs: INPUT_TIMEOUT_MS },
+				),
+			);
 		};
 
 		return (
@@ -269,11 +350,9 @@ export const BrowserLiveStage = memo(
 					autoCapitalize="off"
 					spellCheck={false}
 					aria-label={t("browser.frameTitle", { url })}
-					className="pointer-events-none absolute inset-0 h-full w-full resize-none opacity-0"
+					className="pointer-events-none absolute top-0 left-0 h-px w-px resize-none opacity-0"
 					onCompositionEnd={handleCompositionEnd}
 					onInput={handleInput}
-					onKeyDown={handleKeyDown}
-					onKeyUp={handleKeyUp}
 					onPaste={handlePaste}
 				/>
 				<img
@@ -281,12 +360,10 @@ export const BrowserLiveStage = memo(
 					alt={t("browser.frameTitle", { url })}
 					data-testid="browser-live-frame"
 					draggable={false}
-					onMouseDown={(event) => {
-						event.preventDefault();
+					onMouseDown={() => {
 						focusInput();
 					}}
 					onPointerDown={(event) => {
-						event.preventDefault();
 						focusInput();
 						try {
 							event.currentTarget.setPointerCapture(event.pointerId);

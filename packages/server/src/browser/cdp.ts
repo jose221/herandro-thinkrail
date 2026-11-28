@@ -1045,7 +1045,7 @@ class CdpBrowserDaemon {
 			const { tab } = await this.ensureActiveTab(workspaceId);
 			const mapped = KEY_DEFS[key];
 			const resolvedKey = mapped?.key ?? key;
-			const type = action === "down" ? "keyDown" : "keyUp";
+			const type = action === "down" ? (mapped?.text ? "keyDown" : "rawKeyDown") : "keyUp";
 			const commands =
 				action === "down" ? editingCommandsForKey(resolvedKey, modifiers) : undefined;
 			await this.sendCdp(
