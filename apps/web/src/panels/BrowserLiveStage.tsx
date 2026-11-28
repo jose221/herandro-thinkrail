@@ -25,7 +25,23 @@ interface BrowserLiveStageProps {
 	fill?: boolean;
 }
 
-const BARE_MODIFIERS = new Set(["Alt", "Control", "Meta", "Shift"]);
+const BARE_MODIFIERS = new Set([
+	"Alt",
+	"AltGraph",
+	"CapsLock",
+	"Control",
+	"Fn",
+	"FnLock",
+	"Hyper",
+	"Meta",
+	"NumLock",
+	"OS",
+	"ScrollLock",
+	"Shift",
+	"Super",
+	"Symbol",
+	"SymbolLock",
+]);
 const INPUT_TIMEOUT_MS = 5_000;
 
 function eventModifiers(event: {
@@ -336,6 +352,7 @@ export const BrowserLiveStage = memo(
 			<div
 				ref={stageRef}
 				data-testid="browser-live-stage"
+				tabIndex={-1}
 				className={cn(
 					"relative flex min-h-0 items-center justify-center overflow-hidden bg-container-elevated-bg focus-within:focus-ring-inset",
 					fill ? "h-full w-full" : "mx-auto w-full flex-1",
@@ -362,6 +379,7 @@ export const BrowserLiveStage = memo(
 					draggable={false}
 					onMouseDown={() => {
 						focusInput();
+						queueMicrotask(focusInput);
 					}}
 					onPointerDown={(event) => {
 						focusInput();

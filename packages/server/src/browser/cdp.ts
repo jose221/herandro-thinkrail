@@ -190,7 +190,23 @@ const KEY_DEFS: Readonly<
 	" ": { key: " ", code: "Space", keyCode: 32, text: " " },
 };
 
-const MODIFIER_KEYS = new Set(["Alt", "Control", "Meta", "Shift"]);
+const MODIFIER_KEYS = new Set([
+	"Alt",
+	"AltGraph",
+	"CapsLock",
+	"Control",
+	"Fn",
+	"FnLock",
+	"Hyper",
+	"Meta",
+	"NumLock",
+	"OS",
+	"ScrollLock",
+	"Shift",
+	"Super",
+	"Symbol",
+	"SymbolLock",
+]);
 
 function editingCommandsForKey(key: string, modifiers: number): string[] | undefined {
 	const alt = (modifiers & 1) !== 0;
